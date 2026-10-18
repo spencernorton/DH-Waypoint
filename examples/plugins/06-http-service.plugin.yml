@@ -1,0 +1,13 @@
+# HTTP service template — your own processor in any language.
+# The service must expose GET /v1/manifest, GET /v1/status and
+# POST /v1/process (processor protocol v1, docs/processors/v1.md).
+# Runnable starting points: examples/processors/reference (Go) and
+# examples/processors/independent (Python, stdlib only).
+# Probe before registering: dh-waypoint plugin test <endpoint>
+id: my-service
+driver: http
+mode: shadow
+priority: 40
+endpoint: http://my-service:8090
+# auth_env: DH_WAYPOINT_PROCESSOR_TOKEN_MY_SERVICE
+configuration: {}

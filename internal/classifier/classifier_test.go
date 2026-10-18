@@ -1,0 +1,330 @@
+package classifier
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"testing"
+
+	"github.com/spencernorton/DH-Waypoint/internal/classifier/classification"
+	classifier_mocks "github.com/spencernorton/DH-Waypoint/internal/classifier/mocks"
+	"github.com/spencernorton/DH-Waypoint/internal/model"
+	"github.com/spencernorton/DH-Waypoint/internal/tmdb"
+	tmdb_mocks "github.com/spencernorton/DH-Waypoint/internal/tmdb/mocks"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
+)
+
+func TestClassifier(t *testing.T) {
+	t.Parallel()
+
+	matchContext := mock.MatchedBy(func(ctx any) bool {
+		_, ok := ctx.(context.Context)
+		return ok
+	})
+
+	testCases := []struct {
+		torrent      model.Torrent
+		flags        Flags
+		prepareMocks func(mocks testClassifierMocks)
+		expected     classification.Result
+		expectedErr  error
+	}{
+		{
+			torrent: model.Torrent{
+				Name:        "The Regular Movie (2000).mkv",
+				FilesStatus: model.FilesStatusSingle,
+				Extension:   model.NewNullString("mkv"),
+				Size:        1000000000,
+			},
+			prepareMocks: func(mocks testClassifierMocks) {
+				mocks.search.On(
+					"ContentBySearch",
+					matchContext,
+					model.ContentTypeMovie,
+					"The Regular Movie",
+					model.Year(2000),
+				).
+					Return(model.Content{}, classification.ErrUnmatched)
+				mocks.tmdbClient.On(
+					"SearchMovie",
+					matchContext,
+					tmdb.SearchMovieRequest{
+						Query:        "The Regular Movie",
+						Year:         2000,
+						IncludeAdult: true,
+					},
+				).
+					Return(tmdb.SearchMovieResponse{}, nil)
+			},
+			expected: classification.Result{
+				ContentAttributes: classification.ContentAttributes{
+					ContentType: model.NewNullContentType(model.ContentTypeMovie),
+					BaseTitle:   model.NewNullString("The Regular Movie"),
+					Date: model.Date{
+						Year: 2000,
+					},
+				},
+			},
+		},
+		{
+			torrent: model.Torrent{
+				Name:        "The Regular Local Movie (2000).mkv",
+				FilesStatus: model.FilesStatusSingle,
+				Extension:   model.NewNullString("mkv"),
+				Size:        1000000000,
+			},
+			prepareMocks: func(mocks testClassifierMocks) {
+				mocks.search.On(
+					"ContentBySearch",
+					matchContext,
+					model.ContentTypeMovie,
+					"The Regular Local Movie",
+					model.Year(2000),
+				).
+					Return(model.Content{
+						Type:        model.ContentTypeMovie,
+						Source:      "local",
+						ID:          "123",
+						Title:       "The Regular Local Movie",
+						ReleaseYear: 2000,
+					}, nil)
+			},
+			expected: classification.Result{
+				ContentAttributes: classification.ContentAttributes{
+					ContentType: model.NewNullContentType(model.ContentTypeMovie),
+					BaseTitle:   model.NewNullString("The Regular Local Movie"),
+					Date: model.Date{
+						Year: 2000,
+					},
+				},
+				Content: &model.Content{
+					Type:        model.ContentTypeMovie,
+					Source:      "local",
+					ID:          "123",
+					Title:       "The Regular Local Movie",
+					ReleaseYear: 2000,
+				},
+			},
+		},
+		{
+			torrent: model.Torrent{
+				Name:        "The Regular TMDB Movie (2000).mkv",
+				FilesStatus: model.FilesStatusSingle,
+				Extension:   model.NewNullString("mkv"),
+				Size:        1000000000,
+			},
+			prepareMocks: func(mocks testClassifierMocks) {
+				mocks.search.On(
+					"ContentBySearch",
+					matchContext,
+					model.ContentTypeMovie,
+					"The Regular TMDB Movie",
+					model.Year(2000),
+				).
+					Return(model.Content{}, classification.ErrUnmatched)
+				mocks.tmdbClient.On(
+					"SearchMovie",
+					matchContext,
+					tmdb.SearchMovieRequest{
+						Query:        "The Regular TMDB Movie",
+						Year:         2000,
+						IncludeAdult: true,
+					},
+				).
+					Return(tmdb.SearchMovieResponse{
+						Results: []tmdb.SearchMovieResult{
+							{
+								ID:          123,
+								Title:       "The Regular TMDB Movie",
+								ReleaseDate: "2000-01-01",
+							},
+						},
+					}, nil)
+				mocks.tmdbClient.On(
+					"MovieDetails",
+					matchContext,
+					tmdb.MovieDetailsRequest{
+						ID:               123,
+						AppendToResponse: []string{"alternative_titles", "translations"},
+					},
+				).
+					Return(tmdb.MovieDetailsResponse{
+						ID:            123,
+						Title:         "The Regular TMDB Movie",
+						OriginalTitle: "The Regular TMDB Movie Original",
+						ReleaseDate:   "2000-01-01",
+					}, nil)
+			},
+			expected: classification.Result{
+				ContentAttributes: classification.ContentAttributes{
+					ContentType: model.NewNullContentType(model.ContentTypeMovie),
+					BaseTitle:   model.NewNullString("The Regular TMDB Movie"),
+					Date: model.Date{
+						Year: 2000,
+					},
+				},
+				Content: &model.Content{
+					Type:   model.ContentTypeMovie,
+					Source: "tmdb",
+					ID:     "123",
+					Title:  "The Regular TMDB Movie",
+					ReleaseDate: model.Date{
+						Year:  2000,
+						Month: 1,
+						Day:   1,
+					},
+					ReleaseYear:   2000,
+					Adult:         model.NewNullBool(false),
+					OriginalTitle: model.NewNullString("The Regular TMDB Movie Original"),
+					Popularity:    model.NewNullFloat32(0),
+					VoteAverage:   model.NewNullFloat32(0),
+					VoteCount:     model.NewNullUint(0),
+				},
+			},
+		},
+		{
+			// `xxx` alone no longer types xxx: it is a weak keyword because the
+			// token is also a Roman numeral (WWE WrestleMania XXX, Super Bowl XXX)
+			// and a film title (xXx, 2002). Two distinct weak hits are required.
+			// See TestExclusionClassifierPrecision for the measured trade.
+			torrent: model.Torrent{
+				Name:        "The XXX Movie 1080p.mkv",
+				FilesStatus: model.FilesStatusSingle,
+				Extension:   model.NewNullString("mkv"),
+				Size:        1000000000,
+			},
+			// It stays untyped and falls through to the LLM/quarantine path
+			// instead of being deleted outright.
+			expected: classification.Result{
+				ContentAttributes: classification.ContentAttributes{
+					VideoResolution: model.NewNullVideoResolution(model.VideoResolutionV1080p),
+				},
+			},
+		},
+		{
+			// Two distinct weak keywords (`xxx` + `anal`) still type xxx.
+			torrent: model.Torrent{
+				Name:        "Some Anal Scene XXX 1080p.mkv",
+				FilesStatus: model.FilesStatusSingle,
+				Extension:   model.NewNullString("mkv"),
+				Size:        1000000000,
+			},
+			expected: classification.Result{
+				ContentAttributes: classification.ContentAttributes{
+					ContentType:     model.NewNullContentType(model.ContentTypeXxx),
+					VideoResolution: model.NewNullVideoResolution(model.VideoResolutionV1080p),
+				},
+			},
+		},
+		{
+			// A single strong keyword types xxx on its own.
+			torrent: model.Torrent{
+				Name:        "Brazzers 24 01 02 Some Scene 1080p.mkv",
+				FilesStatus: model.FilesStatusSingle,
+				Extension:   model.NewNullString("mkv"),
+				Size:        1000000000,
+			},
+			expected: classification.Result{
+				ContentAttributes: classification.ContentAttributes{
+					ContentType:     model.NewNullContentType(model.ContentTypeXxx),
+					Date:            model.Date{Year: 2024, Month: 1, Day: 2},
+					VideoResolution: model.NewNullVideoResolution(model.VideoResolutionV1080p),
+				},
+			},
+		},
+	}
+	for _, tc := range testCases {
+		t.Run(fmt.Sprintf("torrent: %s", tc.torrent.Name), func(t *testing.T) {
+			t.Parallel()
+
+			mocks := newTestClassifierMocks(t)
+
+			source, sourceErr := yamlSourceProvider{rawSourceProvider: coreSourceProvider{}}.source()
+			if sourceErr != nil {
+				t.Fatal(sourceErr)
+				return
+			}
+
+			workflow, compileErr := mocks.compiler.Compile(source)
+			if compileErr != nil {
+				t.Fatal(compileErr)
+				return
+			}
+
+			if tc.prepareMocks != nil {
+				tc.prepareMocks(mocks)
+			}
+
+			result, runErr := workflow.Run(context.Background(), "default", tc.flags, tc.torrent)
+			if runErr != nil {
+				assert.Equal(t, tc.expectedErr, runErr)
+				t.Log(runErr)
+			} else {
+				assert.Equal(t, tc.expected, result)
+			}
+		})
+	}
+}
+
+type testClassifierMocks struct {
+	compiler   Compiler
+	search     *classifier_mocks.LocalSearch
+	tmdbClient *tmdb_mocks.Client
+}
+
+func newTestClassifierMocks(t *testing.T) testClassifierMocks {
+	t.Helper()
+
+	search := classifier_mocks.NewLocalSearch(t)
+	tmdbClient := tmdb_mocks.NewClient(t)
+
+	return testClassifierMocks{
+		compiler: compiler{
+			options: []compilerOption{
+				compilerFeatures(defaultFeatures),
+				celEnvOption,
+			},
+			dependencies: dependencies{
+				search:     search,
+				tmdbClient: tmdbClient,
+			},
+		},
+		search:     search,
+		tmdbClient: tmdbClient,
+	}
+}
+
+// A delete must carry the content type it fired on. The action-sequence runner
+// returns an empty Result with every error, so before this the processor's
+// dh_waypoint_classifier_deleted_total reported every delete as "unknown" — seen
+// live on the first v2.9.2 deploy. Runs the real core `default` workflow.
+func TestDeleteCarriesContentType(t *testing.T) {
+	t.Parallel()
+
+	mocks := newTestClassifierMocks(t)
+	source, err := yamlSourceProvider{rawSourceProvider: coreSourceProvider{}}.source()
+	if err != nil {
+		t.Fatal(err)
+	}
+	workflow, err := mocks.compiler.Compile(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	torrent := model.Torrent{
+		Name:        "Some Artist - Some Album (2020) [FLAC]",
+		FilesStatus: model.FilesStatusSingle,
+		Extension:   model.NewNullString("flac"),
+		Size:        300_000_000,
+	}
+	_, runErr := workflow.Run(context.Background(), "default",
+		Flags{"delete_content_types": []any{"music"}}, torrent) // []any, as source_provider builds it
+
+	var re classification.RuntimeError
+	if !errors.As(runErr, &re) || !errors.Is(runErr, classification.ErrDeleteTorrent) {
+		t.Fatalf("expected a delete, got %v", runErr)
+	}
+	assert.True(t, re.ContentType.Valid, "the delete must carry its content type")
+	assert.Equal(t, model.ContentTypeMusic, re.ContentType.ContentType)
+}

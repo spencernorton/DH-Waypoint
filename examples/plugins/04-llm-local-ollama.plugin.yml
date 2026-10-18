@@ -1,0 +1,30 @@
+# Local LLM template — Ollama serving an OpenAI-compatible API.
+# Driver: builtin/llm. Core POSTs chat completions to `endpoint`;
+# the model must answer with one JSON proposal object.
+# Setup: ollama pull llama3.1:8b && ollama serve
+# Any OpenAI-compatible local server works (LM Studio, llama.cpp
+# server, vLLM): change endpoint + model. See docs/processors/llm.md.
+id: local-llm
+driver: builtin/llm
+mode: shadow
+priority: 50
+endpoint: http://host.docker.internal:11434/v1/chat/completions
+selector:
+  # Bound the model's workload: only unmatched movies/TV, sampled.
+  content_types: [movie, tv_show]
+  has_content_match: false
+  sample_basis_points: 2500   # 25% of eligible torrents
+configuration:
+  model: llama3.1:8b
+  temperature: 0
+  capabilities: [classify, extract]
+  system_prompt: |
+    You are a DH-Waypoint torrent metadata processor. You receive one
+    JSON torrent (name, files, size, deterministic facts). Respond
+    with a single JSON object:
+    {"outcome":"completed"|"abstained",
+     "proposal":{"content_type":"movie|tv_show|music|ebook|comic|audiobook|game|software|xxx|course",
+                   "extraction":{"title":"...","year":2024}},
+     "uncertainty":0.0,"reasons":["short reason"]}
+    Abstain when the name and files do not prove the type. Never
+    invent a title match; extraction is parsing, not identification.

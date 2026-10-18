@@ -1,0 +1,195 @@
+# Evidence pipeline
+
+Evidence is what makes DH-Waypoint more than a Torznab front-end on a DHT crawl.
+Every time one of your \*arrs grabs a release from DH-Waypoint and every time it
+imports one, that fact comes back as a webhook and is recorded. From those
+records DH-Waypoint derives four things: an authoritative label for the torrent
+that short-circuits classification; the right identity for *other* torrents
+of the same title, so same-name shows stop being confused; a per-feature
+success prior that re-ranks future search results toward what has actually
+worked for you; and a liveness state that keeps dead swarms out of your
+\*arr's view.
+
+Nothing here is learned by a model. The loop is explicit, inspectable, and
+every step has a metric.
+
+## The loop
+
+```text
+DHT crawl → classifier → Torznab → *arr grabs → download client → *arr imports
+                                       │                              │
+                                       └── Grab webhook               └── Import webhook
+                                                     │                        │
+                                                     ▼                        ▼
+                                              label_evidence (append-only, one row per event)
+                                                     │
+                     ┌───────────────────────────────┼─────────────────────────────┐
+                     ▼                               ▼                             ▼
+          torrent_canonical_labels        torrent_grab_attempts →           liveness
+          (strongest evidence wins;       grab_outcome_priors               (alive / suspect / dead)
+           preempts the classifier)       (Beta(α,β) per feature;                   │
+                     │                     re-ranks Torznab)                        ▼
+                     ▼                               │                    Torznab exclusion,
+           classifier skipped or                     ▼                    DHT revalidation
+           constrained on reprocess           Torznab result order
+```
+
+## Sources
+
+| Source | What it sends | Transport | Config |
+|---|---|---|---|
+| Sonarr / Radarr / Readarr / Lidarr **webhook** | `Grab`, `Download`, `DownloadFolderImported` — the standard *Connect → Webhook* notification payload | `POST /evidence/arr/<instance>` with the shared secret in `X-Evidence-Token` | `EVIDENCE_WEBHOOK_SECRET` |
+| \*arr **history poller** | The same grab/import events read back from `/api/v3/history`, as a backstop for lost deliveries | Outbound, on `EVIDENCE_ARR_POLL_INTERVAL` | `EVIDENCE_{SONARR,RADARR,READARR,LIDARR}_BASE_URL` / `_API_KEY` |
+| **qBittorrent poller** | Category and tag per torrent (`private`, `public`, …), torrent state (stalled, metaDL, seeding, …), and the `.torrent` of held torrents an \*arr grabbed (see [piece hashes](#5-piece-hashes)) | Outbound, on `EVIDENCE_QB_POLL_INTERVAL` | `EVIDENCE_QB_ALPHA_BASE_URL` / `_USERNAME` / `_PASSWORD` (and `QB_BETA`) |
+
+The webhook is the primary, low-latency path and needs only that the \*arr can
+reach DH-Waypoint's HTTP port — the same reachability Torznab already requires. The
+two pollers are optional: they need DH-Waypoint to reach the \*arr and qBittorrent,
+which a crawler behind a VPN may deliberately not have. Without them you lose the
+lost-delivery backstop, the private-tracker category signal, the client-state
+half of liveness and piece-hash retention; the grab → import loop still closes.
+
+Every event, from every source, lands as one row in `label_evidence`. The table
+is append-only and deduplicated on the source's own event id, so a webhook and
+its poller echo count once.
+
+## Configuring the \*arr webhook
+
+Identical across Sonarr, Radarr, Lidarr and Readarr:
+
+1. **Settings → Connect → + → Webhook**
+2. **URL:** `http://<dh-waypoint-host>:3333/evidence/arr/sonarr` (use `radarr`, `lidarr`, `readarr` for the others — the path segment names the instance)
+3. **Method:** `POST`
+4. **Triggers:** *On Grab*, *On Import*, *On Upgrade*. Leave the rest off; unknown events are acknowledged and dropped without a write.
+5. **Custom Headers:** `X-Evidence-Token: <your EVIDENCE_WEBHOOK_SECRET>`
+6. **Test**, then **Save**.
+
+A test delivery returns `200 {"status":"ignored","event":"Test"}`. That is the
+correct answer: the endpoint accepted and authenticated it, and `Test` is not
+evidence. `dh_waypoint_evidence_events_received_total{source,kind}` increments on
+the first real grab.
+
+## What the evidence becomes
+
+### 1. A canonical label
+
+`torrent_canonical_labels` holds one label per infohash, resolved from the
+strongest applicable evidence row by a fixed precedence: an \*arr **import**
+outranks an \*arr **grab**, which outranks a qBittorrent **private** category,
+which outranks a **public** one. A label carries the media type (TV, movie,
+book, music) and, when the \*arr supplied it, the external id of the series or
+movie.
+
+The classifier consults this table before it runs. A torrent with an
+authoritative label is **preempted** — nothing to compute, the \*arr already
+told us what it is — and a torrent with a type-only label is **constrained** so
+the rules cannot re-type it. On a DHT-heavy workload most torrents have no label
+yet (`dh_waypoint_classifier_preempt_misses_total` is the expected steady state);
+the shortcut matters on reprocess of things your \*arrs have already touched.
+
+### 2. Success priors
+
+Each grab opens a `torrent_grab_attempts` row carrying a frozen feature set
+extracted from the release: release group, source tracker or indexer, primary
+file extension, and a few more. When the matching import arrives, α is
+incremented on every one of those features; when no import arrives inside
+`EVIDENCE_OUTCOME_PRIORS_RESOLUTION_WINDOW`, the expirer increments β instead.
+`grab_outcome_priors` therefore holds a Beta(α, β) prior per (feature type,
+feature value): the observed success rate of releases with that property, from
+*your* grabs.
+
+On every Torznab search the ranker looks up the priors for each result's
+features, computes a posterior expected success, weights it by `log(1 + seeders)`,
+and sorts. With `EVIDENCE_OUTCOME_PRIORS_APPLY=false` it computes and records the
+reordering it *would* make (`dh_waypoint_priors_rerank_shift_positions`) but returns
+the original order — read that histogram before flipping. With `APPLY=true` the
+\*arr receives the re-ranked list. The \*arr's own quality profile still decides
+what it takes; DH-Waypoint only changes what it sees first.
+
+Grabs from a private-tracker category are excluded from α by default
+(`EVIDENCE_OUTCOME_PRIORS_EXCLUDE_PRIVATE_TRACKER_GRABS`): a private import
+proves nothing about what the public swarm can serve.
+
+### 3. Identity for torrents your \*arrs have not grabbed yet
+
+A canonical label decides only the torrent it belongs to. With
+`CLASSIFIER_EVIDENCE_TITLE_IDENTITY=true`, the labels also decide **other**
+torrents released under the same title: when DH-Waypoint classifies a torrent that
+has no label of its own, it asks which catalogue identity the \*arrs gave the
+torrents they *did* grab under that title — and, when at least two of them agree
+and hold at least two thirds of the votes, it hints that identity to the
+matcher.
+
+This fixes the one kind of error a matcher cannot fix by itself: several
+catalogue entries with the same name. A format's US and Australian versions,
+a series and its revival a decade later, a UK original and its US remake look
+identical to title matching. Your \*arr already chose one of them — it is the
+series you monitor — and Sonarr searches Torznab by that series' id, so a
+release attached to its namesake is a release Sonarr never sees.
+
+The rules keep it conservative:
+
+- **A torrent is never its own evidence.** Its own label, if any, is handled by
+  the exact preempt above; the title vote only counts other torrents.
+- **The release's shape is part of the title.** Episode-shaped names vote only
+  with episode-shaped names; a movie keeps its year, so a *Dune (2021)* grab
+  never steers a *Dune (1984)* torrent.
+- **It only hints.** The workflow still resolves the identity against the
+  catalogue and attaches it; `tvdb:` identities from Sonarr resolve through
+  TMDB's external ids exactly as they do for the preempt.
+
+On the 2026-09-22 benchmark it would have corrected 141 of 3,344 gold rows
+that the deployed matcher gets wrong, without breaking one (93.7% → 97.9%) ([`docs/project/benchmarks.md`](project/benchmarks.md)).
+Off by default; `dh_waypoint_classifier_preempt_evidence_title_total{outcome}`
+reports what it did.
+
+### 4. Liveness
+
+The liveness ladder derives `alive`, `suspect` or `dead` per infohash. An \*arr
+import is the strongest alive signal there is — bytes reached disk. qBittorrent
+state observations (`stalled`, `metaDL`, `error`) push toward suspect; a tracker
+scrape that finds seeders revives a suspect row. Promotion to `dead` is gated
+and rate-limited, and dead hashes are excluded from Torznab responses and
+revalidated through DHT `get_peers` on a schedule. See
+[`concepts/swarm-health.md`](concepts/swarm-health.md) for how tracker scrapes
+feed this.
+
+### 5. Piece hashes
+
+The crawl does not store piece hashes: `dht_crawler.save_pieces` defaults to
+off, because 20 bytes per piece (about 8 KB per GiB of content) adds up across
+millions of torrents. For held torrents an \*arr grabbed or imported, each
+qBittorrent poll exports the `.torrent` once (`/api/v2/torrents/export`),
+requires the SHA-1 of its info dictionary to equal the info hash, and stores
+the piece length and piece hashes in `torrent_pieces`. A release then stays
+verifiable against its downloaded file after the client and the swarm drop it:
+hash a few whole pieces of the file and compare. Only public catalogue torrents
+qualify; torrents with any private authority (native flag, private qB category,
+`bitgrab` tag) are skipped. A torrent still fetching its metadata is retried on
+the next poll.
+
+## Reading it
+
+- **Evidence records** in PostgreSQL: recent events per source, the canonical
+  label a torrent resolved to, and per-indexer grab and import counts.
+- **GraphQL:** `evidence { list(input:{limit:…}) { totalCount items { … } } }`
+  and `evidence { indexerStats }`.
+- **Metrics:** `dh_waypoint_evidence_events_received_total{source,kind}`,
+  `dh_waypoint_evidence_events_persisted_total`, `dh_waypoint_evidence_rejected_total{reason}`,
+  `dh_waypoint_evidence_canonical_upserts_total{source,media_type}`,
+  `dh_waypoint_classifier_preempt_preempted_total`, `dh_waypoint_priors_observations_total{event}`,
+  `dh_waypoint_priors_outcomes_total{class}`, `dh_waypoint_priors_pending_grabs`,
+  `dh_waypoint_priors_rerank_shift_positions`, `dh_waypoint_liveness_*`.
+
+The number that says whether the loop is paying for itself is
+`priors_outcomes_total{class="success"}` over `success + failure`: the import
+rate of what your \*arrs grabbed from DH-Waypoint.
+
+## Privacy
+
+Every evidence row and retained piece hash stays in your Postgres. Nothing is
+sent anywhere. Torrents labelled as coming from a private tracker are
+additionally kept out of every LLM stage and excluded from priors, so
+private-tracker activity never leaves the host or biases public ranking. To
+reset, truncate `label_evidence`, `torrent_canonical_labels`,
+`torrent_grab_attempts` and `grab_outcome_priors`.

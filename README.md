@@ -1,0 +1,181 @@
+# DH-Waypoint
+
+<p>
+  <a href="https://norvitech.com"><img alt="NorviTech Suite" src="https://img.shields.io/badge/NorviTech-Suite-FD8024.svg"></a>
+  <a href="https://github.com/spencernorton/DH-Waypoint/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/spencernorton/DH-Waypoint/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="https://github.com/spencernorton/DH-Waypoint/releases"><img alt="Latest release" src="https://img.shields.io/github/v/tag/spencernorton/DH-Waypoint?label=release&sort=semver"></a>
+  <a href="LICENSE"><img alt="MIT licence" src="https://img.shields.io/badge/licence-MIT-blue.svg"></a>
+  <a href="https://buy.stripe.com/8x26oH2U44f65TRe574wM04"><img alt="Donate" src="https://img.shields.io/badge/donate-Stripe-635bff.svg?logo=stripe&logoColor=white"></a>
+</p>
+
+**DH-Waypoint is a self-hosted BitTorrent DHT crawler and indexer built for the \*arr stack.** It crawls the DHT into a Postgres corpus, classifies every torrent it finds, and serves the result to Sonarr, Radarr, Lidarr, Readarr and Prowlarr over Torznab. What makes it different is the loop: it watches what your \*arrs actually grab and import, and feeds that ground truth back into classification, ranking and retention. The public distribution is a standalone Go backend: crawling, scrubbing, matching, cleanup and machine APIs. Optional processors run in separate services; the core needs no plugin or model runtime.
+
+```mermaid
+flowchart LR
+    DHT[DHT discovery] --> Metadata[Metadata and durable core queue]
+    Metadata --> Core[Deterministic processing and matching]
+    Core --> Catalogue[Catalogue and recovery]
+    Catalogue --> APIs[Search, GraphQL and Torznab]
+    Core --> Jobs[Optional PostgreSQL jobs]
+    Jobs --> Services[Processor services]
+    Services --> Validation[Core validation and application]
+    Validation --> Catalogue
+    APIs --> Evidence[Client evidence]
+    Evidence --> Core
+```
+
+
+DH-Waypoint started in April 2026 as a fork of [`bitmagnet-io/bitmagnet`](https://github.com/bitmagnet-io/bitmagnet), whose `main` had then gone more than nine months without a commit. The DHT crawler, metainfo fetcher, CEL classifier and the Postgres/GraphQL foundation are upstream's work and are credited [below](#lineage--licence). Almost everything else on this page is new — roughly 100K lines of non-test Go, 33 schema migrations and 16 new packages against the baseline. Upstream baseline: [`bitmagnet-io/bitmagnet@2b9e8ea`](https://github.com/bitmagnet-io/bitmagnet/commit/2b9e8eadd34c037830d1fa7470b5ef2746cd6388).
+
+## See it run
+
+
+
+Two containers: the backend and PostgreSQL. From a clone of this repository, using the published image:
+
+```sh
+cp examples/.env.example .env     # set POSTGRES_PASSWORD, nothing else is required
+docker compose up -d              # root compose pulls ghcr.io/spencernorton/dh-waypoint
+curl -s localhost:3333/metrics | grep dht_crawler_persisted   # climbing within a minute
+```
+
+The root stack defaults to `PROCESSING_MODE=basic` (coarse categories in core; classification and filtering belong to [plugins](docs/processors/plugin-files.md) — drop a `*.plugin.yml` into `./plugins/`). Set `PROCESSING_MODE=full` for the built-in classifier, or use `examples/docker-compose.public.yml` to build from source. New to the APIs? Start with the [API guide](docs/api-guide.md).
+
+Then add `http://<host>:3333/torznab/` as a Torznab indexer in Prowlarr (or in each \*arr directly — [per-app guides](docs/integrations/sonarr.md)), and set the \*arr webhook URL to `http://<host>:3333/evidence/arr/<instance>` so the evidence loop closes ([`docs/evidence.md`](docs/evidence.md)). GraphQL accepts JSON `POST` requests at `/graphql`, and Prometheus metrics are available at `/metrics`. Set a Torznab key and protect the remaining APIs before exposing them beyond a trusted network. [`examples/README.md`](examples/README.md) covers the stack in detail.
+
+## What DH-Waypoint adds
+
+**Ground truth from your \*arr stack.** `POST /evidence/arr/:instance` receives Sonarr/Radarr/Lidarr/Readarr webhooks, a history poller backstops lost deliveries and a qBittorrent poller reads categories and tags. Every signal lands in an append-only `label_evidence` table and resolves, by explicit precedence, into one canonical label per infohash. A label backed by a real grab short-circuits the classifier — nothing to compute — and, opt-in, decides the identity of *other* releases under the same title, so a new episode of a show you monitor never lands on its foreign namesake. Grab → import outcomes train Beta(α, β) success priors per release feature that re-rank Torznab results toward what has actually worked for you. Liveness derives alive / suspect / dead per infohash from client state and import events, keeps dead swarms out of Torznab and revalidates them through DHT `get_peers`. `dh-waypoint attribution recon` reconstructs, per infohash, what the indexer served, what the client grabbed and what the \*arr imported, so hit-rate claims are measured rather than folklore.
+
+**Curation, not just collection.** A deterministic content filter — language tag or title script, lossy-audio-only music, NSFW, blocked extensions and content types, foreign audio — runs in pure Go with no network or database call per decision and is anime-aware, so watchable anime is never dropped on a script heuristic. Historical quarantines remain inspectable and restorable; optional processors cannot delete catalogue records. Retention purges rows with no label, no evidence, zero seeders everywhere and age past `MinAge`, dry-run by default. A pre-fetch bloom filter of double-hashed CSAM infohashes is consulted before any BEP-9 fetch ([`docs/csam-defense.md`](docs/csam-defense.md)), and an append-only verdict ledger feeds Torznab exclusion and crawler triage.
+
+**Titles that actually match.** An LLM-free anime backbone recognises fansub brackets, absolute episode numbers and romaji season markers on the always-on path, backed by an alias table built from AniDB titles joined to Anime-Lists TMDB mappings, so every romaji, kanji, English and fan alias resolves to one TMDB id. TMDB alternative titles and translations are folded into full-text search; `internal/titlenorm` is the single title normaliser every matching surface calls (the repo once had eleven); release granularity, release date, absolute episode and English-audio presence are stamped on every row with resumable backfills; `S01E01E02` and three-digit episode numbers parse correctly.
+
+**Accurate swarm numbers.** A BEP-15 UDP scrape worker refreshes seeders and leechers from public trackers at about seventy infohashes per datagram, replacing the crawler's one-node, never-refreshed estimate. Per-peer BEP-9 history stops the fetcher re-hammering peers that never answer (the audit that motivated it found 8.68M errors against 207K successes). BEP-42 external-IP resolution, BEP-43 read-only handling and BEP-51 peer intervals are implemented on both paths.
+
+**Observability that answers questions.** `dh_waypoint_*` metric families cover every subsystem — DHT server, client and responder, routing table, crawler, classifier, evidence, content filter, liveness, priors, retention, quarantine, seeds, wantbridge and optional processors ([`docs/reference/metrics.md`](docs/reference/metrics.md)). `pgstats` reports table and index bloat, autovacuum lag, dead tuples and pool saturation on every scrape. Grafana dashboards and Prometheus / Loki / Pyroscope configs ship in [`observability/`](observability/), and a `bitmagnet_*` dual-emit shim keeps dashboards built against upstream alive.
+
+**Operations.** Every credential accepts a `_FILE` variant, and a missing or empty file is a startup error rather than a silently disabled feature. Every destructive or costly feature has a two-flag opt-in (`Enabled`, then `Enforce` / `EnableLive` / `EnablePurge`) and counterfactual `would_*` metrics, so you read the numbers before you flip the switch. `eval-freeze`, `eval-replay` and `matcher-eval` snapshot corpora and replay them through the real workflow as byte-stable JSONL; every backfill is bounded, resumable and dry-run capable.
+
+The full list, with the design notes behind each item, is [`docs/project/improvements.md`](docs/project/improvements.md).
+
+## Measured
+
+The historical results below describe earlier releases. Version 5 validation is recorded in [processor validation](docs/processors/validation.md).
+
+Every torrent your \*arrs grab and report back comes with a free answer key: the identity the \*arr assigned when it chose that release. `dh-waypoint eval-freeze --fromCanonicalLabels all` turns them into a frozen benchmark, and `dh-waypoint eval-replay` runs each one back through the real classifier with its own label hidden, then scores whether DH-Waypoint reaches the identity Sonarr or Radarr chose. On the reference deployment (4,070 grabbed torrents, 3,344 with a resolvable TMDB id, 262 titles), replayed on the production crawler:
+
+| Build | Rows agree with the \*arr | Titles agree | Precision of attached identities |
+|---|---|---|---|
+| v2.8.1 | 83.3% | 85.5% | 94.9% |
+| v2.9.2 — fuzzy matcher stops dropping punctuated titles | 93.7% | 90.8% | 95.5% |
+| v2.10.0 — + title-level \*arr evidence | 97.5% | 93.1% | 99.3% |
+| v2.10.2 — + site-prefix parser fix | 97.8% | 93.1% | 99.3% |
+| **v2.10.7 — + EP-numbered and bilingual titles** | **98.1%** | **93.9%** | **99.3%** |
+
+On the rows the whole deterministic pipeline still cannot match — live TMDB search included — the LLM matcher's answer was the \*arr's identity on 15 of the 18 it answered. Its identity gate accepted only the ones it could corroborate against an independently parsed title, and attached nothing wrong — so where it withheld a right answer, the parser's title was the problem, not the model; v2.10.7 fixed two such shapes.
+
+The benchmark found its own regressions: the first run showed three matching features scoring *below* the same pipeline with them switched off, and single-flag ablations traced the whole gap to one gate in the fuzzy matcher. The method, 95% intervals, ablations, root causes, limits and the commands to run it on your own instance are in [`docs/project/benchmarks.md`](docs/project/benchmarks.md).
+
+## Optional processor services
+
+DH-Waypoint 5 runs without model runtimes or plugins. Crawling, metadata storage,
+normal parsing and matching, queues, recovery, search and indexer APIs remain
+core responsibilities. Optional processors use a bounded HTTP service contract
+and a separate PostgreSQL queue on the existing database. Register, replace,
+pause or remove a compatible service through the authenticated backend API
+without rebuilding or restarting DH-Waypoint.
+
+See the [contract](docs/processors/v1.md), [operator API](docs/processors/operator-api.md),
+[architecture map](docs/processors/architecture.md), and
+[migration and rollback procedure](docs/processors/migration.md). The two
+[synthetic reference services](examples/processors/README.md) demonstrate the
+boundary without a model or provider account. Historical model results and
+recovery evidence are preserved; they are not new publication authority.
+
+## What's in the box
+
+| Area | Surface |
+|---|---|
+| Engine | DHT crawler (BEP-5/9/10/33/42/43/51), metainfo requester with peer reputation, CEL classifier, GORM-backed Postgres persistence |
+| External API | `/graphql` (GraphQL), `/torznab/*any` (Torznab with liveness exclusion and priors re-ranking), `/import` |
+| Evidence | `POST /evidence/arr/:instance` webhook, \*arr history poller, qBittorrent poller → `label_evidence`, `torrent_canonical_labels`, liveness, priors |
+| Classification | canonical preempt → CEL rules → optional processor proposals; anime backbone; alternative titles; one title normaliser |
+| Curation | content filter, junk purge with quarantine, retention, CSAM pre-fetch blocklist, verdict ledger, queue cleaner |
+| Optional processors | Versioned service contract, durable bounded work, validated proposals and attributed status |
+| Swarm data | BEP-15 tracker scrape, seeds history, revalidation via DHT |
+| Metrics | `dh_waypoint_*` Prometheus families, `pgstats`, `dashstats`, Grafana dashboards in `observability/`, legacy `bitmagnet_*` dual-emit |
+| CLI | `worker`, `classifier`, `reprocess`, `attribution`, backfills — see [`docs/reference/cli.md`](docs/reference/cli.md) |
+
+## Distribution boundary
+
+This repository publishes the reusable backend under the MIT license. Its
+container contains the Go executable and runtime certificates/tools; it serves
+Torznab, GraphQL, metrics, import and evidence endpoints. It does not bundle a
+browser interface, account service or site deployment configuration.
+
+Version 4.0 separates that backend from the hosted product. Existing 3.x
+combined-image installations must keep their site on its own release and move
+the crawler to the 4.x backend image. PostgreSQL remains the backend's system
+of record. See [the migration guide](docs/migration-v4.md).
+
+## Documentation
+
+- [Deployment and operations guide](docs/OPERATIONS.md) — setup, configuration, verification, upgrades, recovery and troubleshooting.
+- [Releasing](docs/RELEASING.md) — public builds, release checks and private deployment boundaries.
+
+- [Docs index](docs/index.md) · [Quickstart](docs/quickstart.md) · [Configuration](docs/configuration.md) · [FAQ](docs/faq.md) · [Troubleshooting](docs/troubleshooting.md)
+- Core: [Evidence pipeline](docs/evidence.md) — how *arr grabs and imports become labels, priors and liveness
+- Concepts: [Architecture](docs/concepts/architecture.md) · [DHT crawler](docs/concepts/dht-crawler.md) · [Classification](docs/concepts/classification.md) · [Swarm health](docs/concepts/swarm-health.md) · [Compatibility contract](docs/concepts/compatibility.md) · [Wantbridge](docs/concepts/wantbridge.md) · [Glossary](docs/concepts/glossary.md)
+- Reference: [Torznab API](docs/reference/torznab-api.md) · [GraphQL API](docs/reference/graphql-api.md) · [Metrics](docs/reference/metrics.md) · [CLI](docs/reference/cli.md)
+- Operations: [Security](docs/operations/security.md) · [Monitoring](docs/operations/monitoring.md) · [CSAM defence](docs/csam-defense.md)
+- Project: [Improvements over upstream](docs/project/improvements.md) · [Benchmarks](docs/project/benchmarks.md) · [Legal disclaimer](docs/legal/disclaimer.md)
+
+## Development
+
+```sh
+git clone https://github.com/spencernorton/DH-Waypoint.git
+cd DH-Waypoint
+
+go test ./...                        # vanilla suite, CGO off
+CGO_ENABLED=1 go test -race ./...    # race-detector suite
+task build                           # versioned ./dh-waypoint from VERSION
+
+# run against a real Postgres:
+POSTGRES_HOST=localhost POSTGRES_PASSWORD=dh-waypoint ./dh-waypoint worker run --all
+```
+
+Contributions are welcome — read [CONTRIBUTING.md](CONTRIBUTING.md) first. GitHub is the development home of the public backend; changes ship in tagged releases.
+
+## Support
+
+- Bugs and feature requests: [open an issue](https://github.com/spencernorton/DH-Waypoint/issues/new/choose). Questions: [Discussions](https://github.com/spencernorton/DH-Waypoint/discussions).
+- Security: [private vulnerability reporting](https://github.com/spencernorton/DH-Waypoint/security/advisories/new) — see [SECURITY.md](SECURITY.md).
+- If DH-Waypoint earns a place in your stack, you can [support its development](https://buy.stripe.com/8x26oH2U44f65TRe574wM04).
+
+## Lineage & licence
+
+Licensed under the MIT licence, inherited from [`bitmagnet-io/bitmagnet`](https://github.com/bitmagnet-io/bitmagnet). All upstream copyright notices are preserved, and the parts that are still upstream's — the DHT protocol implementation, metainfo fetching, the CEL classifier engine and the GraphQL/Postgres foundation — are the reason the rest was possible.
+
+DH-Waypoint's baseline is upstream commit `2b9e8ea`, the head of upstream `main` from July 2025 until May 2026. The fork was cut in April 2026 and stopped tracking upstream on a schedule at the rebrand that month; the `upstream` remote stays configured for security-fix surveillance.
+
+The backend pipeline diagram lives in [`docs/assets/`](docs/assets/).
+
+---
+
+<p align="center">
+  <a href="https://norvitech.com"><img alt="Part of the NorviTech Suite — open-source apps for the Linux desktop and the self-hosted stack" src="https://norvitech.com/assets/banner.svg" width="640"></a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/spencernorton/helios">Helios</a> ·
+  <a href="https://github.com/spencernorton/DH-Waypoint">DH-Waypoint</a> ·
+  <a href="https://github.com/spencernorton/xnote">XNote</a> ·
+  <a href="https://github.com/spencernorton/xnote-placement">XNote Placement</a> ·
+  <a href="https://github.com/spencernorton/snipsnap">SnipSnap</a> ·
+  <a href="https://github.com/spencernorton/conductor">Conductor</a> ·
+  <a href="https://github.com/spencernorton/norvi-os">NorviOS</a> ·
+  <a href="https://github.com/spencernorton/indigo">Indigo</a> ·
+  <a href="https://github.com/spencernorton/roadtrack">Road Track</a> ·
+  <a href="https://norvitech.com">norvitech.com</a>
+</p>

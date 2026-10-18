@@ -1,0 +1,80 @@
+# Public Go race tests, PostgreSQL integration, headless boundary and image build.
+# Read-only tokens, disposable databases and commit-pinned GitHub actions.
+name: CI
+on:
+  workflow_call:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify backend distribution boundary
+        run: |
+          python3 scripts/test_headless_boundary.py
+          python3 scripts/check_headless_boundary.py
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - run: python3 scripts/check_processor_boundary.py
+      - run: go vet ./...
+      - run: go test -race -count=1 -timeout=10m ./...
+      - name: Scan called Go dependencies
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
+  integration:
+    name: PostgreSQL integration
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: test-only
+          POSTGRES_DB: dh_waypoint_test
+        ports: ['5432:5432']
+        options: --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 3s --health-retries 10
+    env:
+      DH_WAYPOINT_TEST_POSTGRES_DSN: postgres://postgres:test-only@127.0.0.1:5432/dh_waypoint_test?sslmode=disable
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version-file: go.mod
+      - run: go test -race -p 1 -count=1 -timeout=15m ./internal/dhtcrawler ./internal/junkpurge ./internal/processors ./processorapi/v1 ./internal/classifier/contentfilter ./internal/llmcapture ./internal/database/search ./internal/serving ./internal/seeds ./internal/evidence/sources/qbpoller ./internal/processor ./internal/namepolicy ./internal/importer ./internal/llmwork ./internal/releasefields ./internal/cataloguepolicy ./internal/tracker ./internal/restapi ./internal/cataloguerecovery/...
+  image:
+    name: Public container build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Build supported container with source identity
+        env:
+          BUILD_SOURCE: https://github.com/${{ github.repository }}
+        run: |
+          VERSION="v$(cat VERSION)"
+          printf '%s\n' "$VERSION" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
+          COMMIT=$(git rev-parse HEAD)
+          BUILD_DATE=$(git show -s --format=%cI HEAD)
+          docker build --platform linux/amd64 --build-arg VERSION="$VERSION" \
+            --build-arg COMMIT="$COMMIT" --build-arg BUILD_DATE="$BUILD_DATE" \
+            --build-arg SOURCE="$BUILD_SOURCE" --tag dh-waypoint:ci .
+          test "$(docker image inspect dh-waypoint:ci --format '{{.Os}}/{{.Architecture}}')" = 'linux/amd64'
+          test "$(docker image inspect dh-waypoint:ci --format '{{index .Config.Labels "org.opencontainers.image.version"}}')" = "$VERSION"
+          test "$(docker image inspect dh-waypoint:ci --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "$COMMIT"
+          test "$(docker image inspect dh-waypoint:ci --format '{{index .Config.Labels "org.opencontainers.image.created"}}')" = "$BUILD_DATE"
+          test "$(docker image inspect dh-waypoint:ci --format '{{index .Config.Labels "org.opencontainers.image.source"}}')" = "$BUILD_SOURCE"
+          sh scripts/check_backend_image.sh dh-waypoint:ci "$VERSION"

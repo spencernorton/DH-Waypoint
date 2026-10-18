@@ -1,0 +1,124 @@
+// Package quarantinehttp exposes the junkpurge quarantine review API on the
+// shared Gin server: list pending entries, restore one (undo), or delete one
+// now. Consumed by the dh-waypoint-ui "Quarantine" tab.
+package quarantinehttp
+
+import (
+	"errors"
+	"net/http"
+	"strconv"
+
+	"github.com/gin-gonic/gin"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/spencernorton/DH-Waypoint/internal/cataloguerecovery"
+	"github.com/spencernorton/DH-Waypoint/internal/httpserver"
+	"github.com/spencernorton/DH-Waypoint/internal/junkpurge"
+	"github.com/spencernorton/DH-Waypoint/internal/lazy"
+	"github.com/spencernorton/DH-Waypoint/internal/verdicts"
+	"go.uber.org/fx"
+	"go.uber.org/zap"
+)
+
+type Params struct {
+	fx.In
+	Pool     lazy.Lazy[*pgxpool.Pool]
+	Config   junkpurge.Config
+	Verdicts *verdicts.Store          `optional:"true"`
+	Recovery *cataloguerecovery.Store `optional:"true"`
+	Logger   *zap.SugaredLogger
+}
+
+// New builds the Gin option. Provided into the http_server_options group.
+func New(p Params) httpserver.Option {
+	return builder{pool: p.Pool, cfg: p.Config, verdicts: p.Verdicts, recovery: p.Recovery, logger: p.Logger.Named("quarantinehttp")}
+}
+
+type builder struct {
+	pool     lazy.Lazy[*pgxpool.Pool]
+	cfg      junkpurge.Config
+	verdicts *verdicts.Store
+	recovery *cataloguerecovery.Store
+	logger   *zap.SugaredLogger
+}
+
+func (builder) Key() string { return "junkpurge-quarantine" }
+
+func (b builder) Apply(e *gin.Engine) error {
+	h := &handler{pool: b.pool, cfg: b.cfg, verdicts: b.verdicts, recovery: b.recovery, logger: b.logger}
+	g := e.Group("/api/quarantine")
+	g.GET("", h.list)
+	g.POST("/:hash/restore", h.restore)
+	g.DELETE("/:hash", h.deleteNow)
+	return nil
+}
+
+type handler struct {
+	pool     lazy.Lazy[*pgxpool.Pool]
+	cfg      junkpurge.Config
+	verdicts *verdicts.Store
+	recovery *cataloguerecovery.Store
+	logger   *zap.SugaredLogger
+}
+
+func (h *handler) quarantineDays() int {
+	if h.cfg.QuarantineDays > 0 {
+		return h.cfg.QuarantineDays
+	}
+	return 30
+}
+
+func (h *handler) list(c *gin.Context) {
+	pool, err := h.pool.Get()
+	if err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": err.Error()})
+		return
+	}
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "100"))
+	offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
+	if limit <= 0 || limit > 1000 {
+		limit = 100
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	items, total, err := junkpurge.ListQuarantine(c.Request.Context(), pool, h.quarantineDays(), limit, offset)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"items": items, "totalCount": total, "windowDays": h.quarantineDays()})
+}
+
+func (h *handler) restore(c *gin.Context) {
+	pool, err := h.pool.Get()
+	if err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": err.Error()})
+		return
+	}
+	if err := junkpurge.RestoreQuarantined(c.Request.Context(), pool, h.verdicts, h.recovery, h.logger, c.Param("hash")); err != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(err, cataloguerecovery.ErrProtected) || errors.Is(err, cataloguerecovery.ErrConflict) {
+			status = http.StatusConflict
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"status": "restored", "infoHash": c.Param("hash")})
+}
+
+func (h *handler) deleteNow(c *gin.Context) {
+	pool, err := h.pool.Get()
+	if err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": err.Error()})
+		return
+	}
+	if err := junkpurge.DeleteQuarantinedNow(c.Request.Context(), pool, h.verdicts, h.logger, c.Param("hash")); err != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(err, cataloguerecovery.ErrDisabled) {
+			status = http.StatusConflict
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"status": "deleted", "infoHash": c.Param("hash")})
+}

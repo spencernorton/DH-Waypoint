@@ -1,0 +1,159 @@
+type Torrent {
+  infoHash: Hash20!
+  name: String!
+  size: Int!
+  hasFilesInfo: Boolean!
+  singleFile: Boolean
+  extension: String
+  filesStatus: FilesStatus!
+  filesCount: Int
+  fileType: FileType
+  fileTypes: [FileType!]
+  files: [TorrentFile!]
+  sources: [TorrentSourceInfo!]!
+  seeders: Int
+  leechers: Int
+  tagNames: [String!]!
+  magnetUri: String!
+  createdAt: DateTime!
+  updatedAt: DateTime!
+}
+
+type TorrentFile {
+  infoHash: Hash20!
+  index: Int!
+  path: String!
+  extension: String
+  fileType: FileType
+  size: Int!
+  createdAt: DateTime!
+  updatedAt: DateTime!
+}
+
+type TorrentSource {
+  key: String!
+  name: String!
+}
+
+type TorrentSourceInfo {
+  key: String!
+  name: String!
+  importId: String
+  seeders: Int
+  leechers: Int
+}
+
+type TorrentContent {
+  id: ID!
+  infoHash: Hash20!
+  torrent: Torrent!
+  contentType: ContentType
+  contentSource: String
+  contentId: String
+  content: Content
+  title: String!
+  languages: [LanguageInfo!]
+  episodes: Episodes
+  videoResolution: VideoResolution
+  videoSource: VideoSource
+  videoCodec: VideoCodec
+  video3d: Video3D
+  videoModifier: VideoModifier
+  releaseGroup: String
+  """Explicit release-name claims; null means no supported evidence, not verified media tracks."""
+  releaseAttributes: ReleaseAttributes
+  """
+  English availability for anime releases (dub | sub | none). Null = unknown
+  or not anime. Read from the persisted english_audio column.
+  """
+  englishAudio: EnglishAudio
+  """
+  Provenance of englishAudio: "name" (deterministic release-name signals) or
+  "llm" (LLM extraction backstop). Null iff englishAudio is null.
+  """
+  englishAudioSource: String
+  seeders: Int
+  leechers: Int
+  publishedAt: DateTime!
+  createdAt: DateTime!
+  updatedAt: DateTime!
+}
+
+type ReleaseAttributes {
+  version: Int!
+  parser: String!
+  sourceNameSha256: String!
+  hdrFormats: [String!]!
+  audioFormats: [String!]!
+  audioChannels: String
+  audioFeatures: [String!]!
+  revisions: [String!]!
+  encoder: String
+}
+
+type LanguageInfo {
+  id: String!
+  name: String!
+}
+
+type Episodes {
+  label: String!
+  seasons: [Season!]!
+}
+
+type Season {
+  season: Int!
+  episodes: [Int!]
+}
+
+type MetadataSource {
+  key: String!
+  name: String!
+}
+
+type ExternalLink {
+  metadataSource: MetadataSource!
+  url: String!
+}
+
+type Content {
+  type: ContentType!
+  source: String!
+  id: String!
+  title: String!
+  releaseDate: Date
+  releaseYear: Year
+  adult: Boolean
+  originalLanguage: LanguageInfo
+  originalTitle: String
+  overview: String
+  runtime: Int
+  popularity: Float
+  voteAverage: Float
+  voteCount: Int
+  attributes: [ContentAttribute!]!
+  collections: [ContentCollection!]!
+  metadataSource: MetadataSource!
+  externalLinks: [ExternalLink!]!
+  createdAt: DateTime!
+  updatedAt: DateTime!
+}
+
+type ContentAttribute {
+  source: String!
+  key: String!
+  value: String!
+  metadataSource: MetadataSource!
+  createdAt: DateTime!
+  updatedAt: DateTime!
+}
+
+type ContentCollection {
+  type: String!
+  source: String!
+  id: String!
+  name: String!
+  metadataSource: MetadataSource!
+  createdAt: DateTime!
+  updatedAt: DateTime!
+}

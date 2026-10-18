@@ -1,0 +1,44 @@
+.env
+.env.*
+!examples/.env.example
+.direnv
+.idea
+/data
+/bitmagnet
+/llmeval
+/export.sql
+dump.rdb
+
+# Raw DH-Waypoint evaluation admission identities are local-only. Evaluation
+# docs require all source/review/result artifacts to live outside this repo;
+# this extra pattern prevents the most sensitive sidecar from being staged by
+# accident when an operator uses the recommended suffix.
+*privacy-sidecar*.json
+
+# IDEs and editors
+.idea/
+.project
+.classpath
+.c9/
+*.launch
+.settings/
+*.sublime-workspace
+
+# Visual Studio Code
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+.history/*
+
+# Miscellaneous
+testem.log
+__pycache__/
+*.py[cod]
+
+# System files
+.DS_Store
+Thumbs.db
+
+/work/

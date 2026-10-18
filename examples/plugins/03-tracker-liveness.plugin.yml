@@ -1,0 +1,16 @@
+# Liveness template — act on tracker-observed swarm health.
+# Driver: builtin/tracker-liveness. Uses the core's tracker scrape
+# facts; an unknown swarm (never scraped) is never treated as dead.
+id: swarm-liveness
+driver: builtin/tracker-liveness
+mode: shadow
+priority: 90
+configuration:
+  min_seeders: 1
+  exclude_dead: false
+  exclude_reason: "no seeders observed"
+  tag_live: swarm-live
+  tag_dead: swarm-dead
+  weight_dimension: liveness
+  live_weight: 1.0
+  dead_weight: -1.0

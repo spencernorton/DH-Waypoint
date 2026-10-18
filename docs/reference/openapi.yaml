@@ -1,0 +1,131 @@
+openapi: 3.0.3
+info:
+  title: DH-Waypoint REST API
+  version: "1"
+  description: >
+    Read-only REST surface over the serving-policy catalogue search
+    (the same view as GraphQL). Private torrents never appear.
+    Authentication: when HTTP_SERVER_API_KEY is configured, send it
+    as `Authorization: Bearer <key>` or `X-API-Key: <key>`.
+servers:
+  - url: http://localhost:3333
+paths:
+  /api/v1/search:
+    get:
+      summary: Search torrent contents
+      parameters:
+        - name: q
+          in: query
+          schema: { type: string }
+          description: Full-text query string
+        - name: type
+          in: query
+          schema: { type: string, enum: [movie, tv_show, music, ebook, comic, audiobook, game, software, xxx, course] }
+        - name: limit
+          in: query
+          schema: { type: integer, default: 20, maximum: 100 }
+        - name: offset
+          in: query
+          schema: { type: integer, default: 0 }
+      responses:
+        "200":
+          description: Search page
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SearchResponse" }
+        "400": { $ref: "#/components/responses/Error" }
+  /api/v1/torrents/{hash}:
+    get:
+      summary: One torrent by info hash (serving view)
+      parameters:
+        - name: hash
+          in: path
+          required: true
+          schema: { type: string, pattern: "^[0-9a-fA-F]{40}$" }
+      responses:
+        "200":
+          description: Torrent item
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Item" }
+        "404": { $ref: "#/components/responses/Error" }
+  /api/v1/torrents/{hash}/files:
+    get:
+      summary: File inventory of one torrent
+      parameters:
+        - name: hash
+          in: path
+          required: true
+          schema: { type: string, pattern: "^[0-9a-fA-F]{40}$" }
+      responses:
+        "200":
+          description: File list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  info_hash: { type: string }
+                  files:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        path: { type: string }
+                        size: { type: integer, format: int64 }
+  /api/v1/stats:
+    get:
+      summary: Catalogue totals
+      responses:
+        "200":
+          description: Totals
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  torrent_contents: { type: integer }
+  /api/v1/openapi.yaml:
+    get:
+      summary: This specification
+      responses:
+        "200": { description: OpenAPI document }
+components:
+  responses:
+    Error:
+      description: Error
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error: { type: string }
+  schemas:
+    SearchResponse:
+      type: object
+      properties:
+        total_count: { type: integer }
+        has_next_page: { type: boolean }
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/Item" }
+    Item:
+      type: object
+      properties:
+        info_hash: { type: string }
+        name: { type: string }
+        title: { type: string }
+        content_type: { type: string }
+        content_source: { type: string }
+        content_id: { type: string }
+        size: { type: integer, format: int64 }
+        files_count: { type: integer }
+        seeders: { type: integer }
+        leechers: { type: integer }
+        published_at: { type: string, format: date-time }
+        video_resolution: { type: string }
+        video_source: { type: string }
+        video_codec: { type: string }
+        release_group: { type: string }
+        is_anime: { type: boolean }
+        magnet: { type: string }

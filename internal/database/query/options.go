@@ -1,0 +1,218 @@
+package query
+
+import (
+	"context"
+
+	"github.com/spencernorton/DH-Waypoint/internal/database/cache"
+	"github.com/spencernorton/DH-Waypoint/internal/database/dao"
+	"github.com/spencernorton/DH-Waypoint/internal/maps"
+	"gorm.io/gen/field"
+	"gorm.io/gorm/clause"
+	"gorm.io/gorm/schema"
+)
+
+type Option = func(ctx OptionBuilder) (OptionBuilder, error)
+
+func DefaultOption() Option {
+	return Options(
+		Limit(10),
+		WithAggregationBudget(5_000),
+	)
+}
+
+func Options(o ...Option) Option {
+	return func(b OptionBuilder) (OptionBuilder, error) {
+		for _, opt := range o {
+			nextCtx, err := opt(b)
+			if err != nil {
+				return b, err
+			}
+
+			b = nextCtx
+		}
+
+		return b, nil
+	}
+}
+
+type Criteria interface {
+	Raw(c DBContext) (RawCriteria, error)
+}
+
+type TableJoinType int
+
+const (
+	TableJoinTypeInner TableJoinType = iota
+	TableJoinTypeLeft
+	TableJoinTypeRight
+)
+
+type TableJoin struct {
+	Table schema.Tabler
+	On    []field.Expr
+	Type  TableJoinType
+	//revive:disable-next-line:nested-structs
+	Dependencies maps.InsertMap[string, struct{}]
+	Required     bool
+	// AtMostOne promises that the complete ON predicate matches a target
+	// unique key, producing at most one joined row per input row. Unknown or
+	// replacement joins leave this false and use the original grouped query.
+	AtMostOne bool
+}
+
+func Table(name string) Option {
+	return func(b OptionBuilder) (OptionBuilder, error) {
+		return b.Table(name), nil
+	}
+}
+
+func Join(fn func(*dao.Query) []TableJoin) Option {
+	return func(b OptionBuilder) (OptionBuilder, error) {
+		joins := fn(b.Query())
+		return b.Join(joins...), nil
+	}
+}
+
+func RequireJoin(names ...string) Option {
+	return func(b OptionBuilder) (OptionBuilder, error) {
+		return b.RequireJoin(names...), nil
+	}
+}
+
+func SearchString(str string) Option {
+	return func(ctx OptionBuilder) (OptionBuilder, error) {
+		return ctx.QueryString(str), nil
+	}
+}
+
+func Select(columns ...clause.Expr) Option {
+	return func(ctx OptionBuilder) (OptionBuilder, error) {
+		return ctx.Select(columns...), nil
+	}
+}
+
+func SelectAll() Option {
+	return Select(clause.Expr{SQL: "*"})
+}
+
+func Group(columns ...clause.Column) Option {
+	return func(ctx OptionBuilder) (OptionBuilder, error) {
+		return ctx.Group(columns...), nil
+	}
+}
+
+// GroupByDistinctOn switches the search into grouped mode: the result collapses
+// to one representative row per distinct key via a DISTINCT-ON derived table.
+//
+//   - distinctOnSQL is the DISTINCT ON (...) key expression list.
+//   - innerOrderSQL is the inner ORDER BY that picks each group's representative;
+//     it MUST begin with distinctOnSQL's columns (Postgres requires the DISTINCT
+//     ON expressions to match the leading ORDER BY) and MUST end in a
+//     group-unique column so the representative is deterministic across page
+//     fetches.
+//
+// Both fragments are trusted, caller-supplied SQL (never user input) — see
+// search.TorrentContentGroupByContentOption for the torrent_contents wiring.
+func GroupByDistinctOn(distinctOnSQL, innerOrderSQL string) Option {
+	return func(ctx OptionBuilder) (OptionBuilder, error) {
+		return ctx.GroupByDistinctOn(distinctOnSQL, innerOrderSQL), nil
+	}
+}
+
+// GroupedCandidatePrefix enables the bounded representative search for the
+// schema-backed matched torrent grouping. The caller also supplies its matched
+// content_id predicate; schema checks then guarantee non-NULL type and ID keys.
+func GroupedCandidatePrefix() Option {
+	return func(ctx OptionBuilder) (OptionBuilder, error) {
+		b, ok := ctx.(optionBuilder)
+		if !ok || b.grouping == nil {
+			return ctx, nil
+		}
+		spec := *b.grouping
+		spec.candidatePrefix = true
+		b.grouping = &spec
+		return b, nil
+	}
+}
+
+func Limit(n uint) Option {
+	return func(ctx OptionBuilder) (OptionBuilder, error) {
+		return ctx.Limit(n), nil
+	}
+}
+
+func Offset(n uint) Option {
+	return func(ctx OptionBuilder) (OptionBuilder, error) {
+		return ctx.Offset(n), nil
+	}
+}
+
+func OrderBy(columns ...OrderByColumn) Option {
+	return func(ctx OptionBuilder) (OptionBuilder, error) {
+		return ctx.OrderBy(columns...), nil
+	}
+}
+
+const QueryStringRankField = "query_string_rank"
+
+func OrderByQueryStringRank() Option {
+	return func(ctx OptionBuilder) (OptionBuilder, error) {
+		return ctx.OrderBy(OrderByColumn{
+			OrderByColumn: clause.OrderByColumn{
+				Column:  clause.Column{Name: QueryStringRankField},
+				Desc:    true,
+				Reorder: true,
+			},
+		}), nil
+	}
+}
+
+func WithFacet(facets ...Facet) Option {
+	return func(ctx OptionBuilder) (OptionBuilder, error) {
+		return ctx.Facet(facets...), nil
+	}
+}
+
+func Preload(fn func(query *dao.Query) []field.RelationField) Option {
+	return func(ctx OptionBuilder) (OptionBuilder, error) {
+		return ctx.Preload(fn(ctx.Query())...), nil
+	}
+}
+
+func WithTotalCount(bl bool) Option {
+	return func(ctx OptionBuilder) (OptionBuilder, error) {
+		return ctx.WithTotalCount(bl), nil
+	}
+}
+
+func WithHasNextPage(bl bool) Option {
+	return func(ctx OptionBuilder) (OptionBuilder, error) {
+		return ctx.WithHasNextPage(bl), nil
+	}
+}
+
+func WithAggregationBudget(budget float64) Option {
+	return func(ctx OptionBuilder) (OptionBuilder, error) {
+		return ctx.WithAggregationBudget(budget), nil
+	}
+}
+
+func Context(fn func(ctx context.Context) context.Context) Option {
+	return func(b OptionBuilder) (OptionBuilder, error) {
+		return b.Context(fn), nil
+	}
+}
+
+func CacheMode(mode cache.Mode) Option {
+	return Context(func(ctx context.Context) context.Context {
+		return context.WithValue(ctx, cache.ModeKey, mode)
+	})
+}
+
+func Cached() Option {
+	return CacheMode(cache.ModeCached)
+}
+
+func CacheWarm() Option {
+	return CacheMode(cache.ModeWarm)
+}

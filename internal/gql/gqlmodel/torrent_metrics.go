@@ -1,0 +1,37 @@
+package gqlmodel
+
+import (
+	"context"
+
+	"github.com/spencernorton/DH-Waypoint/internal/gql/gqlmodel/gen"
+	"github.com/spencernorton/DH-Waypoint/internal/metrics/torrentmetrics"
+)
+
+func (t TorrentQuery) Metrics(
+	ctx context.Context,
+	input gen.TorrentMetricsQueryInput,
+) (*gen.TorrentMetricsQueryResult, error) {
+	req := torrentmetrics.Request{
+		StartTime: nilToZero(input.StartTime.Value()),
+		EndTime:   nilToZero(input.EndTime.Value()),
+		Sources:   input.Sources.Value(),
+	}
+
+	switch input.BucketDuration {
+	case gen.MetricsBucketDurationMinute:
+		req.BucketDuration = "minute"
+	case gen.MetricsBucketDurationHour:
+		req.BucketDuration = "hour"
+	case gen.MetricsBucketDurationDay:
+		req.BucketDuration = "day"
+	}
+
+	buckets, err := t.TorrentMetricsClient.Request(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+
+	return &gen.TorrentMetricsQueryResult{
+		Buckets: buckets,
+	}, nil
+}

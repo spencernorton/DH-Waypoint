@@ -1,0 +1,186 @@
+# Where are all the schema files located? globs are supported eg  src/**/*.graphqls
+schema:
+  - graphql/schema/*.graphqls
+
+# Where should the generated server code go?
+exec:
+  filename: internal/gql/gql.gen.go
+  package: gql
+
+# Uncomment to enable federation
+# federation:
+#   filename: graph/federation.go
+#   package: graph
+
+# Where should any generated models go?
+model:
+  filename: internal/gql/gqlmodel/gen/model.gen.go
+  package: gen
+
+# Where should the resolver implementations go?
+resolver:
+  layout: follow-schema
+  dir: internal/gql/resolvers
+  package: resolvers
+  filename_template: "{name}.resolvers.go"
+  # Optional: turn on to not generate template comments above resolvers
+  # omit_template_comment: false
+
+# Optional: turn on use ` + "`" + `gqlgen:"fieldName"` + "`" + ` tags in your models
+struct_tag: gqlgen
+
+# Optional: turn on to use []Thing instead of []*Thing
+omit_slice_element_pointers: true
+
+# Optional: turn on to omit Is<Name>() methods to interface and unions
+# omit_interface_checks : true
+
+# Optional: turn on to skip generation of ComplexityRoot struct content and Complexity function
+# omit_complexity: false
+
+# Optional: turn on to not generate any file notice comments in generated files
+# omit_gqlgen_file_notice: false
+
+# Optional: turn on to exclude the gqlgen version in the generated file notice. No effect if `omit_gqlgen_file_notice` is true.
+# omit_gqlgen_version_in_file_notice: false
+
+# Optional: turn off to make struct-type struct fields not use pointers
+# e.g. type Thing struct { FieldA OtherThing } instead of { FieldA *OtherThing }
+struct_fields_always_pointers: false
+
+# Optional: turn off to make resolvers return values instead of pointers for structs
+resolvers_always_return_pointers: false
+
+# Optional: turn on to return pointers instead of values in unmarshalInput
+# return_pointers_in_unmarshalinput: false
+
+# Optional: wrap nullable input fields with Omittable
+nullable_input_omittable: true
+
+# Optional: set to speed up generation time by not performing a final validation pass.
+# skip_validation: true
+
+# Optional: set to skip running `go mod tidy` when generating server code
+skip_mod_tidy: true
+
+# gqlgen will search for any type names in the schema in these go packages
+# if they match it will use them, otherwise it will generate them.
+autobind:
+  - "github.com/spencernorton/DH-Waypoint/internal/gql/gqlmodel"
+  - "github.com/spencernorton/DH-Waypoint/internal/model"
+
+# This section declares type mapping between the GraphQL and go type systems
+#
+# The first line in each type will be used as defaults for resolver arguments and
+# modelgen, the others will be allowed when binding to fields. Configure them to
+# your liking
+models:
+  ID:
+    model:
+      - github.com/99designs/gqlgen/graphql.ID
+      - github.com/99designs/gqlgen/graphql.Int
+      - github.com/99designs/gqlgen/graphql.Int64
+      - github.com/99designs/gqlgen/graphql.Int32
+  String:
+    model:
+      - github.com/99designs/gqlgen/graphql.String
+      - github.com/spencernorton/DH-Waypoint/internal/model.NullString
+  Int:
+    model:
+      - github.com/99designs/gqlgen/graphql.Int
+      - github.com/99designs/gqlgen/graphql.Int64
+      - github.com/99designs/gqlgen/graphql.Int32
+      - github.com/99designs/gqlgen/graphql.Uint
+      - github.com/99designs/gqlgen/graphql.Uint32
+      - github.com/99designs/gqlgen/graphql.Uint64
+      - github.com/spencernorton/DH-Waypoint/internal/model.NullUint
+      - github.com/spencernorton/DH-Waypoint/internal/model.NullUint16
+  Float:
+    model:
+      - github.com/99designs/gqlgen/graphql.Float
+      - github.com/spencernorton/DH-Waypoint/internal/model.NullFloat32
+      - github.com/spencernorton/DH-Waypoint/internal/model.NullFloat64
+  Boolean:
+    model:
+      - github.com/99designs/gqlgen/graphql.Boolean
+      - github.com/spencernorton/DH-Waypoint/internal/model.NullBool
+  Date:
+    model:
+      - github.com/spencernorton/DH-Waypoint/internal/model.Date
+  DateTime:
+    model:
+      - github.com/99designs/gqlgen/graphql.Time
+  Duration:
+    model:
+      - github.com/99designs/gqlgen/graphql.Duration
+  Hash20:
+    model:
+      - github.com/spencernorton/DH-Waypoint/internal/protocol.ID
+  ContentType:
+    model:
+      - github.com/spencernorton/DH-Waypoint/internal/model.ContentType
+      - github.com/spencernorton/DH-Waypoint/internal/model.NullContentType
+  FileType:
+    model:
+      - github.com/spencernorton/DH-Waypoint/internal/model.FileType
+      - github.com/spencernorton/DH-Waypoint/internal/model.NullFileType
+  Year:
+    model:
+      - github.com/spencernorton/DH-Waypoint/internal/model.Year
+  LanguageInfo:
+    model:
+      - github.com/spencernorton/DH-Waypoint/internal/model.Language
+  EnglishAudio:
+    model:
+      - github.com/spencernorton/DH-Waypoint/internal/model.EnglishAudio
+      - github.com/spencernorton/DH-Waypoint/internal/model.NullEnglishAudio
+  VideoResolution:
+    model:
+      - github.com/spencernorton/DH-Waypoint/internal/model.VideoResolution
+      - github.com/spencernorton/DH-Waypoint/internal/model.NullVideoResolution
+  VideoSource:
+    model:
+      - github.com/spencernorton/DH-Waypoint/internal/model.VideoSource
+      - github.com/spencernorton/DH-Waypoint/internal/model.NullVideoSource
+  VideoCodec:
+    model:
+      - github.com/spencernorton/DH-Waypoint/internal/model.VideoCodec
+      - github.com/spencernorton/DH-Waypoint/internal/model.NullVideoCodec
+  Video3D:
+    model:
+      - github.com/spencernorton/DH-Waypoint/internal/model.Video3D
+      - github.com/spencernorton/DH-Waypoint/internal/model.NullVideo3D
+  VideoModifier:
+    model:
+      - github.com/spencernorton/DH-Waypoint/internal/model.VideoModifier
+      - github.com/spencernorton/DH-Waypoint/internal/model.NullVideoModifier
+  SearchQueryInput:
+    model:
+      - github.com/spencernorton/DH-Waypoint/internal/database/query.SearchParams
+  TorrentContentResult:
+    model:
+      - github.com/spencernorton/DH-Waypoint/internal/database/search.TorrentContentResult
+  TorrentFilesQueryResult:
+    model:
+      - github.com/spencernorton/DH-Waypoint/internal/database/search.TorrentFilesResult
+  TorrentSuggestTagsResult:
+    model:
+      - github.com/spencernorton/DH-Waypoint/internal/database/search.TorrentSuggestTagsResult
+  SuggestedTag:
+    model:
+      - github.com/spencernorton/DH-Waypoint/internal/database/search.SuggestedTag
+  FacetAggregationInput:
+    model:
+      - github.com/spencernorton/DH-Waypoint/internal/database/query.FacetAggregationConfig
+  QueueMetricsBucket:
+    model:
+      - github.com/spencernorton/DH-Waypoint/internal/metrics/queuemetrics.Bucket
+  QueuePurgeJobsInput:
+    model:
+      - github.com/spencernorton/DH-Waypoint/internal/queue/manager.PurgeJobsRequest
+  QueueEnqueueReprocessTorrentsBatchInput:
+    model:
+      - github.com/spencernorton/DH-Waypoint/internal/queue/manager.EnqueueReprocessTorrentsBatchRequest
+  TorrentMetricsBucket:
+    model:
+      - github.com/spencernorton/DH-Waypoint/internal/metrics/torrentmetrics.Bucket

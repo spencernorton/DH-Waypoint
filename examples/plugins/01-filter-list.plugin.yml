@@ -1,0 +1,27 @@
+# Filter template — exclude (or only tag) releases by pattern.
+# Driver: builtin/filter-list (runs in-core, no external service).
+# Exclusions are reversible policy proposals; a plugin can never
+# delete or blacklist a torrent. Start in shadow, review, then apply.
+id: household-filter
+driver: builtin/filter-list
+mode: shadow
+priority: 10
+configuration:
+  # Regular expressions matched against the release name.
+  block_patterns:
+    - "(?i)\\b(cam|hdcam|telesync|tsrip)\\b"   # camera rips
+    - "(?i)\\bsample\\b.*\\bonly\\b"
+  # Allow patterns win over block patterns.
+  allow_patterns: []
+  blocked_extensions:
+    - exe
+    - scr
+  blocked_release_groups: []
+  # Byte bounds (0 = no bound).
+  min_size_bytes: 0
+  max_size_bytes: 0
+  reason: "household filter"
+  # tag_only: true adds tags instead of proposing exclusion.
+  tag_only: false
+  tags:
+    - filtered

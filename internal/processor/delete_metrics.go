@@ -1,0 +1,72 @@
+package processor
+
+import (
+	"errors"
+	"strings"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/spencernorton/DH-Waypoint/internal/classifier/classification"
+	"github.com/spencernorton/DH-Waypoint/internal/model"
+	"github.com/spencernorton/DH-Waypoint/internal/telemetry/dualemit"
+)
+
+// DeleteMetrics counts classifier removals after the complete blocking call
+// succeeds. Held or failed calls do not count. Recovery can commit before a
+// later bloom flush fails; the retained ledger, not this counter, establishes
+// the poststate of those errors. The `default` workflow's
+// delete rules were the only armed destructive path with no metric at all
+// (GROUND-TRUTH F-1): six content types sat at zero rows in a 7M-row
+// catalogue and nothing reported the rate.
+//
+// Labels: content_type is the type the classifier had assigned before the
+// delete fired, read from the RuntimeError ("unknown" when none — the
+// banned-keyword rule runs before any type is set); rule is the dotted policy
+// path of the rule that fired, so a CSAM-keyword delete and a
+// delete_content_types delete are separable. v2.9.2 read the type from the
+// returned Result, which the workflow empties on error, so every delete
+// reported "unknown".
+type DeleteMetrics struct {
+	deleted *dualemit.CounterVec
+}
+
+func NewDeleteMetrics() *DeleteMetrics {
+	return &DeleteMetrics{
+		deleted: dualemit.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "dh_waypoint", Subsystem: "classifier", Name: "deleted_total",
+			Help: "Successful classifier removal calls, labelled by the content type assigned before the " +
+				"delete and its dotted rule path; inspect retained recovery state after failed calls.",
+		}, []string{"content_type", "rule"}),
+	}
+}
+
+func (m *DeleteMetrics) Collectors() []prometheus.Collector {
+	return []prometheus.Collector{m.deleted}
+}
+
+// Observe records one delete. Nil-safe so narrow wirings need not provide it.
+func (m *DeleteMetrics) Observe(ct model.NullContentType, classifyErr error) {
+	if m == nil {
+		return
+	}
+	contentType, rule := deleteLabels(ct, classifyErr)
+	m.deleted.WithLabelValues(contentType, rule).Inc()
+}
+
+func deleteLabels(ct model.NullContentType, classifyErr error) (contentType, rule string) {
+	contentType, rule = "unknown", "unknown"
+	var re classification.RuntimeError
+	if errors.As(classifyErr, &re) {
+		if len(re.Path) > 0 {
+			rule = strings.Join(re.Path, ".")
+		}
+		// The workflow returns an empty Result with any error, so the type
+		// normally arrives on the error, not on ct.
+		if re.ContentType.Valid {
+			ct = re.ContentType
+		}
+	}
+	if ct.Valid {
+		contentType = ct.ContentType.String()
+	}
+	return contentType, rule
+}

@@ -1,0 +1,181 @@
+enum ContentType {
+  movie
+  tv_show
+  music
+  ebook
+  comic
+  audiobook
+  game
+  software
+  xxx
+  course
+}
+
+enum FacetLogic {
+  and
+  or
+}
+
+enum FileType {
+  archive
+  audio
+  data
+  document
+  image
+  software
+  subtitles
+  video
+}
+
+enum FilesStatus {
+  no_info
+  single
+  multi
+  over_threshold
+}
+
+enum Language {
+  af
+  ar
+  az
+  be
+  bg
+  bs
+  ca
+  ce
+  co
+  cs
+  cy
+  da
+  de
+  el
+  en
+  es
+  et
+  eu
+  fa
+  fi
+  fr
+  he
+  hi
+  hr
+  hu
+  hy
+  id
+  is
+  it
+  ja
+  ka
+  ko
+  ku
+  lt
+  lv
+  mi
+  mk
+  ml
+  mn
+  ms
+  mt
+  nl
+  no
+  pl
+  pt
+  ro
+  ru
+  sa
+  sk
+  sl
+  sm
+  so
+  sr
+  sv
+  ta
+  th
+  tr
+  uk
+  vi
+  yi
+  zh
+  zu
+}
+
+enum EnglishAudio {
+  dub
+  sub
+  none
+}
+
+enum Video3D {
+  V3D
+  V3DSBS
+  V3DOU
+}
+
+enum VideoCodec {
+  H264
+  x264
+  x265
+  XviD
+  DivX
+  MPEG2
+  MPEG4
+  HEVC
+  AV1
+}
+
+enum VideoModifier {
+  REGIONAL
+  SCREENER
+  RAWHD
+  BRDISK
+  REMUX
+}
+
+enum VideoResolution {
+  V360p
+  V480p
+  V540p
+  V576p
+  V720p
+  V1080p
+  V1440p
+  V2160p
+  V4320p
+}
+
+enum VideoSource {
+  CAM
+  TELESYNC
+  TELECINE
+  WORKPRINT
+  DVD
+  TV
+  WEBDL
+  WEBRip
+  BluRay
+}
+
+enum TorrentContentOrderByField {
+  relevance
+  published_at
+  updated_at
+  size
+  files_count
+  seeders
+  leechers
+  name
+  info_hash
+}
+
+enum TorrentFilesOrderByField {
+  index
+  path
+  extension
+  size
+}
+
+enum QueueJobsOrderByField {
+  created_at
+  ran_at
+  priority
+}

@@ -1,0 +1,104 @@
+package server
+
+import (
+	"context"
+	"fmt"
+	"net/netip"
+	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/spencernorton/DH-Waypoint/internal/concurrency"
+	"github.com/spencernorton/DH-Waypoint/internal/lazy"
+	"github.com/spencernorton/DH-Waypoint/internal/protocol/dht"
+	"github.com/spencernorton/DH-Waypoint/internal/protocol/dht/responder"
+	"go.uber.org/fx"
+	"go.uber.org/zap"
+	"golang.org/x/time/rate"
+)
+
+type Params struct {
+	fx.In
+	Config    Config
+	Responder lazy.Lazy[responder.Responder]
+	Logger    *zap.SugaredLogger
+}
+
+type Result struct {
+	fx.Out
+	Server            lazy.Lazy[Server]
+	LastResponses     *concurrency.AtomicValue[LastResponses] `name:"dht_server_last_responses"`
+	AppHook           fx.Hook                                 `group:"app_hooks"`
+	QueryDuration     prometheus.Collector                    `group:"prometheus_collectors"`
+	QuerySuccessTotal prometheus.Collector                    `group:"prometheus_collectors"`
+	QueryErrorTotal   prometheus.Collector                    `group:"prometheus_collectors"`
+	QueryConcurrency  prometheus.Collector                    `group:"prometheus_collectors"`
+	QueryLimiterWait  prometheus.Collector                    `group:"prometheus_collectors"`
+}
+
+const (
+	namespace = "dh_waypoint"
+	subsystem = "dht_server"
+)
+
+func New(p Params) Result {
+	lastResponses := &concurrency.AtomicValue[LastResponses]{}
+	collector := newPrometheusCollector()
+	ls := lazy.New(func() (Server, error) {
+		r, err := p.Responder.Get()
+		if err != nil {
+			return nil, err
+		}
+		s := queryLimiter{
+			server: prometheusServerWrapper{
+				prometheusCollector: collector,
+				server: healthCollector{
+					baseServer: &server{
+						stopped: make(chan struct{}),
+						localAddr: netip.AddrPortFrom(
+							netip.IPv4Unspecified(),
+							p.Config.Port,
+						),
+						socket:           NewSocket(),
+						queries:          make(map[string]chan dht.RecvMsg),
+						queryTimeout:     p.Config.QueryTimeout,
+						responder:        r,
+						responderTimeout: time.Second * 5,
+						idIssuer:         &variantIDIssuer{},
+						logger:           p.Logger.Named(subsystem),
+					},
+					lastResponses: lastResponses,
+				},
+			},
+			queryLimiter: concurrency.NewKeyedLimiter(
+				rate.Limit(p.Config.QueryLimiterRatePerSec),
+				p.Config.QueryLimiterBurst,
+				1000,
+				time.Second*20,
+			),
+			waitHist: collector.queryLimiterWait,
+		}
+		if err := s.start(); err != nil {
+			return nil, fmt.Errorf("could not start server: %w", err)
+		}
+
+		return s, nil
+	})
+
+	return Result{
+		Server: ls,
+		AppHook: fx.Hook{
+			OnStop: func(context.Context) error {
+				return ls.IfInitialized(func(s Server) error {
+					s.stop()
+					return nil
+				})
+			},
+		},
+		LastResponses:     lastResponses,
+		QueryDuration:     collector.queryDuration,
+		QuerySuccessTotal: collector.querySuccessTotal,
+		QueryErrorTotal:   collector.queryErrorTotal,
+		QueryConcurrency:  collector.queryConcurrency,
+		QueryLimiterWait:  collector.queryLimiterWait,
+	}
+}

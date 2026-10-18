@@ -1,0 +1,45 @@
+package processor
+
+import (
+	"errors"
+	"testing"
+
+	"github.com/spencernorton/DH-Waypoint/internal/classifier/classification"
+	"github.com/spencernorton/DH-Waypoint/internal/model"
+)
+
+func TestDeleteLabels(t *testing.T) {
+	typed := model.NewNullContentType(model.ContentTypeMusic)
+	pathErr := classification.RuntimeError{
+		Path:  []string{"workflows", "default", "actions", "3"},
+		Cause: classification.ErrDeleteTorrent,
+	}
+	cases := []struct {
+		name         string
+		ct           model.NullContentType
+		err          error
+		wantCT, want string
+	}{
+		{"typed + rule path", typed, pathErr, "music", "workflows.default.actions.3"},
+		{"untyped banned-keyword delete", model.NullContentType{}, pathErr, "unknown", "workflows.default.actions.3"},
+		{"no runtime error wrapper", typed, classification.ErrDeleteTorrent, "music", "unknown"},
+		{"wrapped runtime error", typed, errors.Join(errors.New("ctx"), pathErr), "music", "workflows.default.actions.3"},
+		// The production shape: the workflow empties the Result on error, so the
+		// type arrives only on the RuntimeError.
+		{"type on the error, empty result", model.NullContentType{}, classification.RuntimeError{
+			Path:  []string{"workflows", "default", "[7]", "if_else", "if_action", "delete"},
+			Cause: classification.ErrDeleteTorrent, ContentType: typed,
+		}, "music", "workflows.default.[7].if_else.if_action.delete"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ct, rule := deleteLabels(tc.ct, tc.err)
+			if ct != tc.wantCT || rule != tc.want {
+				t.Fatalf("got (%q,%q) want (%q,%q)", ct, rule, tc.wantCT, tc.want)
+			}
+		})
+	}
+	// Observe must be nil-safe: narrow wirings do not provide the metrics.
+	var m *DeleteMetrics
+	m.Observe(typed, pathErr)
+}

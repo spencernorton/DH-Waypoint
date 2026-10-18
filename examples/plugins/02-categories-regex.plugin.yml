@@ -1,0 +1,40 @@
+# Category template — weighted name rules that stamp content type,
+# video fields, tags and scores. Driver: builtin/regex-weights.
+# Pair with PROCESSING_MODE=basic or raw when these rules (or your
+# own dataset behind them) should own categorisation.
+id: household-categories
+driver: builtin/regex-weights
+mode: shadow
+priority: 20
+selector:
+  # Only run while the core has not already matched a title.
+  has_content_match: false
+configuration:
+  rules:
+    - id: tv-episode
+      pattern: "(?i)s\\d{1,2}e\\d{1,3}"
+      target: name
+      weight: 2.0
+      content_type: tv_show
+    - id: movie-year
+      pattern: "(?i)\\b(19|20)\\d{2}\\b.*\\b(1080p|2160p|720p)\\b"
+      target: name
+      weight: 1.0
+      content_type: movie
+    - id: uhd-remux
+      pattern: "(?i)2160p.*remux"
+      target: name
+      weight: 1.5
+      dimension: quality
+      video_resolution: 2160p
+      video_source: BluRay
+      add_tags: ["uhd-remux"]
+    - id: audiobook-m4b
+      pattern: "(?i)\\.m4b$"
+      target: files
+      weight: 2.0
+      content_type: audiobook
+  # Optional: exclude when a dimension crosses a threshold.
+  # exclude_dimension: quality
+  # exclude_threshold: -5.0
+  # exclude_reason: "below quality floor"

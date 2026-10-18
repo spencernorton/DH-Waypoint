@@ -1,0 +1,95 @@
+version: "3"
+
+tasks:
+  gen:
+    cmds:
+      - task gen-go
+      - task gen-gorm
+      - task gen-gql-enums
+      - task gen-gql
+      - task gen-protoc
+      - task gen-mockery
+
+  gen-go:
+    cmds:
+      - go generate ./...
+
+  gen-gorm:
+    cmds:
+      - go run ./internal/dev gorm gen
+
+  gen-gql-enums:
+    cmds:
+      - go run ./internal/gql/enums/gen/genenums.go
+
+  gen-gql:
+    cmds:
+      - go run github.com/99designs/gqlgen generate --config ./internal/gql/gqlgen.yml
+
+  gen-protoc:
+    cmds:
+      - protoc --go_out=. ./internal/protobuf/bitmagnet.proto
+
+  gen-mockery:
+    cmds:
+      - go run github.com/vektra/mockery/v2
+
+  lint:
+    cmds:
+      - task lint-golangci
+      - task lint-prettier
+
+  lint-golangci:
+    cmds:
+      - golangci-lint run --timeout=10m
+
+  lint-prettier:
+    cmds:
+      - prettier --check .
+
+  test:
+    cmds:
+      - task test-go
+
+  test-go:
+    cmds:
+      - go test -v ./...
+
+  migrate:
+    cmds:
+      - go run ./internal/dev migrate up
+
+  build:
+    cmds:
+      - go build -ldflags "-X github.com/spencernorton/DH-Waypoint/internal/version.GitTag=v$(cat VERSION)"
+
+  export-data:
+    cmds:
+      - |
+        pg_dump \
+        --column-inserts \
+        --data-only \
+        --on-conflict-do-nothing \
+        --rows-per-insert=1000 \
+        --table=metadata_sources \
+        --table=content \
+        --table=content_attributes \
+        --table=content_collections \
+        --table=content_collections_content \
+        --table=torrent_sources \
+        --table=torrents \
+        --table=torrent_files \
+        --table=torrent_hints \
+        --table=torrent_contents \
+        --table=torrent_tags \
+        --table=torrents_torrent_sources \
+        --table=key_values \
+        bitmagnet \
+        > export.sql
+
+  create-migration:
+    dir: ./migrations
+    cmds:
+      - goose -s create {{.NAME}} sql
+    vars:
+      NAME: migration

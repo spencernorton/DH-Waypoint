@@ -1,0 +1,43 @@
+package processor
+
+import (
+	"github.com/spencernorton/DH-Waypoint/internal/classifier"
+	"github.com/spencernorton/DH-Waypoint/internal/model"
+	"github.com/spencernorton/DH-Waypoint/internal/protocol"
+)
+
+const MessageName = "process_torrent"
+
+type ClassifyMode int
+
+const (
+	// ClassifyModeDefault will use any pre-existing content match as a hint
+	// This is the most common use case and will only attempt to match previously unmatched torrents
+	ClassifyModeDefault ClassifyMode = iota
+	// ClassifyModeRematch will ignore any pre-existing classification and always classify from scratch
+	// This is useful if there are errors in matches from an earlier version that need to be corrected
+	ClassifyModeRematch
+)
+
+type MessageParams struct {
+	// ReprocessRequestID links a core-owned audit request. Such requests use
+	// ordinary matching and retain catalogue rows on a destructive policy verdict.
+	ReprocessRequestID string           `json:"ReprocessRequestID,omitempty"`
+	ClassifyMode       ClassifyMode     `json:"ClassifyMode,omitempty"`
+	ClassifierWorkflow string           `json:"ClassifierWorkflow,omitempty"`
+	ClassifierFlags    classifier.Flags `json:"ClassifierFlags,omitempty"`
+	// SkipContentFilter bypasses the post-classifier content filter. This is
+	// useful for deterministic local-only backlog passes where the operator
+	// explicitly wants no LLM calls from either the classifier or the language
+	// content filter.
+	SkipContentFilter bool          `json:"SkipContentFilter,omitempty"`
+	InfoHashes        []protocol.ID `json:"InfoHashes"`
+}
+
+func NewQueueJob(msg MessageParams, options ...model.QueueJobOption) (model.QueueJob, error) {
+	return model.NewQueueJob(
+		MessageName,
+		msg,
+		append([]model.QueueJobOption{model.QueueJobMaxRetries(2)}, options...)...,
+	)
+}

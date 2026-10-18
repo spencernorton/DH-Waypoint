@@ -1,0 +1,2251 @@
+{
+  "$defs": {
+    "Candidate": {
+      "additionalProperties": false,
+      "properties": {
+        "aliases": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "content_type": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "year": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "source",
+        "id",
+        "content_type",
+        "title",
+        "year",
+        "aliases"
+      ],
+      "type": "object"
+    },
+    "CoreLivenessRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "info_hash": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "info_hash"
+      ],
+      "type": "object"
+    },
+    "CoreLivenessResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "contract": {
+          "type": "string"
+        },
+        "info_hash": {
+          "type": "string"
+        },
+        "liveness": {
+          "$ref": "#/$defs/LivenessClaim"
+        },
+        "tracker_count": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "contract",
+        "info_hash",
+        "liveness",
+        "tracker_count"
+      ],
+      "type": "object"
+    },
+    "CoreParseRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "content_type": {
+          "type": "string"
+        },
+        "files": {
+          "items": {
+            "$ref": "#/$defs/File"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "size": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "CoreParseResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "content_type": {
+          "type": "string"
+        },
+        "contract": {
+          "type": "string"
+        },
+        "extraction": {
+          "$ref": "#/$defs/Extraction"
+        },
+        "language": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LanguageClaim"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "contract",
+        "extraction"
+      ],
+      "type": "object"
+    },
+    "CorePolicyRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "all_extensions": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "content_type": {
+          "type": "string"
+        },
+        "info_hash": {
+          "type": "string"
+        },
+        "languages": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "primary_extension": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "CorePolicyResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "allowed": {
+          "type": "boolean"
+        },
+        "contract": {
+          "type": "string"
+        },
+        "extension_allowed": {
+          "type": "boolean"
+        },
+        "filter_allowed": {
+          "type": "boolean"
+        },
+        "name_eligible": {
+          "type": "boolean"
+        },
+        "reasons": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "contract",
+        "allowed",
+        "name_eligible",
+        "filter_allowed",
+        "extension_allowed",
+        "reasons"
+      ],
+      "type": "object"
+    },
+    "CoreSearchRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "content_type": {
+          "type": "string"
+        },
+        "external_id": {
+          "type": "string"
+        },
+        "limit": {
+          "type": "integer"
+        },
+        "source": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "year": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "content_type"
+      ],
+      "type": "object"
+    },
+    "CoreSearchResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "candidates": {
+          "items": {
+            "$ref": "#/$defs/Candidate"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "contract": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "contract",
+        "candidates"
+      ],
+      "type": "object"
+    },
+    "Deterministic": {
+      "additionalProperties": false,
+      "properties": {
+        "content_type": {
+          "type": "string"
+        },
+        "match": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MatchRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "matching_outcome": {
+          "enum": [
+            "matched",
+            "completed_unmatched",
+            "deferred",
+            "not_attempted"
+          ]
+        },
+        "processing_outcome": {
+          "enum": [
+            "completed",
+            "deferred",
+            "not_attempted"
+          ]
+        },
+        "title": {
+          "type": "string"
+        },
+        "year": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "processing_outcome",
+        "content_type",
+        "title",
+        "year",
+        "matching_outcome"
+      ],
+      "type": "object"
+    },
+    "Embedding": {
+      "additionalProperties": false,
+      "properties": {
+        "space": {
+          "type": "string"
+        },
+        "values": {
+          "items": {
+            "type": "number"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "space",
+        "values"
+      ],
+      "type": "object"
+    },
+    "Evidence": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "type": "string"
+        },
+        "reference": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "reference"
+      ],
+      "type": "object"
+    },
+    "Exclusion": {
+      "additionalProperties": false,
+      "properties": {
+        "reason": {
+          "type": "string"
+        },
+        "scope": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "reason",
+        "scope"
+      ],
+      "type": "object"
+    },
+    "Extraction": {
+      "additionalProperties": false,
+      "properties": {
+        "anime_absolute_episode": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "audio_channels": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "audio_formats": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "episodes": {
+          "items": {
+            "type": "integer"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "hdr_formats": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "is_anime": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "release_date": {
+          "type": "string"
+        },
+        "release_flags": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "release_granularity": {
+          "type": "string"
+        },
+        "release_group": {
+          "type": "string"
+        },
+        "season": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "title": {
+          "type": "string"
+        },
+        "video_3d": {
+          "type": "string"
+        },
+        "video_codec": {
+          "type": "string"
+        },
+        "video_editions": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "video_modifier": {
+          "type": "string"
+        },
+        "video_resolution": {
+          "type": "string"
+        },
+        "video_source": {
+          "type": "string"
+        },
+        "year": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "title",
+        "year"
+      ],
+      "type": "object"
+    },
+    "FeedbackAck": {
+      "additionalProperties": false,
+      "properties": {
+        "accepted": {
+          "type": "integer"
+        },
+        "contract": {
+          "type": "string"
+        },
+        "learned_state": {
+          "type": "object"
+        },
+        "updated_model_version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "contract",
+        "accepted"
+      ],
+      "type": "object"
+    },
+    "FeedbackBatch": {
+      "additionalProperties": false,
+      "properties": {
+        "contract": {
+          "type": "string"
+        },
+        "events": {
+          "items": {
+            "$ref": "#/$defs/FeedbackEvent"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "processor": {
+          "$ref": "#/$defs/Identity"
+        }
+      },
+      "required": [
+        "contract",
+        "processor",
+        "events"
+      ],
+      "type": "object"
+    },
+    "FeedbackCursorAck": {
+      "additionalProperties": false,
+      "properties": {
+        "consumer_id": {
+          "type": "string"
+        },
+        "last_seq": {
+          "type": "integer"
+        },
+        "processor_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "processor_id",
+        "last_seq"
+      ],
+      "type": "object"
+    },
+    "FeedbackEvent": {
+      "additionalProperties": false,
+      "properties": {
+        "created_at": {
+          "type": "string"
+        },
+        "event_id": {
+          "type": "string"
+        },
+        "execution_generation": {
+          "type": "integer"
+        },
+        "ground_truth": {
+          "$ref": "#/$defs/FeedbackGroundTruth"
+        },
+        "info_hash": {
+          "type": "string"
+        },
+        "input": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Input"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "job_id": {
+          "type": "string"
+        },
+        "prediction": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Result"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "processor_id": {
+          "type": "string"
+        },
+        "seq": {
+          "type": "integer"
+        },
+        "tier": {
+          "type": "string"
+        },
+        "trace": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "seq",
+        "event_id",
+        "processor_id",
+        "execution_generation",
+        "info_hash",
+        "tier",
+        "ground_truth",
+        "created_at"
+      ],
+      "type": "object"
+    },
+    "FeedbackGroundTruth": {
+      "additionalProperties": false,
+      "properties": {
+        "content_type": {
+          "type": "string"
+        },
+        "excluded": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "extraction": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Extraction"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "language": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LanguageClaim"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "liveness": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LivenessClaim"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "match": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MatchRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "outcome": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "outcome"
+      ],
+      "type": "object"
+    },
+    "FeedbackPage": {
+      "additionalProperties": false,
+      "properties": {
+        "contract": {
+          "type": "string"
+        },
+        "items": {
+          "items": {
+            "$ref": "#/$defs/FeedbackEvent"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "next_cursor": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "contract",
+        "items",
+        "next_cursor"
+      ],
+      "type": "object"
+    },
+    "FeedbackWrite": {
+      "additionalProperties": false,
+      "properties": {
+        "ground_truth": {
+          "$ref": "#/$defs/FeedbackGroundTruth"
+        },
+        "info_hash": {
+          "type": "string"
+        },
+        "processor_id": {
+          "type": "string"
+        },
+        "tier": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "info_hash",
+        "tier",
+        "ground_truth"
+      ],
+      "type": "object"
+    },
+    "File": {
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "size": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "path",
+        "size"
+      ],
+      "type": "object"
+    },
+    "Identity": {
+      "additionalProperties": false,
+      "properties": {
+        "artifact_digest": {
+          "type": "string"
+        },
+        "id": {
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._+-]{0,95}$",
+          "type": "string"
+        },
+        "model_version": {
+          "type": "string"
+        },
+        "policy_version": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "version",
+        "model_version",
+        "policy_version",
+        "artifact_digest"
+      ],
+      "type": "object"
+    },
+    "Input": {
+      "additionalProperties": false,
+      "properties": {
+        "accumulated_scores": {
+          "additionalProperties": {
+            "type": "number"
+          },
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "accumulated_tags": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "candidates": {
+          "items": {
+            "$ref": "#/$defs/Candidate"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "deterministic": {
+          "$ref": "#/$defs/Deterministic"
+        },
+        "extension": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "file_count": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "files": {
+          "items": {
+            "$ref": "#/$defs/File"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "files_complete": {
+          "type": "boolean"
+        },
+        "info_hash": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "prior_results": {
+          "items": {
+            "$ref": "#/$defs/Result"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "size": {
+          "type": "integer"
+        },
+        "sources": {
+          "items": {
+            "$ref": "#/$defs/SourceObservation"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "swarm": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SwarmInput"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "info_hash",
+        "name",
+        "size",
+        "files",
+        "files_complete",
+        "deterministic",
+        "candidates",
+        "prior_results"
+      ],
+      "type": "object"
+    },
+    "Job": {
+      "additionalProperties": false,
+      "properties": {
+        "capabilities": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "configuration": {
+          "type": "object"
+        },
+        "configuration_digest": {
+          "type": "string"
+        },
+        "contract": {
+          "const": "dh-waypoint.processor.v1"
+        },
+        "deadline": {
+          "type": "string"
+        },
+        "input": {
+          "$ref": "#/$defs/Input"
+        },
+        "input_revision": {
+          "type": "string"
+        },
+        "job_id": {
+          "type": "string"
+        },
+        "pipeline_revision": {
+          "type": "string"
+        },
+        "processor": {
+          "$ref": "#/$defs/Identity"
+        },
+        "stage": {
+          "enum": [
+            "classify",
+            "extract",
+            "match",
+            "language",
+            "policy",
+            "embed"
+          ]
+        }
+      },
+      "required": [
+        "contract",
+        "job_id",
+        "input_revision",
+        "pipeline_revision",
+        "configuration_digest",
+        "processor",
+        "stage",
+        "configuration",
+        "input",
+        "deadline"
+      ],
+      "type": "object"
+    },
+    "JobPage": {
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "items": {
+            "$ref": "#/$defs/JobSummary"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "next_cursor": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "items",
+        "next_cursor"
+      ],
+      "type": "object"
+    },
+    "JobSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "attempts": {
+          "type": "integer"
+        },
+        "available_at": {
+          "type": "string"
+        },
+        "created_at": {
+          "type": "string"
+        },
+        "execution_generation": {
+          "type": "integer"
+        },
+        "input_revision": {
+          "type": "string"
+        },
+        "job_id": {
+          "type": "string"
+        },
+        "lease_until": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "outcome": {
+          "type": "string"
+        },
+        "pipeline_revision": {
+          "type": "string"
+        },
+        "preparation_failures": {
+          "type": "integer"
+        },
+        "processor": {
+          "$ref": "#/$defs/Identity"
+        },
+        "processor_id": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "stage": {
+          "type": "string"
+        },
+        "state": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "job_id",
+        "input_revision",
+        "pipeline_revision",
+        "state",
+        "stage",
+        "processor_id",
+        "processor",
+        "execution_generation",
+        "attempts",
+        "created_at",
+        "available_at",
+        "outcome",
+        "reason"
+      ],
+      "type": "object"
+    },
+    "LanguageClaim": {
+      "additionalProperties": false,
+      "properties": {
+        "audio": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "english_audio": {
+          "type": "string"
+        },
+        "evidence": {
+          "type": "string"
+        },
+        "subtitles": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "audio",
+        "subtitles",
+        "evidence"
+      ],
+      "type": "object"
+    },
+    "LearningConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "accepted_tiers": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "mode": {
+          "type": "string"
+        },
+        "push_enabled": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "enabled"
+      ],
+      "type": "object"
+    },
+    "LivenessClaim": {
+      "additionalProperties": false,
+      "properties": {
+        "completed": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "leechers": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "observation": {
+          "type": "string"
+        },
+        "seeders": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source": {
+          "type": "string"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "Manifest": {
+      "additionalProperties": false,
+      "properties": {
+        "capabilities": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "configuration_schema": {
+          "type": "object"
+        },
+        "contract": {
+          "const": "dh-waypoint.processor.v1"
+        },
+        "processor": {
+          "$ref": "#/$defs/Identity"
+        },
+        "qualification": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "contract",
+        "processor",
+        "capabilities",
+        "configuration_schema",
+        "qualification"
+      ],
+      "type": "object"
+    },
+    "MatchRef": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "source",
+        "id"
+      ],
+      "type": "object"
+    },
+    "Measurement": {
+      "additionalProperties": false,
+      "properties": {
+        "population": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string"
+        },
+        "unavailable_reason": {
+          "type": "string"
+        },
+        "unit": {
+          "type": "string"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "window": {
+          "$ref": "#/$defs/Window"
+        }
+      },
+      "required": [
+        "unit",
+        "window",
+        "population",
+        "source",
+        "unavailable_reason"
+      ],
+      "type": "object"
+    },
+    "PriorObservation": {
+      "additionalProperties": false,
+      "properties": {
+        "alpha": {
+          "type": "integer"
+        },
+        "beta": {
+          "type": "integer"
+        },
+        "key_type": {
+          "type": "string"
+        },
+        "key_value": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "key_type",
+        "key_value",
+        "alpha",
+        "beta"
+      ],
+      "type": "object"
+    },
+    "ProcessorStatus": {
+      "additionalProperties": false,
+      "properties": {
+        "auth_env": {
+          "type": "string"
+        },
+        "capabilities": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "compatibility": {
+          "type": "string"
+        },
+        "configuration": {
+          "type": "object"
+        },
+        "configured": {
+          "type": "boolean"
+        },
+        "contract": {
+          "type": "string"
+        },
+        "driver": {
+          "type": "string"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "endpoint": {
+          "type": "string"
+        },
+        "evaluation": {
+          "type": "null"
+        },
+        "execution_generation": {
+          "type": "integer"
+        },
+        "generation": {
+          "type": "integer"
+        },
+        "health": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "installed": {
+          "type": "boolean"
+        },
+        "instance_id": {
+          "type": "string"
+        },
+        "last_checked_at": {
+          "type": "string"
+        },
+        "last_error": {
+          "type": "string"
+        },
+        "learning": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LearningConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "loaded": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "metrics": {
+          "additionalProperties": {
+            "$ref": "#/$defs/Measurement"
+          },
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "mode": {
+          "type": "string"
+        },
+        "observed_processor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Identity"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "operating_mode": {
+          "type": "string"
+        },
+        "priority": {
+          "type": "integer"
+        },
+        "processor": {
+          "$ref": "#/$defs/Identity"
+        },
+        "qualification": {
+          "type": "string"
+        },
+        "readiness": {
+          "type": "string"
+        },
+        "selector": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Selector"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "started_at": {
+          "type": "string"
+        },
+        "state": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "configuration",
+        "auth_env",
+        "execution_generation",
+        "instance_id",
+        "started_at",
+        "id",
+        "generation",
+        "installed",
+        "configured",
+        "enabled",
+        "state",
+        "mode",
+        "operating_mode",
+        "endpoint",
+        "priority",
+        "contract",
+        "processor",
+        "capabilities",
+        "compatibility",
+        "health",
+        "readiness",
+        "last_checked_at",
+        "last_error",
+        "qualification",
+        "metrics",
+        "evaluation"
+      ],
+      "type": "object"
+    },
+    "Proposal": {
+      "additionalProperties": false,
+      "properties": {
+        "add_tags": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "content_type": {
+          "type": "string"
+        },
+        "embedding": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Embedding"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "exclusion": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Exclusion"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "extraction": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Extraction"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "language": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LanguageClaim"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "liveness": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LivenessClaim"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "match": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MatchRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "remove_tags": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "weights": {
+          "additionalProperties": {
+            "type": "number"
+          },
+          "type": [
+            "object",
+            "null"
+          ]
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "RegistryControl": {
+      "additionalProperties": false,
+      "properties": {
+        "expected_generation": {
+          "type": "integer"
+        },
+        "learning": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LearningConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "mode": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "priority": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "selector": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Selector"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "state": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "expected_generation"
+      ],
+      "type": "object"
+    },
+    "RegistryWrite": {
+      "additionalProperties": false,
+      "properties": {
+        "auth_env": {
+          "type": "string"
+        },
+        "configuration": {
+          "type": "object"
+        },
+        "driver": {
+          "type": "string"
+        },
+        "endpoint": {
+          "type": "string"
+        },
+        "expected_generation": {
+          "type": "integer"
+        },
+        "expected_processor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Identity"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "learning": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LearningConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "mode": {
+          "type": "string"
+        },
+        "priority": {
+          "type": "integer"
+        },
+        "selector": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Selector"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "state": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "expected_generation",
+        "endpoint",
+        "mode",
+        "state",
+        "priority",
+        "configuration",
+        "auth_env"
+      ],
+      "type": "object"
+    },
+    "Result": {
+      "additionalProperties": false,
+      "properties": {
+        "configuration_digest": {
+          "type": "string"
+        },
+        "contract": {
+          "const": "dh-waypoint.processor.v1"
+        },
+        "evidence": {
+          "items": {
+            "$ref": "#/$defs/Evidence"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "input_revision": {
+          "type": "string"
+        },
+        "job_id": {
+          "type": "string"
+        },
+        "outcome": {
+          "enum": [
+            "completed",
+            "abstained",
+            "deferred",
+            "failed",
+            "excluded",
+            "unmatched"
+          ]
+        },
+        "pipeline_revision": {
+          "type": "string"
+        },
+        "processor": {
+          "$ref": "#/$defs/Identity"
+        },
+        "proposal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Proposal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reasons": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "request_feedback": {
+          "type": "boolean"
+        },
+        "retry_after_seconds": {
+          "type": "integer"
+        },
+        "stage": {
+          "enum": [
+            "classify",
+            "extract",
+            "match",
+            "language",
+            "policy",
+            "embed"
+          ]
+        },
+        "telemetry": {
+          "$ref": "#/$defs/Telemetry"
+        },
+        "trace": {
+          "type": "object"
+        },
+        "uncertainty": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "contract",
+        "job_id",
+        "input_revision",
+        "pipeline_revision",
+        "configuration_digest",
+        "processor",
+        "stage",
+        "outcome",
+        "reasons",
+        "evidence",
+        "retry_after_seconds",
+        "telemetry"
+      ],
+      "type": "object"
+    },
+    "ScoreThreshold": {
+      "additionalProperties": false,
+      "properties": {
+        "dimension": {
+          "type": "string"
+        },
+        "max": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "min": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "dimension"
+      ],
+      "type": "object"
+    },
+    "Selector": {
+      "additionalProperties": false,
+      "properties": {
+        "content_types": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "exclude_types": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "excluded": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "extensions": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "has_content_match": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "is_anime": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "min_uncertainty": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "required_tags": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "sample_basis_points": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "score_thresholds": {
+          "items": {
+            "$ref": "#/$defs/ScoreThreshold"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "ServiceStatus": {
+      "additionalProperties": false,
+      "properties": {
+        "attempts": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "contract": {
+          "type": "string"
+        },
+        "instance_id": {
+          "type": "string"
+        },
+        "outcomes": {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "processor": {
+          "$ref": "#/$defs/Identity"
+        },
+        "started_at": {
+          "type": "string"
+        },
+        "state": {
+          "type": "string"
+        },
+        "telemetry": {
+          "$ref": "#/$defs/Telemetry"
+        },
+        "unique_torrents": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "contract",
+        "processor",
+        "state"
+      ],
+      "type": "object"
+    },
+    "SourceObservation": {
+      "additionalProperties": false,
+      "properties": {
+        "completed": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "leechers": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "seeders": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "source"
+      ],
+      "type": "object"
+    },
+    "Status": {
+      "additionalProperties": false,
+      "properties": {
+        "contract": {
+          "type": "string"
+        },
+        "core_readiness": {
+          "type": "string"
+        },
+        "limits": {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "observed_at": {
+          "type": "string"
+        },
+        "optional_processors_required": {
+          "type": "boolean"
+        },
+        "pipeline_revision": {
+          "type": "string"
+        },
+        "processors": {
+          "items": {
+            "$ref": "#/$defs/ProcessorStatus"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "queue": {
+          "additionalProperties": {
+            "$ref": "#/$defs/Measurement"
+          },
+          "type": [
+            "object",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "contract",
+        "observed_at",
+        "core_readiness",
+        "optional_processors_required",
+        "pipeline_revision",
+        "processors",
+        "queue",
+        "limits"
+      ],
+      "type": "object"
+    },
+    "SwarmInput": {
+      "additionalProperties": false,
+      "properties": {
+        "alive_source": {
+          "type": "string"
+        },
+        "best_tracker": {
+          "type": "string"
+        },
+        "checked_at": {
+          "type": "string"
+        },
+        "dht_leechers": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "dht_seeders": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "last_positive_at": {
+          "type": "string"
+        },
+        "last_qb_state": {
+          "type": "string"
+        },
+        "liveness_status": {
+          "type": "string"
+        },
+        "outcome_priors": {
+          "items": {
+            "$ref": "#/$defs/PriorObservation"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "peak_seeders": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "prev_seeders": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "suspect_observations": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tracker_completed": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tracker_known": {
+          "type": "boolean"
+        },
+        "tracker_leechers": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tracker_scraped": {
+          "type": "boolean"
+        },
+        "tracker_seeders": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "tracker_scraped",
+        "tracker_known"
+      ],
+      "type": "object"
+    },
+    "Telemetry": {
+      "additionalProperties": false,
+      "properties": {
+        "cpu_milliseconds": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "inference_ms": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "observed_at": {
+          "type": "string"
+        },
+        "rss_bytes": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "Window": {
+      "additionalProperties": false,
+      "properties": {
+        "end": {
+          "type": "string"
+        },
+        "start": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "start",
+        "end"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "urn:dh-waypoint:processor:v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Select a definition for the endpoint. Cross-field validation is normative in the v1 contract."
+}
