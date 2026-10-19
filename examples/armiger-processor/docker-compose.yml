@@ -1,0 +1,128 @@
+# DH-Waypoint Core + Armiger Ultra processor stack.
+#
+# Starts the DH-Waypoint backend, PostgreSQL 16, and the Armiger Ultra
+# processor sidecar connected over the dh-waypoint.processor.v1 HTTP contract.
+#
+#   cp examples/.env.example .env
+#   mkdir -p plugins && cp examples/plugins/07-armiger-ultra.plugin.yml plugins/
+#   docker compose -f examples/armiger-processor/docker-compose.yml --env-file .env up -d
+#   docker compose -f examples/armiger-processor/docker-compose.yml exec dh-waypoint dh-waypoint plugin list
+#
+# See docs/armiger-integration.md for full configuration and operator controls.
+
+services:
+
+  dh-waypoint:
+    image: ghcr.io/spencernorton/dh-waypoint:${DH_WAYPOINT_VERSION:-v5.6.0}
+    container_name: dh-waypoint
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      armiger-ultra:
+        condition: service_healthy
+    command:
+      - worker
+      - run
+      - --all
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_NAME: bitmagnet
+      POSTGRES_USER: bitmagnet
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      PROCESSING_MODE: "${PROCESSING_MODE:-basic}"
+      PROCESSORS_PLUGINS_DIR: /plugins
+      PROCESSORS_ADMIN_TOKEN: ${PROCESSORS_ADMIN_TOKEN:-}
+      DH_WAYPOINT_PROCESSOR_TOKEN_ARMIGER_ULTRA: ${DH_WAYPOINT_PROCESSOR_TOKEN_ARMIGER_ULTRA:-}
+      TORZNAB_API_KEY: ${TORZNAB_API_KEY:-}
+      TMDB_API_KEY: ${TMDB_API_KEY:-}
+      DHT_CRAWLER_SCALING_FACTOR: "${DHT_SCALING_FACTOR:-1}"
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    ports:
+      - "${DH_WAYPOINT_HTTP_PORT:-3333}:3333"
+      - "${DH_WAYPOINT_PEER_PORT:-3334}:3334/tcp"
+      - "${DH_WAYPOINT_PEER_PORT:-3334}:3334/udp"
+    volumes:
+      - dh-waypoint-config:/root/.config/bitmagnet
+      - dh-waypoint-data:/root/.local/share/bitmagnet
+      - ../../plugins:/plugins:ro
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "--show-error", "--output", "/dev/null", "http://localhost:3333/metrics"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  armiger-ultra:
+    image: ghcr.io/spencernorton/armiger:${ARMIGER_VERSION:-v2.1.0}
+    container_name: armiger-ultra
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,noexec,nosuid,nodev
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 128
+    mem_limit: 2g
+    cpus: 2.0
+    environment:
+      ARMIGER_PROCESSOR_ID: "armiger-ultra"
+      ARMIGER_LISTEN_ADDR: ":8095"
+      ARMIGER_VARIANT: "${ARMIGER_VARIANT:-fp32}"
+      ARMIGER_MODEL_DIR: "/opt/armiger"
+      ARMIGER_STATE_DIR: "/var/lib/armiger"
+      ARMIGER_BEARER_TOKEN: "${DH_WAYPOINT_PROCESSOR_TOKEN_ARMIGER_ULTRA:-}"
+      ARMIGER_ENABLE_ZERO_CUE_CATALOG: "${ARMIGER_ENABLE_ZERO_CUE_CATALOG:-true}"
+      ARMIGER_ENABLE_AUDIO_LANGUAGE_GUARD: "${ARMIGER_ENABLE_AUDIO_LANGUAGE_GUARD:-true}"
+      ARMIGER_ENABLE_SWARM_SURVIVAL: "${ARMIGER_ENABLE_SWARM_SURVIVAL:-true}"
+      ARMIGER_ENABLE_CSAM_GUARD: "${ARMIGER_ENABLE_CSAM_GUARD:-true}"
+      ARMIGER_DHT_RSI_MODE: "${ARMIGER_DHT_RSI_MODE:-pull_only}"
+      ARMIGER_DHT_DB_SYNC_MODE: "${ARMIGER_DHT_DB_SYNC_MODE:-off}"
+    volumes:
+      - armiger-state:/var/lib/armiger
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8095/v1/status', timeout=3).read()"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: dh-waypoint-postgres
+    restart: unless-stopped
+    shm_size: 512m
+    environment:
+      POSTGRES_DB: bitmagnet
+      POSTGRES_USER: bitmagnet
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      PGUSER: bitmagnet
+    volumes:
+      - dh-waypoint-postgres:/var/lib/postgresql/data
+    command:
+      - postgres
+      - -c
+      - shared_buffers=512MB
+      - -c
+      - effective_cache_size=1GB
+      - -c
+      - work_mem=16MB
+      - -c
+      - maintenance_work_mem=128MB
+      - -c
+      - max_connections=100
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bitmagnet -d bitmagnet"]
+      interval: 10s
+      start_period: 20s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  dh-waypoint-config:
+  dh-waypoint-data:
+  dh-waypoint-postgres:
+  armiger-state:

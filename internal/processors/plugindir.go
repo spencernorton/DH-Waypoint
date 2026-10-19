@@ -50,6 +50,7 @@ type PluginFile struct {
 	Enabled  bool
 	write    v1.RegistryWrite
 	selector *v1.Selector
+	learning *v1.LearningConfig
 }
 
 type pluginFileYAML struct {
@@ -62,6 +63,7 @@ type pluginFileYAML struct {
 	Priority      *int           `yaml:"priority"`
 	AuthEnv       string         `yaml:"auth_env"`
 	Selector      map[string]any `yaml:"selector"`
+	Learning      map[string]any `yaml:"learning"`
 	Configuration map[string]any `yaml:"configuration"`
 }
 
@@ -146,6 +148,18 @@ func parsePluginFile(path string, data []byte) (PluginFile, error) {
 		}
 	}
 
+	var learning *v1.LearningConfig
+	if raw.Learning != nil {
+		learnJSON, err := json.Marshal(raw.Learning)
+		if err != nil {
+			return PluginFile{}, fmt.Errorf("%s: learning: %w", path, err)
+		}
+		learning = &v1.LearningConfig{}
+		if err := v1.Decode(learnJSON, learning); err != nil {
+			return PluginFile{}, fmt.Errorf("%s: learning: %w", path, err)
+		}
+	}
+
 	spec := PluginFile{
 		ID:      id,
 		Path:    path,
@@ -157,10 +171,12 @@ func parsePluginFile(path string, data []byte) (PluginFile, error) {
 			State:         state,
 			Priority:      priority,
 			Selector:      selector,
+			Learning:      learning,
 			Configuration: configJSON,
 			AuthEnv:       raw.AuthEnv,
 		},
 		selector: selector,
+		learning: learning,
 	}
 	if err := validateWrite(spec.write); err != nil {
 		return PluginFile{}, fmt.Errorf("%s: %w", path, err)
@@ -196,8 +212,17 @@ func (f PluginFile) Matches(e Entry) bool {
 	if !bytes.Equal(canonical(e.Configuration), canonical(f.write.Configuration)) {
 		return false
 	}
-	if e.Learning != nil && e.Learning.Enabled {
+	entryLearnEmpty := e.Learning == nil || (!e.Learning.Enabled && e.Learning.Mode == "" && len(e.Learning.AcceptedTiers) == 0 && !e.Learning.PushEnabled)
+	fileLearnEmpty := f.learning == nil || (!f.learning.Enabled && f.learning.Mode == "" && len(f.learning.AcceptedTiers) == 0 && !f.learning.PushEnabled)
+	if entryLearnEmpty != fileLearnEmpty {
 		return false
+	}
+	if !entryLearnEmpty {
+		entryLearn, _ := json.Marshal(e.Learning)
+		fileLearn, _ := json.Marshal(f.learning)
+		if !bytes.Equal(entryLearn, fileLearn) {
+			return false
+		}
 	}
 	entrySel, _ := json.Marshal(e.Selector)
 	fileSel, _ := json.Marshal(f.selector)

@@ -86,7 +86,9 @@ and a separate PostgreSQL queue on the existing database. Register, replace,
 pause or remove a compatible service through the authenticated backend API
 without rebuilding or restarting DH-Waypoint.
 
-See the [contract](docs/processors/v1.md), [operator API](docs/processors/operator-api.md),
+See the **[Armiger & Armiger Ultra integration guide](docs/armiger-integration.md)** (and turnkey [`examples/armiger-processor/docker-compose.yml`](examples/armiger-processor/docker-compose.yml)) to connect the [`spencernorton/armiger`](https://github.com/spencernorton/armiger) neural classifier (`8.3 MB` INT8 CPU or `32.3 MB` FP32 GPU/CPU + 6 plugins: `SwarmSurvivalNet`, `SwarmPriors`, `ZeroCueCatalog`, `AudioLanguageGuard`, `CalibrationAndDHT`, and `ArmigerDHTDBSync` + `CSAMGuard`) over `dh-waypoint.processor.v1` and close the 4-tier `dh-waypoint.processors.feedback.v1` outcome loop.
+
+See also the [contract](docs/processors/v1.md), [operator API](docs/processors/operator-api.md),
 [architecture map](docs/processors/architecture.md), and
 [migration and rollback procedure](docs/processors/migration.md). The two
 [synthetic reference services](examples/processors/README.md) demonstrate the
