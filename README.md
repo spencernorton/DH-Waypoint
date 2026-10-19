@@ -43,6 +43,15 @@ The root stack defaults to `PROCESSING_MODE=basic` (coarse categories in core; c
 
 Then add `http://<host>:3333/torznab/` as a Torznab indexer in Prowlarr (or in each \*arr directly — [per-app guides](docs/integrations/sonarr.md)), and set the \*arr webhook URL to `http://<host>:3333/evidence/arr/<instance>` so the evidence loop closes ([`docs/evidence.md`](docs/evidence.md)). GraphQL accepts JSON `POST` requests at `/graphql`, and Prometheus metrics are available at `/metrics`. Set a Torznab key and protect the remaining APIs before exposing them beyond a trusted network. [`examples/README.md`](examples/README.md) covers the stack in detail.
 
+### Quickstart & Turnkey Compose Stacks
+
+| Deployment Profile | Compose / Config Path | Description |
+|---|---|---|
+| **Published Image (Default)** | [`docker-compose.yml`](docker-compose.yml) | Pulls `ghcr.io/spencernorton/dh-waypoint:v5.6.0` + PostgreSQL 16 (`PROCESSING_MODE=basic`). |
+| **DH-Waypoint + Armiger Ultra** | [`examples/armiger-processor/docker-compose.yml`](examples/armiger-processor/docker-compose.yml) + [`examples/plugins/07-armiger-ultra.plugin.yml`](examples/plugins/07-armiger-ultra.plugin.yml) | Runs DH-Waypoint + PostgreSQL 16 + [`spencernorton/armiger`](https://github.com/spencernorton/armiger) (`v2.1.0`) over `dh-waypoint.processor.v1` with 4-tier closed-loop feedback and opt-in-by-default (`ARMIGER_DHT_SHARE_OPT_IN=0`) anonymous DHT sync. |
+| **Build from Source** | [`examples/docker-compose.public.yml`](examples/docker-compose.public.yml) | Compiles the Go backend from source alongside PostgreSQL 16. |
+| **Synthetic Reference Processors** | [`examples/processors/`](examples/processors/README.md) + [`examples/plugins/`](examples/plugins/) | Minimal reference webhooks and declarative `*.plugin.yml` manifests demonstrating the `dh-waypoint.processor.v1` boundary. |
+
 ## What DH-Waypoint adds
 
 **Ground truth from your \*arr stack.** `POST /evidence/arr/:instance` receives Sonarr/Radarr/Lidarr/Readarr webhooks, a history poller backstops lost deliveries and a qBittorrent poller reads categories and tags. Every signal lands in an append-only `label_evidence` table and resolves, by explicit precedence, into one canonical label per infohash. A label backed by a real grab short-circuits the classifier — nothing to compute — and, opt-in, decides the identity of *other* releases under the same title, so a new episode of a show you monitor never lands on its foreign namesake. Grab → import outcomes train Beta(α, β) success priors per release feature that re-rank Torznab results toward what has actually worked for you. Liveness derives alive / suspect / dead per infohash from client state and import events, keeps dead swarms out of Torznab and revalidates them through DHT `get_peers`. `dh-waypoint attribution recon` reconstructs, per infohash, what the indexer served, what the client grabbed and what the \*arr imported, so hit-rate claims are measured rather than folklore.
@@ -86,10 +95,10 @@ and a separate PostgreSQL queue on the existing database. Register, replace,
 pause or remove a compatible service through the authenticated backend API
 without rebuilding or restarting DH-Waypoint.
 
-See the **[Armiger & Armiger Ultra integration guide](docs/armiger-integration.md)** (and turnkey [`examples/armiger-processor/docker-compose.yml`](examples/armiger-processor/docker-compose.yml)) to connect the [`spencernorton/armiger`](https://github.com/spencernorton/armiger) neural classifier (`8.3 MB` INT8 CPU or `32.3 MB` FP32 GPU/CPU + 6 plugins: `SwarmSurvivalNet`, `SwarmPriors`, `ZeroCueCatalog`, `AudioLanguageGuard`, `CalibrationAndDHT`, and `ArmigerDHTDBSync` + `CSAMGuard`) over `dh-waypoint.processor.v1` and close the 4-tier `dh-waypoint.processors.feedback.v1` outcome loop.
+See the **[Armiger & Armiger Ultra integration guide](docs/armiger-integration.md)** (and turnkey [`examples/armiger-processor/docker-compose.yml`](examples/armiger-processor/docker-compose.yml)) to connect the [`spencernorton/armiger`](https://github.com/spencernorton/armiger) neural classifier (`8.3 MB` INT8 CPU or `32.3 MB` FP32 GPU/CPU + 6 plugins: `SwarmSurvivalNet`, `SwarmPriors`, `ZeroCueCatalog`, `AudioLanguageGuard`, `CalibrationAndDHT`, and `ArmigerDHTDBSync` + `CSAMGuard`) over [`dh-waypoint.processor.v1`](docs/processor-contract.md) and close the 4-tier `dh-waypoint.processors.feedback.v1` outcome loop. Armiger's decentralized DHT weight/catalog sharing is **strictly opt-in by default (`ARMIGER_DHT_SHARE_OPT_IN="0"`)** and **100% anonymous** when enabled (single-use ephemeral `Ed25519` keys, coarse 1-hour UTC epoch timestamps, $(\varepsilon, \delta)$-differentially private L2-clipped weight deltas, and truncated `BLAKE2b-64` catalog hashes with zero raw infohashes, titles, file paths, or IPs ever shared).
 
-See also the [contract](docs/processors/v1.md), [operator API](docs/processors/operator-api.md),
-[architecture map](docs/processors/architecture.md), and
+See also the **[External Processor HTTP Webhook Contract Reference](docs/processor-contract.md)** ([protocol spec](docs/processors/v1.md)), [operator API](docs/processors/operator-api.md),
+[processor boundary map](docs/processors/architecture.md), and
 [migration and rollback procedure](docs/processors/migration.md). The two
 [synthetic reference services](examples/processors/README.md) demonstrate the
 boundary without a model or provider account. Historical model results and
@@ -123,12 +132,16 @@ of record. See [the migration guide](docs/migration-v4.md).
 
 ## Documentation
 
-- [Deployment and operations guide](docs/OPERATIONS.md) — setup, configuration, verification, upgrades, recovery and troubleshooting.
-- [Releasing](docs/RELEASING.md) — public builds, release checks and private deployment boundaries.
+| Guide | Scope |
+|---|---|
+| **[Core Architecture Guide (`docs/architecture.md`)](docs/architecture.md)** | Deep-dive Go architecture covering the `BEP-5`/`BEP-51` DHT crawler pipeline, in-memory `StableBloomFilter` & double-hashed CSAM pre-fetch filters, `BEP-9`/`BEP-10` metadata exchanger, TMDB & AniDB/Anime-Lists enrichment, PostgreSQL 16 + `pg_trgm` schema, and API surfaces. |
+| **[External Processor Contract (`docs/processor-contract.md`)](docs/processor-contract.md)** | Complete normative specification for `dh-waypoint.processor.v1` and `dh-waypoint.processors.feedback.v1` (headers, JSON payload & verdict schemas, timeouts, lease fencing, 500-attempt failure windows, idempotency, and fail-open vs fail-closed semantics). |
+| **[Armiger & Armiger Ultra Integration (`docs/armiger-integration.md`)](docs/armiger-integration.md)** | End-to-end guide for running `Armiger` (`8.3 MB` INT8) and `Armiger Ultra` (`32.3 MB` FP32 + 6 plugins) with DH-Waypoint, including 4-tier closed-loop feedback and opt-in-by-default (`ARMIGER_DHT_SHARE_OPT_IN="0"`) anonymous DHT sharing. |
+| **[Deployment & Operations (`docs/OPERATIONS.md`)](docs/OPERATIONS.md)** | Production setup, configuration, verification, upgrades, catalogue recovery, and troubleshooting. |
 
-- [Docs index](docs/index.md) · [Quickstart](docs/quickstart.md) · [Configuration](docs/configuration.md) · [FAQ](docs/faq.md) · [Troubleshooting](docs/troubleshooting.md)
-- Core: [Evidence pipeline](docs/evidence.md) — how *arr grabs and imports become labels, priors and liveness
-- Concepts: [Architecture](docs/concepts/architecture.md) · [DHT crawler](docs/concepts/dht-crawler.md) · [Classification](docs/concepts/classification.md) · [Swarm health](docs/concepts/swarm-health.md) · [Compatibility contract](docs/concepts/compatibility.md) · [Wantbridge](docs/concepts/wantbridge.md) · [Glossary](docs/concepts/glossary.md)
+- [Docs index](docs/index.md) · [Quickstart](docs/quickstart.md) · [Configuration](docs/configuration.md) · [Releasing](docs/RELEASING.md) · [FAQ](docs/faq.md) · [Troubleshooting](docs/troubleshooting.md)
+- Core & Processors: [Evidence pipeline](docs/evidence.md) · [Processor protocol v1](docs/processors/v1.md) · [Operator API](docs/processors/operator-api.md) · [Plugin files](docs/processors/plugin-files.md)
+- Concepts: [Backend overview](docs/concepts/architecture.md) · [DHT crawler](docs/concepts/dht-crawler.md) · [Classification](docs/concepts/classification.md) · [Swarm health](docs/concepts/swarm-health.md) · [Compatibility contract](docs/concepts/compatibility.md) · [Wantbridge](docs/concepts/wantbridge.md) · [Glossary](docs/concepts/glossary.md)
 - Reference: [Torznab API](docs/reference/torznab-api.md) · [GraphQL API](docs/reference/graphql-api.md) · [Metrics](docs/reference/metrics.md) · [CLI](docs/reference/cli.md)
 - Operations: [Security](docs/operations/security.md) · [Monitoring](docs/operations/monitoring.md) · [CSAM defence](docs/csam-defense.md)
 - Project: [Improvements over upstream](docs/project/improvements.md) · [Benchmarks](docs/project/benchmarks.md) · [Legal disclaimer](docs/legal/disclaimer.md)
