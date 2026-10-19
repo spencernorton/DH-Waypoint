@@ -19,6 +19,7 @@ the results (`dh-waypoint plugin list`, the processors status API, or
 | `04-llm-local-ollama.plugin.yml` | `builtin/llm` | Classify with a local Ollama model |
 | `05-llm-hosted.plugin.yml` | `builtin/llm` | Classify with a hosted OpenAI-compatible API |
 | `06-http-service.plugin.yml` | `http` | Call your own processor service in any language |
+| `07-armiger-ultra.plugin.yml` | `http` | Connect [Armiger / Armiger Ultra](../../docs/armiger-integration.md) neural classification, swarm viability, and safety gates |
 
 Guides: [plugin files](../../docs/processors/plugin-files.md) ·
 [connecting an LLM](../../docs/processors/llm.md) ·
