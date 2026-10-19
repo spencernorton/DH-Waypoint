@@ -1,56 +1,52 @@
-# Legal Disclaimer
+# Legal Disclaimer & Operator Compliance Guide
 
-**This document is for informational purposes only and does not constitute legal advice.** The authors, contributors, and maintainers of DH-Waypoint (including the primary maintainer) are not attorneys. All references to copyright, liability, jurisdiction, and compliance are derived from publicly available legal frameworks, established industry practice, and open-source networking standards. Operators are solely responsible for understanding and complying with the laws that apply to their jurisdiction, infrastructure, network configuration, and intended use case.
+**This document is for informational purposes only and does not constitute legal advice.** The authors, contributors, and maintainers of DH-Waypoint are not attorneys. Operators are solely responsible for understanding and complying with the copyright, telecommunications, and data-protection laws that apply to their jurisdiction, infrastructure, network configuration, and intended use case.
 
-## What DH-Waypoint Is and Is Not
+---
 
-**DH-Waypoint is a distributed metadata indexer.** It passively crawls the public BitTorrent Distributed Hash Table (DHT), collects publicly announced metadata (infohashes, torrent names, peer counts, and availability signals), and indexes it for operator search. DH-Waypoint functions as a passive observation and retrieval layer. It does not connect to traditional trackers, download files, distribute content, seed, peer, or facilitate file transfers. **DH-Waypoint is not a content host, a tracker, a download client, a CDN, or a piracy tool.** It is a network utility that indexes publicly broadcast information, analogous to a web search engine indexing publicly available URLs.
+## 1. Software Scope and Capability Architecture
 
-## The BitTorrent Protocol and Public Metadata
+**DH-Waypoint is a self-hosted BitTorrent DHT metadata indexing and cataloging backend.** It is distributed as open-source Go source code and container images under the MIT License:
+- **Core DHT Discovery & Metadata Indexing:** In its default configuration, DH-Waypoint participates in the Mainline BitTorrent Distributed Hash Table (`BEP-5` / `BEP-51`), retrieves public `.torrent` info dictionaries (`BEP-9` / `BEP-10`), and stores structured catalog records (infohashes, filenames, file sizes, and swarm cardinality) in a local PostgreSQL database controlled by the operator.
+- **No Payload Hosting or File Transfer:** DH-Waypoint does not download, store, seed, cache, or distribute media payloads or content files (`piece` data).
+- **Optional Built-In Tracker Subsystem (`docs/private-tracker.md`):** DH-Waypoint includes an optional built-in BitTorrent tracker module that is **disabled by default**. If an operator explicitly enables the built-in tracker, that instance processes tracker announce/scrape requests and maintains active peer session records in accordance with the operator's configuration.
+- **Optional Client Evidence Integration (`docs/evidence.md`):** Operators may optionally configure downstream index consumers or download clients to submit grab/import outcome webhooks (`POST /evidence/arr/:instance`) to their local PostgreSQL database.
 
-**The BitTorrent protocol itself is a lawful, standardized data transfer technology.** It is used by Linux distributions, software publishers, game studios (including Blizzard Entertainment), the Internet Archive, scientific research consortia, IPFS gateways, and academic institutions. The protocol was designed to distribute large datasets efficiently and predates modern copyright enforcement disputes. The technology remains a foundational networking standard for peer-to-peer data delivery. Using the BitTorrent protocol does not inherently violate any law, nor does it constitute infringement by virtue of its implementation.
+---
 
-## Indexing Public DHT Metadata
+## 2. BitTorrent Protocol and Neutral Dual-Use Technology
 
-**Indexing publicly broadcast DHT metadata is widely recognized as lawful.** Courts and regulatory frameworks in multiple jurisdictions have consistently treated the indexing of publicly announced network data under the same principles that govern traditional search engines, library catalogs, and archival systems. The act of recording and cataloging metadata that a network voluntarily broadcasts does not constitute copyright infringement or secondary liability. This follows established safe-harbor frameworks and the legal precedent that an index or catalog is a neutral intermediary tool. An operator indexing public DHT announcements is legally analogous to a search engine indexing pages on pirate sites: the index itself carries no liability for the subsequent use of its entries; only the underlying content does.
+The BitTorrent protocol (`BEP-3`, `BEP-5`, `BEP-9`, `BEP-10`, `BEP-15`, `BEP-51`) is a standardized peer-to-peer data distribution technology used to distribute Linux distributions, open-source software packages, Creative Commons media, public-domain archives (such as the Internet Archive, Project Gutenberg, and LibriVox), academic datasets, and commercial software updates.
 
-## Downloading Content and Operator Responsibility
+DH-Waypoint is designed as a general-purpose indexing, classification, and catalog-hygiene engine. It includes built-in pre-fetch child sexual abuse material (CSAM) double-hash blocklists (`docs/csam-defense.md`), executable/malware extension filters, and cryptographic quarantine/tombstone controls.
 
-**Downloading content is entirely separate from indexing metadata.** DH-Waypoint does not download files. Any content retrieval is performed exclusively by the operator's own client. The lawfulness of downloading any specific file depends entirely on the operator, the jurisdiction, the nature of the content, and whether the operator holds the necessary rights or authorization. Many torrents are lawfully distributed; many are not. Operators assume full responsibility for verifying the legal status of any content they choose to retrieve. Running an indexer does not grant immunity for downstream downloads.
+---
 
-## Copyright Takedown Procedures
+## 3. Copyright Law and Secondary Liability Considerations
 
-**DH-Waypoint does not operate as a service provider and does not receive copyright notices on behalf of users.** Because DH-Waypoint is self-hosted software, operators control their own indexes, network exposure, and data retention. If an operator receives a copyright infringement notice or wishes to remove specific data from their local index, they must handle the request internally. DH-Waypoint provides operator-facing tools to forget and exclude specific infohashes from the local catalog through the GraphQL API. Operators should implement their own takedown procedures consistent with their jurisdiction's copyright regime. We do not mediate disputes, process third-party claims, or act as an intermediary for DMCA or equivalent notices.
+Legal treatment of peer-to-peer metadata indexing varies significantly by jurisdiction and depends on how an instance is configured, curated, and exposed:
+- **Self-Hosted Private Operation vs. Public Exposure:** Whether operating a metadata index is lawful depends on applicable national and regional copyright frameworks (including 17 U.S.C. § 512 in the United States, Directive (EU) 2019/790 and CJEU jurisprudence on communication to the public in the European Union, and equivalent national statutes).
+- **Downstream Retrieval Responsibility:** Indexing metadata is distinct from downloading or redistributing copyrighted works. Any content retrieval performed by an operator's download client is governed by the legal status of the underlying work and whether the operator holds a license or lawful authorization in their jurisdiction.
+- **No Legal Immunity:** Deploying open-source indexing software does not confer safe-harbor status or legal immunity against third-party copyright or secondary-liability claims. Operators who expose search APIs beyond a private network or aggregate unauthorized third-party works may face civil or criminal liability depending on local law.
 
-## Data Protection and Privacy
+---
 
-**DH-Waypoint does not collect, store, or transmit user data.** The software only indexes metadata that is publicly announced on the BitTorrent DHT. This data is openly broadcast by participating nodes and is not personally identifiable. Operators who run DH-Waypoint behind a proxy, expose it to other users, or integrate it with third-party dashboards should consult applicable data protection regulations (such as GDPR, CCPA, or local privacy statutes) and disclose the nature of the indexing service to end users where required by law. No logs of operator search queries are retained by the core software.
+## 4. Notice, Takedown, and Local Catalog Removal
 
-## Software License vs. Intended Use
+**The DH-Waypoint project does not operate a hosted indexing service and cannot access, modify, or remove records from self-hosted operator databases.**
+- Each operator controls their own PostgreSQL instance, network exposure, blocklists, and retention rules.
+- Operators who receive a copyright or compliance notice regarding their deployment can permanently remove and block specific infohashes using the documented GraphQL deletion mutations, the `internal/verdicts` blocklist ledger, and the blocking manager (`docs/operations/security.md`).
 
-**The MIT License permits the use, modification, and distribution of DH-Waypoint, but it does not authorize unlawful conduct.** Software licensing grants permissions over the code itself; it does not grant immunity from copyright law, data protection regulations, or terms of service applicable to the operator's infrastructure or network activity. Compliance with applicable law remains the operator's responsibility. Open-source availability does not constitute a license to bypass legal restrictions on content distribution or commercial aggregation.
+---
 
-## Recommendations for Operators
+## 5. Data Protection and Privacy (GDPR / CCPA)
 
-**Operators should comply with local copyright and data protection laws.** Use DH-Waypoint only with content you have a legal right to access or distribute. Maintain clear audit trails of your indexing and download practices, and implement reasonable takedown mechanisms where required. If your use case involves commercial aggregation, redistribution, large-scale processing of copyrighted material, or cross-border data routing, consult qualified legal counsel. Keep your indexer isolated from your primary download client, and configure firewall rules to restrict DHT exposure to your local network where operationally appropriate.
+While DH-Waypoint does not phone home or transmit operator telemetry to the project maintainers, **operators must evaluate their own data-protection obligations**:
+- **Peer IP Addresses During Metadata Exchange and Scraping:** Participating in the Mainline DHT (`BEP-5`), exchanging `BEP-9` metadata with peers, or enabling the optional built-in tracker (`docs/private-tracker.md`) involves processing peer IP addresses and ports in memory, caches (`peerrep`), or database tables (`tracker_peers` when the optional tracker is enabled). Under European Union law (GDPR Recital 30 and CJEU *Breyer*, Case C-582/14), dynamic IP addresses combined with network timestamps may constitute personal data.
+- **Operator Obligations:** Operators who run DH-Waypoint in jurisdictions subject to the GDPR, UK GDPR, CCPA, or similar statutes—particularly if exposing endpoints to third parties—should establish a lawful basis for processing, configure appropriate data-retention and log-rotation intervals, and provide required privacy disclosures.
 
-## Frequently Asked Questions
+---
 
-**Can I run this on my home server?**
-Yes. Running DH-Waypoint is lawful. Operators are responsible for complying with local copyright and network regulations for their own infrastructure.
+## 6. Software License vs. Lawful Use
 
-**Will I get sued?**
-Running DH-Waypoint itself carries no inherent legal risk. Legal exposure depends entirely on what content you download, how you use it, and your jurisdiction. The project does not guarantee immunity from third-party claims.
-
-**Does the project endorse piracy?**
-No. The project endorses lawful indexing of publicly broadcast metadata and the continued development of open, standards-compliant networking tools.
-
-**What about my ISP/VPN?**
-This is out of scope for this documentation. Consult your ISP's Terms of Service, applicable privacy laws, and network security policies before routing traffic through third-party providers.
-
-**I received a DMCA notice — what do I do?**
-Handle notices internally. Use the backend's documented GraphQL deletion operation to remove a specific infohash from your local index. Consult local counsel if your notice involves third-party claims or commercial liability.
-
-## TL;DR
-
-**TL;DR:** DH-Waypoint is a self-hosted metadata indexer for the public BitTorrent DHT, not a download client or content host. The BitTorrent protocol and the indexing of publicly broadcast network data are lawful in most jurisdictions. Downloading content is your responsibility and depends entirely on the file, your jurisdiction, and your rights to it. DH-Waypoint does not receive copyright notices, store user data, or authorize unlawful conduct. Operators must comply with local law, implement their own takedown procedures, and consult counsel for commercial or high-risk use cases. This document is informational, not legal advice.
+The MIT License grants permissions solely with respect to the copyright in the DH-Waypoint source code and binaries. It does not authorize copyright infringement, circumvention of technological protection measures, violation of network terms of service, or non-compliance with data-protection statutes. **The authors and maintainers of DH-Waypoint do not condone, encourage, or support copyright infringement.**

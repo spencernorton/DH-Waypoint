@@ -15,7 +15,7 @@ families produce no structured codec value.
 A trailing scene group can be recognized after codec, audio or source evidence,
 including a dotted codec or audio/channel suffix. Group parsing is independent
 of codec recognition. Bare hyphenated titles, technical labels and revision
-tokens do not become groups. Curated leading fansub-group handling remains in
+tokens do not become groups. Curated leading square-bracketed release-group handling remains in
 the anime classifier.
 
 GraphQL, JSON and Torznab expose these codec/group claims with the original

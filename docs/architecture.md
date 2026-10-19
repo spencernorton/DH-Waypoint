@@ -147,7 +147,7 @@ Once persisted or queued into `queue_jobs`, torrents pass through DH-Waypoint's 
 
 ### Stage 3: CEL Classifier & Curated Anime / TMDB Backbone (`internal/anime`, `internal/animedb`, `internal/tmdb`)
 - **Sandboxed CEL Engine (`classifier.core.yml`):** Evaluates fast (<1 ms) Common Expression Language rules over release names, file extensions, directory hierarchies, and byte sizes.
-- **LLM-Free Anime Backbone (`internal/anime`, `internal/animedb`):** Recognizes fansub bracket conventions (`[SubsPlease]`, `[Erai-raws]`), romaji season markers (`2nd Season`, `Part II`, `Cour 2`), and absolute episode numbering. Joins **AniDB** canonical/synonym titles with **Anime-Lists** XML mappings so romaji, kanji, English, and fan aliases resolve deterministically to a single TMDB ID without external API calls.
+- **LLM-Free Anime Backbone (`internal/anime`, `internal/animedb`):** Recognizes square-bracketed release-group conventions (`[OpenAnime]`, `[CC-Sub]`), romaji season markers (`2nd Season`, `Part II`, `Cour 2`), and absolute episode numbering. Joins **AniDB** canonical/synonym titles with **Anime-Lists** XML mappings so romaji, kanji, English, and localized community aliases resolve deterministically to a single TMDB ID without external API calls.
 - **TMDB Enrichment (`internal/tmdb`):** Searches local PostgreSQL full-text + trigram indexes first, then queries TMDB (`TMDB_API_KEY`) when enabled, folding alternative titles, localized translations, release years, and popularity metrics into the local `content` catalog.
 
 ### Stage 4: Optional External Processors (`internal/processors`)
