@@ -2,7 +2,7 @@
 
 [Armiger](https://github.com/spencernorton/armiger) (`NorviTech/armiger` and `NorviTech/armiger-ultra` on Hugging Face) is the official neural classification, swarm-viability, and safety-gating processor suite for **DH-Waypoint**.
 
-DH-Waypoint runs as a standalone, model-independent Go backend (`ghcr.io/spencernorton/dh-waypoint`) and communicates with Armiger over the versioned, deadline-bounded [`dh-waypoint.processor.v1`](processors/v1.md) HTTP contract. You can register, shadow-test, promote, drain, or roll back Armiger at runtime without rebuilding or restarting DH-Waypoint.
+DH-Waypoint runs as a standalone, model-independent Go backend (`ghcr.io/spencernorton/dh-waypoint`) and communicates with Armiger over the versioned, deadline-bounded [`dh-waypoint.processor.v1`](processor-contract.md) HTTP contract. You can register, shadow-test, promote, drain, or roll back Armiger at runtime without rebuilding or restarting DH-Waypoint.
 
 ```mermaid
 flowchart LR
@@ -210,7 +210,22 @@ When Armiger returns `request_feedback: true` on a `v1.Result`, DH-Waypoint join
 
 ---
 
-## 7. Conformal Safety Gates & Environment Reference
+## 7. Opt-In by Default & 100% Anonymous Distributed DHT Sharing
+
+Armiger and Armiger Ultra include optional decentralized `BEP-44` / `BEP-46` intelligence sync (`CalibrationAndDHT` in `armiger_dht_rsi.py` and `ArmigerDHTDBSync` in `armiger_dht_db_sync.py`). When running alongside DH-Waypoint, outbound DHT sharing is **strictly opt-in by default (`ARMIGER_DHT_SHARE_OPT_IN="0"`, `opt_in_sharing=False`)** and **100% anonymous by construction** when enabled:
+
+| Security & Privacy Guarantee | Default / Wire Enforcement | Mathematical & Cryptographic Mechanism |
+|---|---|---|
+| **Strictly Opt-In by Default** | `ARMIGER_DHT_SHARE_OPT_IN="0"` (`opt_in_sharing=False`) | Outbound DHT publishing is disabled by default (`0` packets emitted). Nodes must explicitly set both `ARMIGER_DHT_SHARE_OPT_IN="1"` and `opt_in_sharing=True` to contribute updates. |
+| **Pre-Publish `AnonymityGuard` Gate** | `500/500` (`100.0%`) canary block rate on forbidden fields | Every outbound `BEP-44` / `BEP-46` payload is inspected by `AnonymityGuard` before signing or serialization. Any payload containing raw 40-hex infohashes, release titles, file paths, tracker URLs, passkeys, IPv4/IPv6 addresses, or hostnames is deterministically rejected prior to network egress. |
+| **Unlinkable Ephemeral `Ed25519` Keys** | Fresh 32-byte keypair per publish (`ephemeral_node_id`) | Every outbound telemetry or shard contribution generates a single-use ephemeral `Ed25519` signing keypair and ephemeral node ID (`BLAKE2b-128(ephemeral_pubkey)`), preventing cross-epoch correlation or static node tracking. |
+| **Coarse UTC Hour Epoch Bucketing** | `epoch_ts = (utc_now // 3600) * 3600` | All published timestamps are quantized to coarse 1-hour UTC boundaries (`3600s`), eliminating sub-second clock-skew fingerprinting and grab/import timing correlation. |
+| **$(arepsilon, \delta)$-Differentially Private Weight Deltas** | `L2` clipping (`C = 1.0`) + Gaussian noise ($\sigma = 0.05$) | Calibration temperature and prior weight deltas are L2-norm clipped (`clip_norm=1.0`) and perturbed with calibrated Gaussian noise (`noise_multiplier=0.05`) over minimum cohort batches before encryption (`X25519` + `ML-KEM-768` + `ChaCha20-Poly1305`), making single-import reconstruction mathematically infeasible. |
+| **One-Way Truncated `BLAKE2b-64` Catalog Hashes** | 16-hex-char (`64-bit`) domain-separated digest | Shared catalog entries (`ZeroCueCatalog` / `ArmigerDHTDBSync`) transmit only salted one-way `BLAKE2b-64` hashes mapped to integer TMDB/AniDB IDs and coarse category/language enums—never plaintext torrent names, filenames, or infohashes. |
+
+---
+
+## 8. Conformal Safety Gates & Environment Reference
 
 ### DH-Waypoint Core Processor Variables
 
@@ -234,11 +249,12 @@ When Armiger returns `request_feedback: true` on a `v1.Result`, DH-Waypoint join
 | `mondrian_adult_threshold` | `0.42` | Calibrated Mondrian conformal threshold for `adult`/`xxx` namespace isolation. |
 | `honeypot_trap_threshold` | `0.50` | Threshold on `SwarmSurvivalNet` honeypot probability above which disguised malware swarms are excluded. |
 | `ARMIGER_DHT_RSI_MODE` | `pull_only` | `off`, `pull_only` (verifies hybrid `Ed25519`+`WOTS+-SHAKE256` signatures, 3-of-5 distinct-ASN quorum, and 500-canary gate before hot-reloading weights), or `opt_in_contribute` (exports $arepsilon$-differentially private telemetry bundles encrypted with `X25519`+`ML-KEM-768`+`ChaCha20-Poly1305`). |
-| `ARMIGER_DHT_DB_SYNC_MODE` | `off` | `off`, `subscribe` (pulls encrypted sharded catalog updates for selected `(category, language, quality)` tuples with `xxx` off by default), or `publish`. |
+| `ARMIGER_DHT_SHARE_OPT_IN` | `0` | Master opt-in switch for outbound DHT sharing (`0` = disabled by default, zero outbound packets; `1` = opt-in enabled with `AnonymityGuard`, ephemeral `Ed25519` keys, coarse UTC hour timestamps, DP-clipped weight deltas, and `BLAKE2b-64` hashes). |
+| `ARMIGER_DHT_DB_SYNC_MODE` | `off` | `off`, `subscribe` (pulls encrypted sharded catalog updates for selected `(category, language, quality)` tuples with `xxx` off by default), or `publish` (requires `ARMIGER_DHT_SHARE_OPT_IN=1`). |
 
 ---
 
-## 8. Observability & Rollback
+## 9. Observability & Rollback
 
 Monitor Armiger's latency, queue wait, and proposal outcomes through DH-Waypoint's Prometheus `/metrics` endpoint and the bundled [`observability/grafana-dashboards/dh-waypoint.json`](../observability/grafana-dashboards/dh-waypoint.json) dashboard:
 

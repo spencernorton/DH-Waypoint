@@ -79,6 +79,11 @@ services:
       ARMIGER_ENABLE_AUDIO_LANGUAGE_GUARD: "${ARMIGER_ENABLE_AUDIO_LANGUAGE_GUARD:-true}"
       ARMIGER_ENABLE_SWARM_SURVIVAL: "${ARMIGER_ENABLE_SWARM_SURVIVAL:-true}"
       ARMIGER_ENABLE_CSAM_GUARD: "${ARMIGER_ENABLE_CSAM_GUARD:-true}"
+      # Distributed DHT weight/catalog sharing is strictly opt-in by default (0 = disabled).
+      # When opted in (1), AnonymityGuard enforces ephemeral Ed25519 keys, coarse UTC hour
+      # bucketing, DP-clipped weight deltas, and truncated BLAKE2b-64 catalog hashes
+      # (zero raw infohashes, titles, file paths, or IPs are ever shared).
+      ARMIGER_DHT_SHARE_OPT_IN: "${ARMIGER_DHT_SHARE_OPT_IN:-0}"
       ARMIGER_DHT_RSI_MODE: "${ARMIGER_DHT_RSI_MODE:-pull_only}"
       ARMIGER_DHT_DB_SYNC_MODE: "${ARMIGER_DHT_DB_SYNC_MODE:-off}"
     volumes:

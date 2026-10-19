@@ -17,7 +17,8 @@ The public distribution is MIT-licensed and runs independently of a browser site
 
 ## Processing and integrations
 
-- [Architecture](concepts/architecture.md)
+- [Core Architecture Guide](architecture.md) and [Backend Overview](concepts/architecture.md)
+- [External Processor HTTP Webhook Contract](processor-contract.md) and [Armiger & Armiger Ultra Integration](armiger-integration.md)
 - [DHT crawler](concepts/dht-crawler.md)
 - [Classification](concepts/classification.md)
 - [Evidence](evidence.md) and [compatibility](concepts/compatibility.md)
