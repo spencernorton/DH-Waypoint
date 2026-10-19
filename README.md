@@ -1,6 +1,6 @@
 # DH-Waypoint
 
-<p>
+<p align="center">
   <a href="https://norvitech.com"><img alt="NorviTech Suite" src="https://img.shields.io/badge/NorviTech-Suite-FD8024.svg"></a>
   <a href="https://github.com/spencernorton/DH-Waypoint/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/spencernorton/DH-Waypoint/actions/workflows/ci.yml/badge.svg"></a>
   <a href="https://github.com/spencernorton/DH-Waypoint/releases"><img alt="Latest release" src="https://img.shields.io/github/v/tag/spencernorton/DH-Waypoint?label=release&sort=semver"></a>
@@ -8,7 +8,7 @@
   <a href="https://buy.stripe.com/8x26oH2U44f65TRe574wM04"><img alt="Donate" src="https://img.shields.io/badge/donate-Stripe-635bff.svg?logo=stripe&logoColor=white"></a>
 </p>
 
-**DH-Waypoint is a self-hosted BitTorrent DHT crawler and indexer built for the \*arr stack.** It crawls the DHT into a Postgres corpus, classifies every torrent it finds, and serves the result to Sonarr, Radarr, Lidarr, Readarr and Prowlarr over Torznab. What makes it different is the loop: it watches what your \*arrs actually grab and import, and feeds that ground truth back into classification, ranking and retention. The public distribution is a standalone Go backend: crawling, scrubbing, matching, cleanup and machine APIs. Optional processors run in separate services; the core needs no plugin or model runtime.
+**DH-Waypoint is a self-hosted BitTorrent DHT metadata crawler, cataloger, and search backend.** It discovers public DHT announcements into a PostgreSQL 16 corpus, classifies and normalizes release metadata, and exposes the catalog over standard Torznab (`/torznab`) and GraphQL (`/graphql`) APIs. When paired with compatible media managers and download clients (`Prowlarr`, `Sonarr`, `Radarr`, `Lidarr`, `Readarr`, `qBittorrent`), it closes the feedback loop by ingesting verified grab and import outcomes into local classification, liveness tracking, and Empirical Bayes ranking. The public distribution is a standalone Go backend; optional neural or statistical processors run in isolated sidecar services over `dh-waypoint.processor.v1`.
 
 ```mermaid
 flowchart LR
@@ -58,7 +58,7 @@ Then add `http://<host>:3333/torznab/` as a Torznab indexer in Prowlarr (or in e
 
 **Curation, not just collection.** A deterministic content filter — language tag or title script, lossy-audio-only music, NSFW, blocked extensions and content types, foreign audio — runs in pure Go with no network or database call per decision and is anime-aware, so watchable anime is never dropped on a script heuristic. Historical quarantines remain inspectable and restorable; optional processors cannot delete catalogue records. Retention purges rows with no label, no evidence, zero seeders everywhere and age past `MinAge`, dry-run by default. A pre-fetch bloom filter of double-hashed CSAM infohashes is consulted before any BEP-9 fetch ([`docs/csam-defense.md`](docs/csam-defense.md)), and an append-only verdict ledger feeds Torznab exclusion and crawler triage.
 
-**Titles that actually match.** An LLM-free anime backbone recognises fansub brackets, absolute episode numbers and romaji season markers on the always-on path, backed by an alias table built from AniDB titles joined to Anime-Lists TMDB mappings, so every romaji, kanji, English and fan alias resolves to one TMDB id. TMDB alternative titles and translations are folded into full-text search; `internal/titlenorm` is the single title normaliser every matching surface calls (the repo once had eleven); release granularity, release date, absolute episode and English-audio presence are stamped on every row with resumable backfills; `S01E01E02` and three-digit episode numbers parse correctly.
+**Titles that actually match.** An LLM-free anime backbone recognises square-bracketed release-group prefixes, absolute episode numbers and romaji season markers on the always-on path, backed by an alias table built from AniDB titles joined to Anime-Lists TMDB mappings, so every romaji, kanji, English and localized alias resolves to one TMDB id. TMDB alternative titles and translations are folded into full-text search; `internal/titlenorm` is the single title normaliser every matching surface calls (the repo once had eleven); release granularity, release date, absolute episode and English-audio presence are stamped on every row with resumable backfills; `S01E01E02` and three-digit episode numbers parse correctly.
 
 **Accurate swarm numbers.** A BEP-15 UDP scrape worker refreshes seeders and leechers from public trackers at about seventy infohashes per datagram, replacing the crawler's one-node, never-refreshed estimate. Per-peer BEP-9 history stops the fetcher re-hammering peers that never answer (the audit that motivated it found 8.68M errors against 207K successes). BEP-42 external-IP resolution, BEP-43 read-only handling and BEP-51 peer intervals are implemented on both paths.
 
@@ -95,7 +95,7 @@ and a separate PostgreSQL queue on the existing database. Register, replace,
 pause or remove a compatible service through the authenticated backend API
 without rebuilding or restarting DH-Waypoint.
 
-See the **[Armiger & Armiger Ultra integration guide](docs/armiger-integration.md)** (and turnkey [`examples/armiger-processor/docker-compose.yml`](examples/armiger-processor/docker-compose.yml)) to connect the [`spencernorton/armiger`](https://github.com/spencernorton/armiger) neural classifier (`8.3 MB` INT8 CPU or `32.3 MB` FP32 GPU/CPU + 6 plugins: `SwarmSurvivalNet`, `SwarmPriors`, `ZeroCueCatalog`, `AudioLanguageGuard`, `CalibrationAndDHT`, and `ArmigerDHTDBSync` + `CSAMGuard`) over [`dh-waypoint.processor.v1`](docs/processor-contract.md) and close the 4-tier `dh-waypoint.processors.feedback.v1` outcome loop. Armiger's decentralized DHT weight/catalog sharing is **strictly opt-in by default (`ARMIGER_DHT_SHARE_OPT_IN="0"`)** and **100% anonymous** when enabled (single-use ephemeral `Ed25519` keys, coarse 1-hour UTC epoch timestamps, $(\varepsilon, \delta)$-differentially private L2-clipped weight deltas, and truncated `BLAKE2b-64` catalog hashes with zero raw infohashes, titles, file paths, or IPs ever shared).
+See the **[Armiger & Armiger Ultra integration guide](docs/armiger-integration.md)** (and turnkey [`examples/armiger-processor/docker-compose.yml`](examples/armiger-processor/docker-compose.yml)) to connect the [`spencernorton/armiger`](https://github.com/spencernorton/armiger) neural classifier (`8.3 MB` INT8 CPU or `32.3 MB` FP32 GPU/CPU + 6 plugins: `SwarmSurvivalNet`, `SwarmPriors`, `ZeroCueCatalog`, `AudioLanguageGuard`, `CalibrationAndDHT`, and `ArmigerDHTDBSync` + `CSAMGuard`) over [`dh-waypoint.processor.v1`](docs/processor-contract.md) and close the 4-tier `dh-waypoint.processors.feedback.v1` outcome loop. Armiger's decentralized DHT weight/catalog sharing is **strictly opt-in by default (`ARMIGER_DHT_SHARE_OPT_IN="0"`)** and **enforced by the 5-layer `AnonymityGuard` wire firewall** when enabled (single-use ephemeral `Ed25519` keys, coarse 1-hour UTC epoch timestamps, $(\varepsilon, \delta)$-differentially private L2-clipped weight deltas, and truncated `BLAKE2b-64` catalog hashes with zero raw infohashes, titles, file paths, or IPs ever shared).
 
 See also the **[External Processor HTTP Webhook Contract Reference](docs/processor-contract.md)** ([protocol spec](docs/processors/v1.md)), [operator API](docs/processors/operator-api.md),
 [processor boundary map](docs/processors/architecture.md), and
@@ -185,6 +185,7 @@ The backend pipeline diagram lives in [`docs/assets/`](docs/assets/).
 <p align="center">
   <a href="https://github.com/spencernorton/helios">Helios</a> ·
   <a href="https://github.com/spencernorton/DH-Waypoint">DH-Waypoint</a> ·
+  <a href="https://github.com/spencernorton/armiger">Armiger</a> ·
   <a href="https://github.com/spencernorton/xnote">XNote</a> ·
   <a href="https://github.com/spencernorton/xnote-placement">XNote Placement</a> ·
   <a href="https://github.com/spencernorton/snipsnap">SnipSnap</a> ·

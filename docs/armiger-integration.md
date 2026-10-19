@@ -29,7 +29,7 @@ Both variants are shipped in [`spencernorton/armiger`](https://github.com/spence
 | Variant | Artifact & Footprint | Latency (p50 / Batch-64) | Capabilities & Bundled Plugins | Recommended Deployment |
 |---|---|---|---|---|
 | **Armiger (`int8`)** | `armiger.int8.onnx` (`8.3 MB`) | `2.44 ms` single-item / `3.07 ms` batch-64 (CPU) | 8-head byte-level RoPE Transformer + File-Tree Encoder (`category`, `adult`, `junk`, `anime`, `english_subs`, `lang`, `owner_scope`, `title_language`) + Mondrian conformal safety gates (`calibration.json`). | Low-power CPU hosts, NAS boxes, or high-rate pre-filtering before heavier stages. |
-| **Armiger Ultra (`fp32`)** | `armiger_ultra.fp32.onnx` (`32.3 MB`) + `swarm_adapter.pt` (`132 KB`) + `validated_zero_cue_catalog.json` (`26.0 MB`) | `0.21 ms/item` RTX GPU / `0.29 ms/item` Apple Silicon MPS / `1.12 ms` CPU single-item | Full-precision 8-head classifier plus all **6 official plugins**:<br>1. `SwarmSurvivalNet` (`100%` fake-seeder malware trap recall, `96.83%` warehouse swarm AUROC)<br>2. `SwarmPriors` (4-pathway Empirical Bayes tracker priors)<br>3. `ZeroCueCatalog` (`929,400` `BLAKE2b-64` title/year/anime entries)<br>4. `AudioLanguageGuard` (`97.80%` English-vs-Foreign audio disambiguation)<br>5. `CalibrationAndDHT` (`BEP-44`/`BEP-46` hybrid PQ-signed weight/temperature hot-reload + 500-canary gate)<br>6. `ArmigerDHTDBSync` + `CSAMGuard` (pre-ingest CSAM/abuse blocking & signed tombstones) | Primary classification, liveness, and policy engine for production DH-Waypoint instances. |
+| **Armiger Ultra (`fp32`)** | `armiger_ultra.fp32.onnx` (`32.3 MB`) + `swarm_adapter.pt` (`132 KB`) + `validated_zero_cue_catalog.json` (`26.0 MB`) | `0.21 ms/item` RTX GPU / `0.29 ms/item` Apple Silicon MPS / `1.12 ms` CPU single-item | Full-precision 8-head classifier plus all **6 official plugins**:<br>1. `SwarmSurvivalNet` (`100%` fake-seeder malware trap recall, `96.83%` Multi-Source Corpus swarm AUROC)<br>2. `SwarmPriors` (4-pathway Empirical Bayes tracker priors)<br>3. `ZeroCueCatalog` (`929,400` `BLAKE2b-64` title/year/anime entries)<br>4. `AudioLanguageGuard` (`97.80%` English-vs-Foreign audio disambiguation)<br>5. `CalibrationAndDHT` (`BEP-44`/`BEP-46` hybrid PQ-signed weight/temperature hot-reload + 500-canary gate)<br>6. `ArmigerDHTDBSync` + `CSAMGuard` (pre-ingest CSAM/abuse blocking & signed tombstones) | Primary classification, liveness, and policy engine for production DH-Waypoint instances. |
 
 ---
 
@@ -185,7 +185,7 @@ When DH-Waypoint dispatches `POST /v1/process` to Armiger, it provides a single 
 1. **File & Structural Inputs (`input.name`, `input.size`, `input.files`, `input.file_count`, `input.extension`):**
    - Featurized by `armiger_inference.py` into 11 zero-tokenizer tensors (`title_bytes`, `ext_ids`, `file_sizes_log`, `file_depths`, `file_flags`, `file_mask`, `struct_feats`, `tracker_ids`, `cat_hint_id`, `tag_ids`, `swarm_feats`).
 2. **Swarm & Priors Inputs (`input.sources`, `input.swarm`):**
-   - DH-Waypoint passes `tracker_scraped`, `tracker_known`, `tracker_seeders`, `tracker_leechers`, `tracker_completed`, `dht_seeders`, `dht_leechers`, `liveness_status`, and title-derived `outcome_priors` (`PriorObservation` Beta $(lpha, eta)$ counts).
+   - DH-Waypoint passes `tracker_scraped`, `tracker_known`, `tracker_seeders`, `tracker_leechers`, `tracker_completed`, `dht_seeders`, `dht_leechers`, `liveness_status`, and title-derived `outcome_priors` (`PriorObservation` Beta $(\alpha, \beta)$ counts).
    - Credential-bearing tracker URLs and private passkeys are stripped by Core before dispatch and double-checked by `SwarmPriors.is_public_safe_source`.
 3. **Multi-Capability `Result.Proposal`:**
    - Armiger advertises `capabilities: ["classify", "extract", "language", "policy"]` in `GET /v1/manifest` and returns a unified `v1.Proposal` in a single HTTP round-trip:
@@ -210,9 +210,9 @@ When Armiger returns `request_feedback: true` on a `v1.Result`, DH-Waypoint join
 
 ---
 
-## 7. Opt-In by Default & 100% Anonymous Distributed DHT Sharing
+## 7. Opt-In by Default & Privacy-Hardened Distributed DHT Sharing
 
-Armiger and Armiger Ultra include optional decentralized `BEP-44` / `BEP-46` intelligence sync (`CalibrationAndDHT` in `armiger_dht_rsi.py` and `ArmigerDHTDBSync` in `armiger_dht_db_sync.py`). When running alongside DH-Waypoint, outbound DHT sharing is **strictly opt-in by default (`ARMIGER_DHT_SHARE_OPT_IN="0"`, `opt_in_sharing=False`)** and **100% anonymous by construction** when enabled:
+Armiger and Armiger Ultra include optional decentralized `BEP-44` / `BEP-46` intelligence sync (`CalibrationAndDHT` in `armiger_dht_rsi.py` and `ArmigerDHTDBSync` in `armiger_dht_db_sync.py`). When running alongside DH-Waypoint, outbound DHT sharing is **strictly opt-in by default (`ARMIGER_DHT_SHARE_OPT_IN="0"`, `opt_in_sharing=False`)** and **enforced by the 5-layer `AnonymityGuard` wire firewall** when enabled:
 
 | Security & Privacy Guarantee | Default / Wire Enforcement | Mathematical & Cryptographic Mechanism |
 |---|---|---|
@@ -220,7 +220,7 @@ Armiger and Armiger Ultra include optional decentralized `BEP-44` / `BEP-46` int
 | **Pre-Publish `AnonymityGuard` Gate** | `500/500` (`100.0%`) canary block rate on forbidden fields | Every outbound `BEP-44` / `BEP-46` payload is inspected by `AnonymityGuard` before signing or serialization. Any payload containing raw 40-hex infohashes, release titles, file paths, tracker URLs, passkeys, IPv4/IPv6 addresses, or hostnames is deterministically rejected prior to network egress. |
 | **Unlinkable Ephemeral `Ed25519` Keys** | Fresh 32-byte keypair per publish (`ephemeral_node_id`) | Every outbound telemetry or shard contribution generates a single-use ephemeral `Ed25519` signing keypair and ephemeral node ID (`BLAKE2b-128(ephemeral_pubkey)`), preventing cross-epoch correlation or static node tracking. |
 | **Coarse UTC Hour Epoch Bucketing** | `epoch_ts = (utc_now // 3600) * 3600` | All published timestamps are quantized to coarse 1-hour UTC boundaries (`3600s`), eliminating sub-second clock-skew fingerprinting and grab/import timing correlation. |
-| **$(arepsilon, \delta)$-Differentially Private Weight Deltas** | `L2` clipping (`C = 1.0`) + Gaussian noise ($\sigma = 0.05$) | Calibration temperature and prior weight deltas are L2-norm clipped (`clip_norm=1.0`) and perturbed with calibrated Gaussian noise (`noise_multiplier=0.05`) over minimum cohort batches before encryption (`X25519` + `ML-KEM-768` + `ChaCha20-Poly1305`), making single-import reconstruction mathematically infeasible. |
+| **$(\\varepsilon, \\delta)$-Differentially Private Weight Deltas** | `L2` clipping (`C = 1.0`) + Gaussian noise ($\sigma = 0.05$) | Calibration temperature and prior weight deltas are L2-norm clipped (`clip_norm=1.0`) and perturbed with calibrated Gaussian noise (`noise_multiplier=0.05`) over minimum cohort batches before encryption (`X25519` + `ML-KEM-768` + `ChaCha20-Poly1305`), making single-import reconstruction mathematically infeasible. |
 | **One-Way Truncated `BLAKE2b-64` Catalog Hashes** | 16-hex-char (`64-bit`) domain-separated digest | Shared catalog entries (`ZeroCueCatalog` / `ArmigerDHTDBSync`) transmit only salted one-way `BLAKE2b-64` hashes mapped to integer TMDB/AniDB IDs and coarse category/language enums—never plaintext torrent names, filenames, or infohashes. |
 
 ---
@@ -242,13 +242,13 @@ Armiger and Armiger Ultra include optional decentralized `BEP-44` / `BEP-46` int
 |---|---|---|
 | `ARMIGER_VARIANT` / `configuration.variant` | `fp32` | `fp32` loads `armiger_ultra.fp32.onnx` (`32.3 MB`); `int8` loads `armiger.int8.onnx` (`8.3 MB` CPU fast-path). |
 | `enable_zero_cue_catalog` | `true` | Enables the `929,400`-entry `BLAKE2b-64` title/year/anime disambiguation catalog (`validated_zero_cue_catalog.json`). |
-| `enable_audio_language_guard` | `true` | Enables cross-head `title_language` $	imes$ `lang` audio & anime dub disambiguation (`audio_language_guard.py`). |
+| `enable_audio_language_guard` | `true` | Enables cross-head `title_language` $\\times$ `lang` audio & anime dub disambiguation (`audio_language_guard.py`). |
 | `enable_swarm_survival` | `true` | Enables the 48-tensor `SwarmResidualAdapter` (`swarm_adapter.pt`) for swarm viability and fake-seeder honeypot detection. |
 | `enable_csam_guard` | `true` | Enforces multi-stage pre-ingest CSAM/CSAE blocking and signed `SHA-256` tombstone checks (`csam_guard.py`). |
 | `mondrian_junk_threshold` | `0.36` | Calibrated Mondrian conformal threshold for `junk` exclusion (`100.00%` precision on `oct15_confirmation`). |
 | `mondrian_adult_threshold` | `0.42` | Calibrated Mondrian conformal threshold for `adult`/`xxx` namespace isolation. |
 | `honeypot_trap_threshold` | `0.50` | Threshold on `SwarmSurvivalNet` honeypot probability above which disguised malware swarms are excluded. |
-| `ARMIGER_DHT_RSI_MODE` | `pull_only` | `off`, `pull_only` (verifies hybrid `Ed25519`+`WOTS+-SHAKE256` signatures, 3-of-5 distinct-ASN quorum, and 500-canary gate before hot-reloading weights), or `opt_in_contribute` (exports $arepsilon$-differentially private telemetry bundles encrypted with `X25519`+`ML-KEM-768`+`ChaCha20-Poly1305`). |
+| `ARMIGER_DHT_RSI_MODE` | `pull_only` | `off`, `pull_only` (verifies hybrid `Ed25519`+`WOTS+-SHAKE256` signatures, 3-of-5 distinct-ASN quorum, and 500-canary gate before hot-reloading weights), or `opt_in_contribute` (exports $\\varepsilon$-differentially private telemetry bundles encrypted with `X25519`+`ML-KEM-768`+`ChaCha20-Poly1305`). |
 | `ARMIGER_DHT_SHARE_OPT_IN` | `0` | Master opt-in switch for outbound DHT sharing (`0` = disabled by default, zero outbound packets; `1` = opt-in enabled with `AnonymityGuard`, ephemeral `Ed25519` keys, coarse UTC hour timestamps, DP-clipped weight deltas, and `BLAKE2b-64` hashes). |
 | `ARMIGER_DHT_DB_SYNC_MODE` | `off` | `off`, `subscribe` (pulls encrypted sharded catalog updates for selected `(category, language, quality)` tuples with `xxx` off by default), or `publish` (requires `ARMIGER_DHT_SHARE_OPT_IN=1`). |
 
