@@ -1,5 +1,5 @@
 # The public image contains only the headless Go indexing backend.
-FROM golang:1.26.9-alpine3.23@sha256:6750308561953d451210ed1a8086d36c8c8bdcbf672d38d9d0d424b8a7a0216c AS build
+FROM golang:1.26.10-alpine3.23@sha256:107301490755aa2ea1b0b43788b6e62cff2faae45a538028b193becc06aaffba AS build
 
 RUN apk --no-cache add git
 WORKDIR /build
