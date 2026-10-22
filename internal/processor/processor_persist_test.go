@@ -380,15 +380,18 @@ func TestProcessRecoveryOffHoldsLegacyDeleteWithoutSQLOrDeleteMetric(t *testing.
 	)
 	blocker.err = cataloguerecovery.ErrDisabled
 	p.deleteMetrics = NewDeleteMetrics()
-	err := p.Process(context.Background(), MessageParams{InfoHashes: []protocol.ID{hash}})
-	if !errors.Is(err, cataloguerecovery.ErrDisabled) {
-		t.Fatalf("Process error = %v, want recovery disabled", err)
+	// A held delete completes the job: failing it only replayed the same verdict.
+	if err := p.Process(context.Background(), MessageParams{InfoHashes: []protocol.ID{hash}}); err != nil {
+		t.Fatalf("Process error = %v, want held delete to complete", err)
 	}
 	if len(blocker.blockedHashes()) != 0 {
 		t.Fatal("held action was admitted to blocking")
 	}
 	if count := testutil.CollectAndCount(p.deleteMetrics.deleted); count != 0 {
 		t.Fatalf("held deletion emitted %d delete counters", count)
+	}
+	if count := testutil.CollectAndCount(p.deleteMetrics.held); count != 1 {
+		t.Fatalf("held deletion emitted %d held counters, want 1", count)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("held deletion issued SQL: %v", err)
@@ -408,8 +411,8 @@ func TestProcessRecoveryOffStillPersistsOrdinaryRowsInMixedBatch(t *testing.T) {
 	)
 	blocker.err = cataloguerecovery.ErrDisabled
 	expectTorrentContentInsert(mock)
-	if err := p.Process(context.Background(), MessageParams{InfoHashes: []protocol.ID{keepHash, deleteHash}}); !errors.Is(err, cataloguerecovery.ErrDisabled) {
-		t.Fatalf("Process error = %v, want recovery disabled", err)
+	if err := p.Process(context.Background(), MessageParams{InfoHashes: []protocol.ID{keepHash, deleteHash}}); err != nil {
+		t.Fatalf("Process error = %v, want held delete to complete", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("ordinary persistence: %v", err)

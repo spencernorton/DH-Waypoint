@@ -27,6 +27,10 @@ import (
 // reported "unknown".
 type DeleteMetrics struct {
 	deleted *dualemit.CounterVec
+	// held counts classifier deletes decided while the recovery foundation is
+	// off: nothing was removed and the job completed. It is the record of the
+	// hold that a failed queue job used to be.
+	held *dualemit.CounterVec
 }
 
 func NewDeleteMetrics() *DeleteMetrics {
@@ -36,11 +40,25 @@ func NewDeleteMetrics() *DeleteMetrics {
 			Help: "Successful classifier removal calls, labelled by the content type assigned before the " +
 				"delete and its dotted rule path; inspect retained recovery state after failed calls.",
 		}, []string{"content_type", "rule"}),
+		held: dualemit.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "dh_waypoint", Subsystem: "classifier", Name: "delete_held_total",
+			Help: "Classifier deletes held because catalogue recovery is disabled; the source was retained " +
+				"and the job completed. Labelled like deleted_total.",
+		}, []string{"content_type", "rule"}),
 	}
 }
 
 func (m *DeleteMetrics) Collectors() []prometheus.Collector {
-	return []prometheus.Collector{m.deleted}
+	return []prometheus.Collector{m.deleted, m.held}
+}
+
+// ObserveHeld records one delete held by the disabled recovery foundation. Nil-safe.
+func (m *DeleteMetrics) ObserveHeld(ct model.NullContentType, classifyErr error) {
+	if m == nil {
+		return
+	}
+	contentType, rule := deleteLabels(ct, classifyErr)
+	m.held.WithLabelValues(contentType, rule).Inc()
 }
 
 // Observe records one delete. Nil-safe so narrow wirings need not provide it.

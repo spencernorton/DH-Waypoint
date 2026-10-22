@@ -79,17 +79,21 @@ func TestPostgresLegacyCELWriterRecoveryOffProtectedAndCaptured(t *testing.T) {
 			err = p.Process(ctx, processor.MessageParams{InfoHashes: []protocol.ID{id}})
 			if mode != "captured" {
 				want := cataloguerecovery.ErrDisabled
+				held := 1
 				if mode == "protected" {
-					want = cataloguerecovery.ErrProtected
+					want, held = cataloguerecovery.ErrProtected, 0
+					require.ErrorIs(t, err, want)
+				} else {
+					// Recovery off holds the delete and completes the job.
+					require.NoError(t, err)
 				}
-				require.ErrorIs(t, err, want)
 				require.Equal(t, before, raw(t, pool, h))
 				for _, table := range []string{"catalogue_recovery_snapshots", "catalogue_recovery_events", "torrent_verdict_state", "torrent_verdict_events", "bloom_filters"} {
 					require.Zero(t, count(t, pool, table), table)
 				}
-				for _, collector := range deleteMetrics.Collectors() {
-					require.Zero(t, testutil.CollectAndCount(collector))
-				}
+				collectors := deleteMetrics.Collectors()
+				require.Zero(t, testutil.CollectAndCount(collectors[0]))
+				require.Equal(t, held, testutil.CollectAndCount(collectors[1]))
 				// The direct GraphQL action must use exactly the same guard.
 				resolver := resolvers.Resolver{BlockingManager: manager}
 				_, err = resolver.TorrentMutation().Delete(ctx, &gqlmodel.TorrentMutation{}, []protocol.ID{id})
