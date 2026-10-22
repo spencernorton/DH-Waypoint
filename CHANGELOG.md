@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+## 5.6.1 — 2026-10-22
+
+- A classifier delete decided while catalogue recovery is disabled is now
+  held without failing its `process_torrent` job. Ordinary rows in the batch
+  were already committed and nothing is removed; failing the job only retried
+  the same classification (including its LLM calls) for the same verdict and
+  left a failed queue row per batch. The new
+  `dh_waypoint_classifier_delete_held_total{content_type,rule}` counter
+  records each held delete. Protected sources and the operator GraphQL delete
+  still refuse with their existing errors.
+- Build with Go 1.26.10 (`golang:1.26.10-alpine3.23@sha256:107301490755aa2ea1b0b43788b6e62cff2faae45a538028b193becc06aaffba`)
+  for GO-2026-6809 in `crypto/x509`.
+
 ## 5.6.0 — 2026-10-18
 
 - REST v1 read API: `GET /api/v1/search`, `/api/v1/torrents/:hash`,

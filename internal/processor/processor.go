@@ -10,6 +10,7 @@ import (
 
 	"github.com/spencernorton/DH-Waypoint/internal/anime"
 	"github.com/spencernorton/DH-Waypoint/internal/blocking"
+	"github.com/spencernorton/DH-Waypoint/internal/cataloguerecovery"
 	"github.com/spencernorton/DH-Waypoint/internal/classifier"
 	"github.com/spencernorton/DH-Waypoint/internal/classifier/classification"
 	"github.com/spencernorton/DH-Waypoint/internal/classifier/contentfilter"
@@ -366,7 +367,17 @@ func (c processor) Process(ctx context.Context, params MessageParams) error {
 	}
 
 	if err := c.persist(ctx, payload); err != nil {
-		return err
+		if !errors.Is(err, cataloguerecovery.ErrDisabled) {
+			return err
+		}
+		// Removal is held while the recovery foundation is off. Ordinary rows
+		// already committed and nothing was removed, so failing the job would
+		// only retry the same classification (and its LLM calls) for the same
+		// verdict. Record the hold and complete.
+		for _, observation := range deleteObservations {
+			c.deleteMetrics.ObserveHeld(observation.contentType, observation.err)
+		}
+		deleteObservations = nil
 	}
 
 	if c.coreRecorder != nil {
