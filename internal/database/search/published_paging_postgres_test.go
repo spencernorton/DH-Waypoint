@@ -21,25 +21,27 @@ func TestPublishedPagingOrdersContentSiblings(t *testing.T) {
 	_, err = f.pool.Exec(ctx, `UPDATE torrent_contents SET published_at='2026-01-01'::timestamptz`)
 	require.NoError(t, err)
 	s := f.serving(t, true)
-	options := append(adultServingExactOptions(model.TableNameTorrentContent),
-		query.OrderBy(TorrentContentOrderByPublishedAt.Clauses(OrderDirectionDescending)...))
-	full, err := s.TorrentContent(ctx, options...)
-	require.NoError(t, err)
-	require.Len(t, full.Items, 4)
-	var siblingIDs []string
-	for _, item := range full.Items {
-		if item.InfoHash == f.hashes[4] {
-			siblingIDs = append(siblingIDs, item.ID)
-		}
-	}
-	require.Len(t, siblingIDs, 2)
-	require.Greater(t, siblingIDs[0], siblingIDs[1], "equal published_at/hash needs the unique row ID tiebreaker")
-	for i, item := range full.Items {
-		pageOpts := append(append([]query.Option{}, options...), query.Offset(uint(i)), query.Limit(1), query.WithHasNextPage(true))
-		page, err := s.TorrentContent(ctx, pageOpts...)
+	for _, direction := range []OrderDirection{OrderDirectionAscending, OrderDirectionDescending} {
+		// Restrict to the two exact ties so a different ordering of unrelated
+		// hashes cannot accidentally conceal an unspecified sibling order.
+		options := append(adultServingExactOptions(model.TableNameTorrentContent),
+			query.Where(TorrentContentInfoHashCriteria(f.hashes[4])),
+			query.OrderBy(TorrentContentOrderByPublishedAt.Clauses(direction)...))
+		full, err := s.TorrentContent(ctx, options...)
 		require.NoError(t, err)
-		require.Len(t, page.Items, 1)
-		require.Equal(t, item.ID, page.Items[0].ID)
-		require.Equal(t, i < len(full.Items)-1, page.HasNextPage)
+		require.Len(t, full.Items, 2)
+		if direction == OrderDirectionAscending {
+			require.Less(t, full.Items[0].ID, full.Items[1].ID)
+		} else {
+			require.Greater(t, full.Items[0].ID, full.Items[1].ID)
+		}
+		for i, item := range full.Items {
+			pageOpts := append(append([]query.Option{}, options...), query.Offset(uint(i)), query.Limit(1), query.WithHasNextPage(true))
+			page, err := s.TorrentContent(ctx, pageOpts...)
+			require.NoError(t, err)
+			require.Len(t, page.Items, 1)
+			require.Equal(t, item.ID, page.Items[0].ID)
+			require.Equal(t, i < len(full.Items)-1, page.HasNextPage)
+		}
 	}
 }

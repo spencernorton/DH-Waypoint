@@ -68,6 +68,9 @@ timestamps, source facts and file inventory. There are 95% single-file rows,
 title, season, episode, resolution, release and group tokens. Five percent share
 one hot identity; the long tail spans about one million other identities.
 These are declared synthetic assumptions, not measurements of a live catalogue.
+The scale fixture has one content projection per torrent; a separate PostgreSQL
+regression covers content siblings. File-heavy and multi-content catalogues
+need their own population qualification.
 
 The same physical corpus supports raw-name FTS and accepted-identity retrieval.
 Raw-name queries read `torrents.tsv`, including a regression with the content
