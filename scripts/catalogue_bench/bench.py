@@ -87,6 +87,9 @@ CANDIDATE_INDEXES = [
  "CREATE INDEX tc_episodes_gin ON torrent_contents USING gin(episodes)",
  "CREATE INDEX ca_external ON content_attributes(source,value,content_type,content_source,content_id) WHERE key='id'",
 ]
+IDENTITY_PAGE_INDEX = """CREATE INDEX tc_identity_page ON torrent_contents(
+ content_type,content_source,content_id,published_at DESC,info_hash DESC,id DESC)
+ WHERE content_id IS NOT NULL"""
 
 # Current catalogue authority is read separately from attributed plugin proposals.
 ELIGIBLE = """EXISTS (SELECT 1 FROM torrents t WHERE t.info_hash=tc.info_hash AND NOT t.private)
@@ -494,6 +497,26 @@ def run(conn,args):
 
 def indexes(conn,args):
     conn.execute("SET statement_timeout=0")
+    if args.variant=='selected':
+        # Qualify the compact serving set separately: the raw B-tree cannot
+        # implement @@, and current episode predicates do not use whole-JSON GIN.
+        statements=[sql for sql in CANDIDATE_INDEXES if 'tc_episodes_gin' not in sql]
+        statements.append(IDENTITY_PAGE_INDEX)
+        for sql in statements:
+            start=time.perf_counter()
+            statement=sql.replace('CREATE INDEX ','CREATE INDEX CONCURRENTLY IF NOT EXISTS ')
+            conn.execute(statement)
+            emit(args.out,{"kind":"index_change","variant":args.variant,"sql":statement,"seconds":time.perf_counter()-start})
+        for name in ['raw_tsv_btree','tc_episodes_gin']:
+            start=time.perf_counter()
+            statement='DROP INDEX CONCURRENTLY IF EXISTS '+name
+            conn.execute(statement)
+            emit(args.out,{"kind":"index_change","variant":args.variant,"sql":statement,"seconds":time.perf_counter()-start})
+        conn.execute('ANALYZE')
+        storage(conn,args)
+        return
+    conn.execute('DROP INDEX IF EXISTS tc_identity_page')
+    conn.execute('CREATE INDEX IF NOT EXISTS raw_tsv_btree ON torrents(tsv)')
     for sql in CANDIDATE_INDEXES:
         name=sql.split()[2]
         statement=(sql.replace("CREATE INDEX ","CREATE INDEX IF NOT EXISTS ") if args.variant=="candidate"
@@ -517,7 +540,7 @@ def main():
     p.add_argument("--updates",action="store_true")
     p.add_argument("--ingest",action="store_true",help="append real synthetic torrent/file transactions during updates, then remove that tail")
     p.add_argument("--disposable",action="store_true")
-    p.add_argument("--variant",choices=["baseline","candidate"],default="baseline")
+    p.add_argument("--variant",choices=["baseline","candidate","selected"],default="baseline")
     p.add_argument("--cache-state",choices=["warm","first_touch"],default="warm")
     p.add_argument("--cases")
     p.add_argument("--disk-path",default=".")
