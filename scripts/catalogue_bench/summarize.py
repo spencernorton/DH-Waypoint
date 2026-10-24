@@ -13,12 +13,16 @@ p.add_argument("inputs",nargs="+",type=Path)
 p.add_argument("--out",required=True,type=Path)
 args=p.parse_args()
 files=[]
+labels={}
 for item in args.inputs:
-    files.extend(sorted([*item.rglob('*.jsonl'),*item.rglob('*.jsonl.gz')]) if item.is_dir() else [item])
+    selected=sorted([*item.rglob('*.jsonl'),*item.rglob('*.jsonl.gz')]) if item.is_dir() else [item]
+    files.extend(selected)
+    for file in selected:
+        labels[file]=str(Path(item.name)/file.relative_to(item)) if item.is_dir() else str(Path(item.parent.name)/item.name)
 if not files:
     p.error("no raw JSONL files found")
-if len({f.name for f in files})!=len(files):
-    p.error("duplicate raw filenames; select one qualified run instead of mixing pilots")
+if len(set(labels.values()))!=len(files):
+    p.error("duplicate raw paths; select distinct qualified run folders")
 groups=defaultdict(lambda:{"samples":[],"errors":0,"skipped":0,"counts":set(),"files":set()})
 storage=[]
 writes=[]
@@ -38,7 +42,8 @@ def key(row):
 
 
 for file in files:
-    inventory.append({"name":file.name,"sha256":hashlib.sha256(file.read_bytes()).hexdigest(),"bytes":file.stat().st_size})
+    label=labels[file]
+    inventory.append({"name":label,"sha256":hashlib.sha256(file.read_bytes()).hexdigest(),"bytes":file.stat().st_size})
     context={}
     reader=gzip.open if file.suffix=='.gz' else open
     with reader(file,'rt') as source:
@@ -51,25 +56,25 @@ for file in files:
             if kind in ['sample','sample_error','sample_skipped','warmup_error']:
                 data={**context,**row}
                 group=groups[key(data)]
-                group['files'].add(file.name)
+                group['files'].add(label)
                 if kind=='sample':
                     group['samples'].append(row['ms']);group['counts'].add(row['count'])
                 elif kind=='sample_skipped':group['skipped']+=1
                 else:group['errors']+=1
-            elif kind=='storage':storage.append({"file":file.name,**row})
+            elif kind=='storage':storage.append({"file":label,**row})
             elif kind=='update_summary' and row.get('batches'):
                 batches=row['batches']
                 seconds=row['seconds']
-                writes.append({"file":file.name,"rows":row['rows'],"variant":row['variant'],"seconds":seconds,
+                writes.append({"file":label,"rows":row['rows'],"variant":row['variant'],"seconds":seconds,
                   "updated_torrents":row['updated_rows'],"inserted_torrents":row.get('inserted_rows',0),
                   "updates_per_second":row['updated_rows']/seconds,
                   "inserts_per_second":row.get('inserted_rows',0)/seconds,
                   "batch_errors":sum('error' in b for b in batches)})
-            elif kind in ['index_change','index_build']:indexes.append({"file":file.name,**row})
-            elif kind=='reindex':reindex.append({"file":file.name,**row})
+            elif kind in ['index_change','index_build']:indexes.append({"file":label,**row})
+            elif kind=='reindex':reindex.append({"file":label,**row})
             elif kind=='crash_recovery':recovery.append(row)
             elif kind in ['correctness','page_correctness','authority_check','raw_without_projection']:
-                correctness.append({"file":file.name,**row})
+                correctness.append({"file":label,**row})
             elif kind in ['manifest','prepared_manifest']:manifests.append(row)
             elif kind=='scale_complete':complete.add(row['rows'])
             elif kind in ['stage_start','stage_end']:stages.append(row)
