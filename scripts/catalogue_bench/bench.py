@@ -417,6 +417,7 @@ def run(conn,args):
     counter=[]
     initial_max=conn.execute("SELECT max(n) FROM torrents").fetchone()[0]
     updater=threading.Thread(target=writer,args=(args,stop,counter)) if args.updates else None
+    load_start=time.perf_counter()
     if updater:
         updater.start()
     jobs=[(name,sql,i) for i in range(args.samples) for name,sql in queries.items()]
@@ -459,7 +460,8 @@ def run(conn,args):
         if updater:
             updater.join(timeout=35)
     seconds=time.perf_counter()-start
-    emit(args.out,{"kind":"update_summary","variant":args.variant,"rows":rows,"seconds":seconds,
+    emit(args.out,{"kind":"update_summary","variant":args.variant,"rows":rows,
+                   "seconds":time.perf_counter()-load_start,"query_seconds":seconds,
                    "updated_rows":sum(x.get('rows',0) for x in counter),
                    "inserted_rows":sum(x.get('inserted_rows',0) for x in counter),"batches":counter})
     if args.ingest:
