@@ -308,7 +308,7 @@ func (gq *genericQuery[T]) doItems() {
 // primitive. Hydration of the representative's Torrent/Content happens via the
 // usual callbacks. Grouped mode never races the default/CTE strategies.
 func (gq *genericQuery[T]) doItemsGrouped() {
-	if items, complete, err := gq.groupedPrefixItems(); err != nil {
+	if items, complete, err := gq.groupedPrefixItemsWithSearchBudget(); err != nil {
 		gq.addError(err)
 		return
 	} else if complete {

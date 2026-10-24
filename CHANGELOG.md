@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Bound the optional grouped candidate-prefix strategy to two seconds for
+  full-text searches, then use the existing exact grouped query while the
+  caller's deadline remains live. Fast searches and unfiltered browsing retain
+  their optimization; database errors and caller cancellation still propagate.
+
 - Bound GraphQL body/document/parser work, expanded selections and aliases,
   page sizes, input lists and caller-selected count budgets before resolvers
   run, including cached/persisted operations. GraphQL accepts JSON POST only.

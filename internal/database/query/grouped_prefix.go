@@ -1,15 +1,38 @@
 package query
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/spencernorton/DH-Waypoint/internal/database/dao"
 	"github.com/spencernorton/DH-Waypoint/internal/model"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
+
+const groupedPrefixSearchBudget = 2 * time.Second
+
+// A selective full-text predicate can make the ordered prefix less efficient
+// than grouping the complete matching set. Bound only that optional attempt;
+// the authoritative grouped query retains the caller's original context.
+func (gq *genericQuery[T]) groupedPrefixItemsWithSearchBudget() ([]T, bool, error) {
+	b, ok := gq.builder.(optionBuilder)
+	if !ok || b.tsquery == "" {
+		return gq.groupedPrefixItems()
+	}
+	ctx, cancel := context.WithTimeout(gq.ctx, groupedPrefixSearchBudget)
+	prefix := genericQuery[T]{ctx: ctx, daoQ: gq.daoQ, factory: gq.factory, builder: gq.builder}
+	items, complete, err := prefix.groupedPrefixItems()
+	expired := ctx.Err() == context.DeadlineExceeded
+	cancel()
+	if err != nil && expired && gq.ctx.Err() == nil {
+		return nil, false, nil
+	}
+	return items, complete, err
+}
 
 // groupedPrefixItems tests an ordered, fully eligible candidate prefix rather
 // than sorting every release before returning a small grouped page. A candidate
