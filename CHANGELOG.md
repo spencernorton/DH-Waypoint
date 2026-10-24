@@ -8,6 +8,14 @@
   GraphQL and REST catalogue work now inherits a 30-second context deadline
   with bounded socket reads/writes; header and idle timeouts protect the HTTP
   listener while separate streaming imports retain their existing behavior.
+- Published content pages use `(published_at, info_hash, id)` for a complete
+  order, including several content rows belonging to one torrent. Add a disposable
+  catalogue SQL harness for deterministic scale, correctness, concurrent writes,
+  cold/warm queries, index bytes, reindexing and recovery qualification.
+- Add concurrent indexes for complete published pages, typed published pages and
+  reverse external-ID lookup. Keep serving checks before pagination; raw v2
+  substring indexing remains in migration 00071. Remove the unused historical
+  raw tsvector B-tree; rollback restores it.
 
 - REST search returns `total_count_is_estimate` alongside `total_count`, so
   clients can distinguish an approximate total from an exact count. The flag

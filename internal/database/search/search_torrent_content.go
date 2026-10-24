@@ -8,7 +8,6 @@ import (
 	"github.com/spencernorton/DH-Waypoint/internal/model"
 	"gorm.io/gen"
 	"gorm.io/gen/field"
-	"gorm.io/gorm/clause"
 )
 
 type TorrentContentResultItem struct {
@@ -54,17 +53,7 @@ func TorrentContentDefaultOption() query.Option {
 		query.DefaultOption(),
 		TorrentContentDefaultHydrate(),
 		TorrentContentCoreJoins(),
-		query.OrderBy(
-			query.OrderByColumn{
-				OrderByColumn: clause.OrderByColumn{
-					Column: clause.Column{
-						Table: clause.CurrentTable,
-						Name:  "published_at",
-					},
-					Desc: true,
-				},
-			},
-		),
+		query.OrderBy(TorrentContentOrderByPublishedAt.Clauses(OrderDirectionDescending)...),
 	)
 }
 
