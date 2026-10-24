@@ -330,7 +330,7 @@ def verify_page(conn,args,name,result):
         trusted=(n//20)%10<7
         if n%199==0 or n%211==0 or (trusted and family%101==0):
             raise RuntimeError(f"ineligible result from {name}")
-        if name in ['identity_hot','identity_join','identity_episode_quality'] and not (family==1 and trusted):
+        if name in ['identity_hot','identity_join','identity_episode_quality','external_hot'] and not (family==1 and trusted):
             raise RuntimeError(f"wrong canonical identity from {name}")
         if name=='identity_episode_quality' and not (n%8==0 and n%10==0 and (n%11==0 or n%24==4)):
             raise RuntimeError('wrong canonical episode/quality candidate')
@@ -393,6 +393,21 @@ def verify_page(conn,args,name,result):
             expected.append((n%100000,h))
         if hashes!=[h for _,h in sorted(expected,reverse=True)[:100]]:
             raise RuntimeError('combined identity/episode/quality page differs from complete oracle')
+    if name=='external_hot':
+        rows=conn.execute('SELECT max(n) FROM torrents').fetchone()[0]
+        expected=[]
+        # Enumerate timestamp groups newest first; finish the group that fills
+        # the page so its hash ties are independently ordered too.
+        for stamp in range(min(rows,99999),-1,-1):
+            if stamp%20 or (stamp//20)%10>=7:continue
+            for n in range(stamp or 100000,rows+1,100000):
+                if n%199==0 or n%211==0:continue
+                h=bytes.fromhex(hashlib.md5(('synthetic-'+str(n)).encode()).hexdigest()+
+                                hashlib.md5(('tail-'+str(n)).encode()).hexdigest()[:8])
+                expected.append((stamp,h))
+            if len(expected)>=100:break
+        if hashes!=[h for _,h in sorted(expected,reverse=True)[:100]]:
+            raise RuntimeError('hot external-ID page differs from independent complete oracle')
     emit(args.out,{"kind":"page_correctness","case":name,"checked":len(result),"failures":0})
 
 
