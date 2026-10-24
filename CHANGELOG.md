@@ -7,6 +7,11 @@
   is always present, including `false`, and documented in OpenAPI. REST stats
   likewise returns `torrent_contents_is_estimate` with its catalogue total.
 
+- Add algorithm-aware torrent identity and bounded BEP 52 metadata validation
+  foundations, including verified hybrid layouts, original-info-byte hashing,
+  v2 piece-layer checks and full SHA-256 magnet helpers. Runtime integration
+  follows separately; this increment does not yet enable v2 crawling or APIs.
+
 ## 5.7.0 — 2026-10-24
 
 - GraphQL torrent search accepts `contentIdentity: {type, source, id}` to
