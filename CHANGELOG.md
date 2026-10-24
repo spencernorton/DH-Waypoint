@@ -12,6 +12,9 @@
   order, including several content rows belonging to one torrent. Add a disposable
   catalogue SQL harness for deterministic scale, correctness, concurrent writes,
   cold/warm queries, index bytes, reindexing and recovery qualification.
+- Add concurrent indexes for complete published pages, typed published pages and
+  reverse external-ID lookup. Keep serving checks before pagination; raw v2
+  substring indexing remains in migration 00071.
 
 - REST search returns `total_count_is_estimate` alongside `total_count`, so
   clients can distinguish an approximate total from an exact count. The flag
