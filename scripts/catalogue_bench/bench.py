@@ -320,8 +320,10 @@ def verify_page(conn,args,name,result):
         trusted=(n//20)%10<7
         if n%199==0 or n%211==0 or (trusted and family%101==0):
             raise RuntimeError(f"ineligible result from {name}")
-        if name in ['identity_hot','identity_join'] and not (family==1 and trusted):
+        if name in ['identity_hot','identity_join','identity_episode_quality'] and not (family==1 and trusted):
             raise RuntimeError(f"wrong canonical identity from {name}")
+        if name=='identity_episode_quality' and not (n%8==0 and n%10==0 and (n%11==0 or n%24==4)):
+            raise RuntimeError('wrong canonical episode/quality candidate')
         if name in ['identity_rare','external_correlated','external_identifier','external_keyset'] and not (family==123456 and trusted):
             raise RuntimeError(f"wrong rare or external identity from {name}")
         if name in ['text_hot','raw_text_hot','enriched_with_fallback','enriched_bounded_fallback'] and family!=1:
