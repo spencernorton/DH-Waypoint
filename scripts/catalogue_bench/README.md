@@ -68,9 +68,14 @@ the concurrent ingestion phase, which always runs with the tested index set.
 After the main suite, `prepared.py --out results/prepared.jsonl --variant candidate`
 compares forced generic and custom plans without changing the corpus. The
 `indexes --variant selected` experiment removes the unused raw B-tree and the
-episode GIN, retains raw-name/external-ID/page indexes, and adds an ordered
-canonical-ID index to test skew-sensitive prepared plans. It uses concurrent
-index creation. Retain or reject those choices from the measurements.
+episode GIN, replaces the experimental raw TSV GIN with the v2 API's literal
+name-substring trigram index, retains external-ID/page indexes, and adds an
+ordered canonical-ID index to test skew-sensitive prepared plans. It uses
+concurrent index creation. Retain or reject those choices from the measurements.
+The original 25-case mix stays fixed. Request the supplemental v2 profile with
+`--cases raw_substring_hot,raw_substring_rare,raw_substring_miss,raw_substring_wildcard`.
+It uses escaped `ILIKE`, canonical-hash ordering and 101 rows for a 100-row page
+plus has-next-page. This is separate from the token-based full-text experiment.
 
 Additional cold queries can use `run_suite.py --cold-only --skip-seed` with one
 already loaded size, the current `--variants` label, and `--cold-cases` containing

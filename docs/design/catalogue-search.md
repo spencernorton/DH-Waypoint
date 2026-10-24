@@ -84,6 +84,12 @@ GIN is the [documented preferred text-search index](https://www.postgresql.org/d
 Benchmark raw GIN explicitly rather than assuming a content index covers
 unprocessed source rows.
 
+REST v2 instead implements literal case-insensitive substrings with escaped
+`ILIKE`, a minimum three-character query and canonical-hash cursors. Migration
+00071 supplies its `GIN(name gin_trgm_ops)` index. Token-based TSV results are
+an alternative SQL workload, not a measurement of that API. Qualify substring
+queries and trigram construction separately before promoting API expectations.
+
 Ordered page indexes can avoid sorting a large candidate set for `LIMIT`.
 The [ordering documentation](https://www.postgresql.org/docs/16/indexes-ordering.html)
 explains that tradeoff. Extra indexes also consume bytes and make updates more
