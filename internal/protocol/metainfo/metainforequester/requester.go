@@ -37,7 +37,7 @@ const (
 	// ExtensionBitFast http://www.bittorrent.org/beps/bep_0006.html
 	ExtensionBitFast = 2
 	// ExtensionBitV2 "Hybrid torrent legacy to v2 upgrade"
-	ExtensionBitV2                           = 7
+	ExtensionBitV2                           = 4
 	ExtensionBitAzureusExtensionNegotiation1 = 16
 	ExtensionBitAzureusExtensionNegotiation2 = 17
 	// ExtensionBitLtep LibTorrent Extension Protocol, http://www.bittorrent.org/beps/bep_0010.html
@@ -79,7 +79,25 @@ type HandshakeInfo struct {
 
 type Response struct {
 	HandshakeInfo
-	Info metainfo.Info
+	Info      metainfo.Info
+	Validated metainfo.ValidatedInfo
+}
+
+type expectedIdentityKey struct{}
+
+// RequestInfoHash fetches metadata for a complete identity through the same
+// reputation, rate-limit, timeout and metrics chain as discovery requests.
+// The full digest is checked before decoding; wire truncation is local here.
+func RequestInfoHash(ctx context.Context, r Requester, hash protocol.InfoHash, addr netip.AddrPort) (Response, error) {
+	if err := hash.Validate(); err != nil {
+		return Response{}, err
+	}
+	ctx = context.WithValue(ctx, expectedIdentityKey{}, hash)
+	res, err := r.Request(ctx, hash.WireID(), addr)
+	if err == nil && !res.Validated.Identities.Contains(hash) {
+		return Response{}, metainfo.ErrWrongInfoHash
+	}
+	return res, err
 }
 
 func (r requester) Request(ctx context.Context, infoHash protocol.ID, addr netip.AddrPort) (Response, error) {
@@ -114,14 +132,21 @@ func (r requester) Request(ctx context.Context, infoHash protocol.ID, addr netip
 		return Response{}, readAllPiecesErr
 	}
 
-	parsed, parseErr := metainfo.ParseMetaInfoBytes(infoHash, pieces)
+	var parsed metainfo.ValidatedInfo
+	var parseErr error
+	if expected, ok := ctx.Value(expectedIdentityKey{}).(protocol.InfoHash); ok {
+		parsed, parseErr = metainfo.ParseInfoBytes(expected, pieces)
+	} else {
+		parsed, parseErr = metainfo.ParseDiscoveredInfo(infoHash, pieces)
+	}
 	if parseErr != nil {
 		return Response{}, parseErr
 	}
 
 	return Response{
 		HandshakeInfo: hsInfo,
-		Info:          parsed,
+		Info:          parsed.Info,
+		Validated:     parsed,
 	}, nil
 }
 
@@ -171,7 +196,7 @@ func btHandshake(rw io.ReadWriter, infoHash protocol.ID, clientID protocol.ID) (
 	if n, hsErr := rw.Write(handshakeBytes); hsErr != nil {
 		return HandshakeInfo{}, hsErr
 	} else if n != 68 {
-		panic("handshake bytes must have length 68")
+		return HandshakeInfo{}, io.ErrShortWrite
 	}
 
 	handshakeResponse := make([]byte, 68)
@@ -236,7 +261,7 @@ const (
 )
 
 func exHandshake(rw io.ReadWriter) (metadataSize uint, utMetadata uint8, err error) {
-	if _, writeErr := rw.Write([]byte("\x00\x00\x00\x1a\x14\x00d1:md11:ut_metadatai1eee")); err != nil {
+	if _, writeErr := rw.Write([]byte("\x00\x00\x00\x1a\x14\x00d1:md11:ut_metadatai1eee")); writeErr != nil {
 		err = writeErr
 		return
 	}

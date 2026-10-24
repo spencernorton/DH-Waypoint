@@ -68,9 +68,9 @@ func New(p Params) (Result, error) {
 				if ctx.Bool("localSearchDisabled") {
 					flags["local_search_enabled"] = false
 				}
-				var infoHashes []protocol.ID
+				var infoHashes []protocol.InfoHash
 				for _, infoHash := range ctx.StringSlice("infoHash") {
-					id, err := protocol.ParseID(infoHash)
+					id, err := protocol.ParseInfoHash(infoHash)
 					if err != nil {
 						return err
 					}

@@ -14,8 +14,10 @@ func (s *Store) nameAdmission(ctx context.Context, tx pgx.Tx, hash []byte, stage
 	if err := tx.QueryRow(ctx, `SELECT t.name,CASE WHEN EXISTS(SELECT 1 FROM torrent_contents c WHERE c.info_hash=t.info_hash AND c.content_type='xxx') THEN 'xxx' ELSE '' END FROM torrents t WHERE t.info_hash=$1 FOR SHARE`, hash).Scan(&name, &kind); err != nil {
 		return ErrHeld
 	}
-	var id protocol.ID
-	copy(id[:], hash)
+	var id protocol.InfoHash
+	if id.Scan(hash) != nil {
+		return ErrHeld
+	}
 	d := s.namePolicy.EvaluateClassified(id, name, kind)
 	if !d.Eligible {
 		s.namePolicy.Observe(stage, d)

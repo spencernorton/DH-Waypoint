@@ -74,7 +74,7 @@ func TestNewExporter_NoOpWhenDisabled(t *testing.T) {
 	cfg := NewDefaultConfig()
 	cfg.ExportEnabled = false
 	exp := NewExporter(cfg, nil, NewMetrics())
-	exp.Record(context.Background(), protocol.ID{1, 2, 3}, "preteen.thing", nil)
+	exp.Record(context.Background(), protocol.InfoHash{1, 2, 3}, "preteen.thing", nil)
 	if err := exp.Close(); err != nil {
 		t.Fatalf("Close error: %v", err)
 	}
@@ -89,12 +89,12 @@ func TestExporter_AppendsLocalJSONL(t *testing.T) {
 	exp := NewExporter(cfg, nil, NewMetrics())
 	defer exp.Close()
 
-	var ih protocol.ID
+	var ih protocol.InfoHash
 	for i := range ih {
 		ih[i] = byte(i + 0x10)
 	}
 	exp.Record(context.Background(), ih, "underage.thing", nil)
-	exp.Record(context.Background(), protocol.ID{1, 2, 3}, "totally.fine.movie.2024", nil) // should be skipped
+	exp.Record(context.Background(), protocol.InfoHash{1, 2, 3}, "totally.fine.movie.2024", nil) // should be skipped
 
 	if err := exp.Close(); err != nil {
 		t.Fatalf("Close error: %v", err)
@@ -163,7 +163,7 @@ func TestExporter_UpstreamPOST(t *testing.T) {
 	exp := NewExporter(cfg, nil, NewMetrics())
 	defer exp.Close()
 
-	exp.Record(context.Background(), protocol.ID{1, 2, 3}, "preteen.thing", nil)
+	exp.Record(context.Background(), protocol.InfoHash{1, 2, 3}, "preteen.thing", nil)
 	if got := atomic.LoadInt32(&hits); got != 1 {
 		t.Errorf("upstream hits = %d, want 1", got)
 	}

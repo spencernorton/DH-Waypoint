@@ -27,29 +27,29 @@ func (r *mutationResolver) Queue(ctx context.Context) (gqlmodel.QueueMutation, e
 
 // Delete is the resolver for the delete field.
 func (r *torrentMutationResolver) Delete(ctx context.Context, obj *gqlmodel.TorrentMutation, infoHashes []protocol.ID) (*string, error) {
-	err := r.BlockingManager.Block(ctx, infoHashes, "operator", "manual_operator_block", true)
+	err := r.BlockingManager.Block(ctx, protocol.V1InfoHashes(infoHashes), "operator", "manual_operator_block", true)
 	return nil, err
 }
 
 // PutTags is the resolver for the putTags field.
 func (r *torrentMutationResolver) PutTags(ctx context.Context, obj *gqlmodel.TorrentMutation, infoHashes []protocol.ID, tagNames []string) (*string, error) {
-	return nil, r.Dao.TorrentTag.Put(ctx, infoHashes, tagNames)
+	return nil, r.Dao.TorrentTag.Put(ctx, protocol.V1InfoHashes(infoHashes), tagNames)
 }
 
 // SetTags is the resolver for the setTags field.
 func (r *torrentMutationResolver) SetTags(ctx context.Context, obj *gqlmodel.TorrentMutation, infoHashes []protocol.ID, tagNames []string) (*string, error) {
-	return nil, r.Dao.TorrentTag.Set(ctx, infoHashes, tagNames)
+	return nil, r.Dao.TorrentTag.Set(ctx, protocol.V1InfoHashes(infoHashes), tagNames)
 }
 
 // DeleteTags is the resolver for the deleteTags field.
 func (r *torrentMutationResolver) DeleteTags(ctx context.Context, obj *gqlmodel.TorrentMutation, infoHashes []protocol.ID, tagNames []string) (*string, error) {
-	return nil, r.Dao.TorrentTag.Delete(ctx, infoHashes, tagNames)
+	return nil, r.Dao.TorrentTag.Delete(ctx, protocol.V1InfoHashes(infoHashes), tagNames)
 }
 
 // Reprocess is the resolver for the reprocess field.
 func (r *torrentMutationResolver) Reprocess(ctx context.Context, obj *gqlmodel.TorrentMutation, input gen.TorrentReprocessInput) (*string, error) {
 	params := processor.MessageParams{
-		InfoHashes:      input.InfoHashes,
+		InfoHashes:      protocol.V1InfoHashes(input.InfoHashes),
 		ClassifierFlags: make(classifier.Flags),
 	}
 	if w, ok := input.ClassifierWorkflow.ValueOK(); ok {

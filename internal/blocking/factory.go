@@ -34,7 +34,7 @@ func New(params Params) Result {
 
 		return &manager{
 			pool:          pool,
-			buffer:        make(map[protocol.ID]struct{}, 1000),
+			buffer:        make(map[protocol.InfoHash]struct{}, 1000),
 			maxBufferSize: 1000,
 			maxFlushWait:  time.Minute * 5,
 		}, nil

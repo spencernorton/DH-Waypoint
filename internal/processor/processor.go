@@ -73,7 +73,7 @@ type processor struct {
 }
 
 type MissingHashesError struct {
-	InfoHashes []protocol.ID
+	InfoHashes []protocol.InfoHash
 }
 
 func (e MissingHashesError) Error() string {
@@ -145,7 +145,7 @@ func (c processor) Process(ctx context.Context, params MessageParams) error {
 		wg                 sync.WaitGroup
 		errs               []error
 		idsToDelete        []string
-		infoHashesToDelete []protocol.ID
+		infoHashesToDelete []protocol.InfoHash
 		deleteObservations []deleteObservation
 		deleteReasons      []string
 	)
@@ -153,10 +153,10 @@ func (c processor) Process(ctx context.Context, params MessageParams) error {
 	tcs := make([]model.TorrentContent, 0, len(searchResult.Torrents))
 	coreReceipts := []processingstate.Receipt{}
 
-	preserved := map[protocol.ID]*classification.ApplicationPreservation{}
-	tagsToAdd := make(map[protocol.ID]map[string]struct{})
+	preserved := map[protocol.InfoHash]*classification.ApplicationPreservation{}
+	tagsToAdd := make(map[protocol.InfoHash]map[string]struct{})
 
-	failedHashes := make([]protocol.ID, 0, len(searchResult.MissingInfoHashes))
+	failedHashes := make([]protocol.InfoHash, 0, len(searchResult.MissingInfoHashes))
 	failedHashes = append(failedHashes, searchResult.MissingInfoHashes...)
 
 	if len(failedHashes) > 0 {

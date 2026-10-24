@@ -9,7 +9,6 @@ import (
 	"github.com/spencernorton/DH-Waypoint/internal/model"
 	"github.com/spencernorton/DH-Waypoint/internal/processor"
 	"github.com/spencernorton/DH-Waypoint/internal/protocol"
-	"github.com/spencernorton/DH-Waypoint/internal/protocol/metainfo"
 	"gorm.io/gen"
 	"gorm.io/gorm/clause"
 )
@@ -33,9 +32,9 @@ func (c *crawler) runPersistTorrents(ctx context.Context) {
 
 			var queueJobsToPersist []*model.QueueJob
 
-			hashMap := make(map[protocol.ID]infoHashWithMetaInfo, len(is))
+			hashMap := make(map[protocol.InfoHash]infoHashWithMetaInfo, len(is))
 
-			var hashesToClassify []protocol.ID
+			var hashesToClassify []protocol.InfoHash
 
 			flushHashesToClassify := func() {
 				if len(hashesToClassify) > 0 {
@@ -52,60 +51,65 @@ func (c *crawler) runPersistTorrents(ctx context.Context) {
 					}
 				}
 
-				hashesToClassify = make([]protocol.ID, 0, classifyBatchSize)
+				hashesToClassify = make([]protocol.InfoHash, 0, classifyBatchSize)
 			}
 			flushHashesToClassify()
 
 			for _, i := range is {
-				d := c.namePolicy.Evaluate(i.infoHash, i.metaInfo.BestName())
+				if i.validated.Identities.V1 == nil && i.validated.Identities.V2 == nil {
+					continue
+				}
+				identity := i.validated.Identities.Canonical()
+				d := c.namePolicy.Evaluate(identity, i.validated.Info.BestName())
 				if !d.Eligible {
 					c.namePolicy.Observe("crawler_acquisition", d)
 					continue
 				}
-				if _, ok := hashMap[i.infoHash]; ok {
+				if _, ok := hashMap[identity]; ok {
 					continue
 				}
 
-				hashMap[i.infoHash] = i
+				i.nodeHasPeersForHash.identity = &identity
+				hashMap[identity] = i
 
-				if t, err := createTorrentModel(
-					i.infoHash, i.metaInfo, c.savePieces, c.saveFilesThreshold); err != nil {
-					c.logger.Errorf("error creating torrent model: %s", err.Error())
-				} else {
-					for _, f := range t.Files {
-						fc := f
-						torrentFilesToPersist = append(torrentFilesToPersist, &fc)
-					}
+				t := model.TorrentFromMetadata(i.validated, "dht", c.savePieces, c.saveFilesThreshold)
+				for _, f := range t.Files {
+					fc := f
+					torrentFilesToPersist = append(torrentFilesToPersist, &fc)
+				}
 
-					t.Files = nil
-					for _, s := range t.Sources {
-						sc := s
-						torrentSourcesToPersist = append(torrentSourcesToPersist, &sc)
-					}
+				t.Files = nil
+				for _, s := range t.Sources {
+					sc := s
+					torrentSourcesToPersist = append(torrentSourcesToPersist, &sc)
+				}
 
-					t.Sources = nil
-					if c.savePieces {
-						pc := t.Pieces
-						torrentPiecesToPersist = append(torrentPiecesToPersist, &pc)
-						t.Pieces = model.TorrentPieces{}
-					}
+				t.Sources = nil
+				if c.savePieces && len(t.Pieces.Pieces) > 0 {
+					pc := t.Pieces
+					torrentPiecesToPersist = append(torrentPiecesToPersist, &pc)
+					t.Pieces = model.TorrentPieces{}
+				}
 
-					torrentsToPersist = append(torrentsToPersist, &t)
+				torrentsToPersist = append(torrentsToPersist, &t)
 
-					hashesToClassify = append(hashesToClassify, i.infoHash)
-					if len(hashesToClassify) >= classifyBatchSize {
-						flushHashesToClassify()
-					}
+				hashesToClassify = append(hashesToClassify, identity)
+				if len(hashesToClassify) >= classifyBatchSize {
+					flushHashesToClassify()
 				}
 			}
 
 			flushHashesToClassify()
+			if len(torrentsToPersist) == 0 {
+				continue
+			}
 
 			if persistErr := c.dao.Transaction(func(tx *dao.Query) error {
 				if err := tx.WithContext(ctx).Torrent.Clauses(clause.OnConflict{
 					Columns: []clause.Column{{Name: string(c.dao.Torrent.InfoHash.ColumnName())}},
 					DoUpdates: clause.AssignmentColumns([]string{
 						string(c.dao.Torrent.Name.ColumnName()),
+						string(c.dao.Torrent.InfoHashV2.ColumnName()),
 						string(c.dao.Torrent.FilesStatus.ColumnName()),
 						string(c.dao.Torrent.FilesCount.ColumnName()),
 						string(c.dao.Torrent.UpdatedAt.ColumnName()),
@@ -125,7 +129,7 @@ func (c *crawler) runPersistTorrents(ctx context.Context) {
 				}).CreateInBatches(torrentSourcesToPersist, 100); err != nil {
 					return err
 				}
-				if c.savePieces {
+				if c.savePieces && len(torrentPiecesToPersist) > 0 {
 					if err := tx.WithContext(ctx).TorrentPieces.Clauses(clause.OnConflict{
 						DoNothing: true,
 					}).CreateInBatches(torrentPiecesToPersist, 10); err != nil {
@@ -150,70 +154,6 @@ func (c *crawler) runPersistTorrents(ctx context.Context) {
 			}
 		}
 	}
-}
-
-func createTorrentModel(
-	hash protocol.ID,
-	info metainfo.Info,
-	savePieces bool,
-	saveFilesThreshold uint,
-) (model.Torrent, error) {
-	name := info.BestName()
-
-	private := false
-	if info.Private != nil {
-		private = *info.Private
-	}
-
-	var filesCount model.NullUint
-
-	filesStatus := model.FilesStatusSingle
-	if len(info.Files) > 0 {
-		filesStatus = model.FilesStatusMulti
-		filesCount = model.NewNullUint(uint(len(info.Files)))
-	}
-
-	files := make([]model.TorrentFile, 0, min(int(saveFilesThreshold), len(info.Files)))
-
-	for i, file := range info.Files {
-		if i >= int(saveFilesThreshold) {
-			filesStatus = model.FilesStatusOverThreshold
-			break
-		}
-
-		files = append(files, model.TorrentFile{
-			InfoHash: hash,
-			Index:    uint(i),
-			Path:     file.DisplayPath(&info),
-			Size:     uint(file.Length),
-		})
-	}
-
-	var pieces model.TorrentPieces
-	if savePieces {
-		pieces = model.TorrentPieces{
-			InfoHash:    hash,
-			PieceLength: info.PieceLength,
-			Pieces:      info.Pieces,
-		}
-	}
-
-	return model.Torrent{
-		InfoHash:    hash,
-		Name:        name,
-		Size:        uint(info.TotalLength()),
-		Private:     private,
-		Pieces:      pieces,
-		Files:       files,
-		FilesStatus: filesStatus,
-		FilesCount:  filesCount,
-		Sources: []model.TorrentsTorrentSource{
-			{
-				Source:   "dht",
-				InfoHash: hash,
-			},
-		},
-	}, nil
 }
 
 const classifyBatchSize = 100
@@ -276,12 +216,16 @@ func (c *crawler) runPersistSources(ctx context.Context) {
 func createTorrentSourceModel(
 	result infoHashWithScrape,
 ) (model.TorrentsTorrentSource, error) {
+	identity := protocol.InfoHashV1(result.infoHash)
+	if result.identity != nil {
+		identity = *result.identity
+	}
 	seeders := model.NewNullUint(uint(result.bfsd.ApproximatedSize()))
 	leechers := model.NewNullUint(uint(result.bfpe.ApproximatedSize()))
 
 	return model.TorrentsTorrentSource{
 		Source:   "dht",
-		InfoHash: result.infoHash,
+		InfoHash: identity,
 		Seeders:  seeders,
 		Leechers: leechers,
 	}, nil

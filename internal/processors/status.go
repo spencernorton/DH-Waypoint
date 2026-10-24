@@ -63,7 +63,7 @@ func (s *Store) Refresh(ctx context.Context) error {
 		code := ""
 		if err != nil {
 			code = "service_unavailable"
-		} else if observed.Processor != entry.Manifest.Processor || observed.Contract != v1.Contract {
+		} else if observed.Processor != entry.Manifest.Processor || observed.Contract != entry.Manifest.Contract {
 			code = "service_identity_mismatch"
 		}
 		if code != "" {

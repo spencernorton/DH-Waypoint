@@ -38,7 +38,7 @@ func New(p Params) (Result, error) {
 			if err != nil {
 				return err
 			}
-			var hashes []protocol.ID
+			var hashes []protocol.InfoHash
 			if err = decode(raw, &hashes); err != nil {
 				return err
 			}

@@ -16,13 +16,13 @@ import (
 type Manager interface {
 	// IsBlocked returns true iff the infohash's double-hash is in the
 	// loaded blocklist. Hot-path call; must not allocate or block.
-	IsBlocked(infoHash protocol.ID) bool
+	IsBlocked(infoHash protocol.InfoHash) bool
 
 	// Filter returns the subset of infoHashes whose double-hash is
 	// NOT in the blocklist. Used by infohash_triage as a batch shim
 	// parallel to BlockingManager.Filter — same signature shape so
 	// the call sites read consistently.
-	Filter(infoHashes []protocol.ID) []protocol.ID
+	Filter(infoHashes []protocol.InfoHash) []protocol.InfoHash
 
 	// Refresh forces an immediate re-fetch of all configured feeds.
 	// Called periodically by a worker; can also be invoked from a

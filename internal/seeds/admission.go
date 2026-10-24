@@ -42,8 +42,8 @@ func (s *Store) withAdmission(ctx context.Context, hashes [][]byte, write bool, 
 		return nil
 	}
 	for _, hash := range hashes {
-		if len(hash) != len(protocol.ID{}) {
-			return fmt.Errorf("seeds admission: expected 20-byte hash")
+		if len(hash) != 20 && len(hash) != 32 {
+			return fmt.Errorf("seeds admission: expected full 20- or 32-byte hash")
 		}
 	}
 	pool, err := s.pool.Get()
@@ -130,8 +130,11 @@ func (s *Store) withAdmission(ctx context.Context, hashes [][]byte, write bool, 
 			rows.Close()
 			return err
 		}
-		var id protocol.ID
-		copy(id[:], hash)
+		id, parseErr := protocol.NewInfoHash(hash)
+		if parseErr != nil {
+			rows.Close()
+			return parseErr
+		}
 		classification := ""
 		if adult {
 			classification = "xxx"

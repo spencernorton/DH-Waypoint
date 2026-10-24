@@ -99,7 +99,7 @@ func New(cfg Config, logger *zap.SugaredLogger, metrics *Metrics) Manager {
 }
 
 // IsBlocked is the hot-path call. Atomic load + bloom test, no locks.
-func (s *service) IsBlocked(infoHash protocol.ID) bool {
+func (s *service) IsBlocked(infoHash protocol.InfoHash) bool {
 	if s.metrics != nil {
 		s.metrics.LookupsTotal.Inc()
 	}
@@ -113,7 +113,7 @@ func (s *service) IsBlocked(infoHash protocol.ID) bool {
 
 // Filter returns the unblocked subset, mirroring BlockingManager.Filter
 // signature so call sites read consistently.
-func (s *service) Filter(infoHashes []protocol.ID) []protocol.ID {
+func (s *service) Filter(infoHashes []protocol.InfoHash) []protocol.InfoHash {
 	bf := s.active.Load()
 	if bf == nil {
 		return infoHashes

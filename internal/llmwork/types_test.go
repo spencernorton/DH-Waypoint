@@ -52,7 +52,7 @@ func TestTaskIdentityAndBounds(t *testing.T) {
 }
 
 func TestSourceDigestTracksEvidenceNotSwarmRefresh(t *testing.T) {
-	torrent := model.Torrent{InfoHash: protocol.ID{1}, Name: "Example.Movie.2024.mkv", Size: 100, Files: []model.TorrentFile{{Index: 1, Path: "movie.eng.srt"}, {Index: 0, Path: "movie.mkv"}}}
+	torrent := model.Torrent{InfoHash: protocol.InfoHash{1}, Name: "Example.Movie.2024.mkv", Size: 100, Files: []model.TorrentFile{{Index: 1, Path: "movie.eng.srt"}, {Index: 0, Path: "movie.mkv"}}}
 	first := SourceDigest(torrent)
 	reordered := torrent
 	reordered.Files = []model.TorrentFile{torrent.Files[1], torrent.Files[0]}
@@ -84,7 +84,7 @@ func TestConfigurationIsInertAndBounded(t *testing.T) {
 }
 
 func TestSourceDigestExcludesHintObservationTimes(t *testing.T) {
-	t0 := model.Torrent{InfoHash: protocol.ID{1}, Name: "Example.Movie.2026.mkv", Hint: model.TorrentHint{ContentType: model.ContentTypeMovie, Title: model.NewNullString("Example Movie"), CreatedAt: time.Unix(1, 0), UpdatedAt: time.Unix(2, 0)}}
+	t0 := model.Torrent{InfoHash: protocol.InfoHash{1}, Name: "Example.Movie.2026.mkv", Hint: model.TorrentHint{ContentType: model.ContentTypeMovie, Title: model.NewNullString("Example Movie"), CreatedAt: time.Unix(1, 0), UpdatedAt: time.Unix(2, 0)}}
 	t1 := t0
 	t1.Hint.CreatedAt = time.Unix(3, 0)
 	t1.Hint.UpdatedAt = time.Unix(4, 0)

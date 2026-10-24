@@ -71,7 +71,7 @@ func fixtureAt(t *testing.T, version int64) (*Store, *pgxpool.Pool, *goose.Provi
 }
 func seedTorrent(t *testing.T, p *pgxpool.Pool, n byte, kind any) []byte {
 	t.Helper()
-	h := protocol.ID{n}.Bytes()
+	h := protocol.InfoHash{n}.Bytes()
 	_, e := p.Exec(testContext, `INSERT INTO torrents(info_hash,name,size,private,files_status,created_at,updated_at)VALUES($1,'Synthetic.Amber.2024.1080p.WEB-DL.H264-GROUP.mkv',734003200,false,'single',now(),now());
  INSERT INTO torrent_contents(info_hash,content_type,size,created_at,updated_at)VALUES($1,$2,734003200,now(),now());`, h, kind)
 	require.NoError(t, e)

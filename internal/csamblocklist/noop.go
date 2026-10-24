@@ -19,10 +19,10 @@ func NewNoOp() Manager {
 	return noOp{}
 }
 
-func (noOp) IsBlocked(_ protocol.ID) bool                  { return false }
-func (noOp) Filter(infoHashes []protocol.ID) []protocol.ID { return infoHashes }
-func (noOp) Refresh(_ context.Context) error               { return nil }
-func (noOp) Enabled() bool                                 { return false }
+func (noOp) IsBlocked(_ protocol.InfoHash) bool                        { return false }
+func (noOp) Filter(infoHashes []protocol.InfoHash) []protocol.InfoHash { return infoHashes }
+func (noOp) Refresh(_ context.Context) error                           { return nil }
+func (noOp) Enabled() bool                                             { return false }
 func (noOp) Snapshot() Snapshot {
 	return Snapshot{
 		PerFeed: map[string]FeedStatus{},

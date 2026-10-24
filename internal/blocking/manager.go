@@ -18,8 +18,8 @@ import (
 )
 
 type Manager interface {
-	Filter(ctx context.Context, hashes []protocol.ID) ([]protocol.ID, error)
-	Block(ctx context.Context, hashes []protocol.ID, mechanism, reason string, flush bool) error
+	Filter(ctx context.Context, hashes []protocol.InfoHash) ([]protocol.InfoHash, error)
+	Block(ctx context.Context, hashes []protocol.InfoHash, mechanism, reason string, flush bool) error
 	Flush(ctx context.Context) error
 }
 
@@ -44,14 +44,14 @@ type manager struct {
 	recovery      *cataloguerecovery.Store
 	mutex         sync.Mutex
 	pool          *pgxpool.Pool
-	buffer        map[protocol.ID]struct{}
+	buffer        map[protocol.InfoHash]struct{}
 	filter        *bloom.StableBloomFilter
 	maxBufferSize int
 	lastFlushedAt time.Time
 	maxFlushWait  time.Duration
 }
 
-func (m *manager) Filter(ctx context.Context, hashes []protocol.ID) ([]protocol.ID, error) {
+func (m *manager) Filter(ctx context.Context, hashes []protocol.InfoHash) ([]protocol.InfoHash, error) {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
 
@@ -61,14 +61,14 @@ func (m *manager) Filter(ctx context.Context, hashes []protocol.ID) ([]protocol.
 		}
 	}
 
-	filtered := make([]protocol.ID, 0, len(hashes))
+	filtered := make([]protocol.InfoHash, 0, len(hashes))
 
 	for _, hash := range hashes {
 		if _, ok := m.buffer[hash]; ok {
 			continue
 		}
 
-		if m.filter.Test(hash[:]) {
+		if m.filter.Test(hash.Bytes()) {
 			continue
 		}
 
@@ -88,17 +88,19 @@ func (m *manager) Filter(ctx context.Context, hashes []protocol.ID) ([]protocol.
 		if err != nil {
 			return nil, err
 		}
-		filtered = make([]protocol.ID, 0, len(recovered))
+		filtered = make([]protocol.InfoHash, 0, len(recovered))
 		for _, h := range recovered {
-			var id protocol.ID
-			copy(id[:], h)
+			id, err := protocol.NewInfoHash(h)
+			if err != nil {
+				return nil, err
+			}
 			filtered = append(filtered, id)
 		}
 	}
 	return filtered, nil
 }
 
-func (m *manager) Block(ctx context.Context, hashes []protocol.ID, mechanism, reason string, flush bool) error {
+func (m *manager) Block(ctx context.Context, hashes []protocol.InfoHash, mechanism, reason string, flush bool) error {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
 
@@ -203,7 +205,7 @@ func (m *manager) flush(ctx context.Context) error {
 	}
 
 	for _, hash := range hashes {
-		bf.Add(hash[:])
+		bf.Add(hash.Bytes())
 	}
 
 	obj, err := lobs.Open(ctx, oid, pgx.LargeObjectModeWrite)
@@ -238,7 +240,7 @@ func (m *manager) flush(ctx context.Context) error {
 		return fmt.Errorf("failed to commit transaction: %w", err)
 	}
 
-	m.buffer = make(map[protocol.ID]struct{})
+	m.buffer = make(map[protocol.InfoHash]struct{})
 	m.filter = bf
 	m.lastFlushedAt = now
 

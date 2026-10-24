@@ -101,7 +101,7 @@ func TestDeleteAuditBudgetFailsClosed(t *testing.T) {
 // sample without producing a single reviewable row.
 func TestExcludedDeletesDoNotBurnBudget(t *testing.T) {
 	b := newDeleteAuditBudget(true, 2, nil)
-	inSample := protocol.ID([20]byte{0})
+	inSample := protocol.InfoHashV1(protocol.ID{0})
 
 	// Excluded: private, banned keyword in name, banned keyword in a path.
 	excluded := []struct {
@@ -112,7 +112,7 @@ func TestExcludedDeletesDoNotBurnBudget(t *testing.T) {
 		{model.Torrent{InfoHash: inSample, Name: "something pthc something"}, nil},
 		{model.Torrent{InfoHash: inSample, Name: "clean name"}, []string{"a/preteen b.mkv"}},
 		// Out of sample entirely.
-		{model.Torrent{InfoHash: protocol.ID([20]byte{9}), Name: "clean"}, nil},
+		{model.Torrent{InfoHash: protocol.InfoHashV1(protocol.ID{9}), Name: "clean"}, nil},
 	}
 	for _, e := range excluded {
 		if _, ok := sampledDeleteName(e.torrent, e.paths, b); ok {
@@ -144,7 +144,7 @@ func TestExcludedDeletesDoNotBurnBudget(t *testing.T) {
 func TestEvidenceStopsCarryingNamesOnceSpent(t *testing.T) {
 	b := newDeleteAuditBudget(true, 1, nil)
 	tor := model.Torrent{
-		InfoHash: protocol.ID([20]byte{0}),
+		InfoHash: protocol.InfoHashV1(protocol.ID{0}),
 		Name:     "Some.Movie.2024.GERMAN.1080p",
 	}
 	err := classification.RuntimeError{

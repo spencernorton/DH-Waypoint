@@ -12,6 +12,7 @@ import (
 	"github.com/spencernorton/DH-Waypoint/internal/evidence/priors"
 	llmwork "github.com/spencernorton/DH-Waypoint/internal/legacyresults"
 	"github.com/spencernorton/DH-Waypoint/internal/model"
+	"github.com/spencernorton/DH-Waypoint/internal/namepolicy"
 	"github.com/spencernorton/DH-Waypoint/internal/protocol"
 	v1 "github.com/spencernorton/DH-Waypoint/processorapi/v1"
 	"net/url"
@@ -22,7 +23,7 @@ import (
 
 // A single SQL snapshot binds metadata, file evidence, catalogue facts and
 // independent privacy/authority. Volatile counts and timestamps are excluded.
-const sourceSQL = `SELECT jsonb_build_object(
+var sourceSQL = `SELECT jsonb_build_object(
  'name',t.name,'size',t.size,'private',t.private,'files_status',t.files_status,
  'file_count',t.files_count,'extension',t.extension,
  'files',COALESCE((SELECT jsonb_agg(x ORDER BY x->>'path',x->>'index') FROM
@@ -36,10 +37,12 @@ const sourceSQL = `SELECT jsonb_build_object(
    FROM torrent_contents c WHERE c.info_hash=t.info_hash ORDER BY id LIMIT 2) c),'[]'),
  'tags',COALESCE((SELECT jsonb_agg(name ORDER BY name) FROM torrent_tags WHERE info_hash=t.info_hash),'[]'),
  'canonical',(SELECT to_jsonb(c)-'created_at'-'updated_at' FROM torrent_canonical_labels c WHERE c.info_hash=t.info_hash),
- 'private_evidence',EXISTS(SELECT 1 FROM label_evidence WHERE info_hash=t.info_hash AND ` + `%s` + `),
+ 'private_evidence',EXISTS(SELECT 1 FROM label_evidence WHERE ` + catalogueguard.IdentityMatchSQL("label_evidence.info_hash", "t.info_hash") + ` AND ` + `%s` + `)
+ OR EXISTS(SELECT 1 FROM torrent_canonical_labels pc WHERE ` + catalogueguard.IdentityMatchSQL("pc.info_hash", "t.info_hash") + ` AND lower(btrim(pc.category)) IN('private','bitgrab')),
  'held',EXISTS(SELECT 1 FROM torrent_verdict_state WHERE info_hash=t.info_hash AND verdict IN('quarantined','blacklisted','tombstoned'))
  OR EXISTS(SELECT 1 FROM junkpurge_quarantine WHERE info_hash=t.info_hash AND expired_at IS NULL)
-) FROM torrents t WHERE t.info_hash=$1`
+) || CASE WHEN t.info_hash_v2 IS NOT NULL THEN jsonb_build_object('info_hash_v2',encode(t.info_hash_v2,'hex')) ELSE '{}'::jsonb END
+ FROM torrents t WHERE t.info_hash=$1`
 
 type sourceFile struct {
 	Path      string  `json:"path"`
@@ -48,6 +51,7 @@ type sourceFile struct {
 	Extension *string `json:"extension"`
 }
 type source struct {
+	InfoHashV2      *string           `json:"info_hash_v2"`
 	Receipt         json.RawMessage   `json:"receipt"`
 	Name            string            `json:"name"`
 	Size            int64             `json:"size"`
@@ -122,8 +126,14 @@ func (s source) admitted() bool {
 	return true
 }
 func (s source) torrent(hash string) model.Torrent {
-	id, _ := protocol.ParseID(hash)
+	id, _ := protocol.ParseInfoHash(hash)
 	t := model.Torrent{InfoHash: id, Name: s.Name, Size: uint(s.Size), Private: s.Private, FilesStatus: model.FilesStatus(s.FilesStatus)}
+	if s.InfoHashV2 != nil {
+		h, err := protocol.ParseInfoHash(*s.InfoHashV2)
+		if err == nil && h.IsV2() {
+			t.InfoHashV2 = &h
+		}
+	}
 	if s.Extension != nil {
 		t.Extension = model.NewNullString(*s.Extension)
 	}
@@ -139,6 +149,14 @@ func (s source) torrent(hash string) model.Torrent {
 	}
 	_ = decodeRow(s.Hint, &t.Hint)
 	return t
+}
+
+func (s source) admittedByNames(p *namepolicy.Policy, hash []byte) bool {
+	if !p.Enabled() {
+		return true
+	}
+	t := s.torrent(hex.EncodeToString(hash))
+	return p.Evaluate(t.InfoHash, t.Name).Eligible && (t.InfoHashV2 == nil || !p.ExcludesHash(*t.InfoHashV2))
 }
 func (s source) input(hash []byte, policy string, noiseV2 bool) v1.Input {
 	in := v1.Input{InfoHash: hex.EncodeToString(hash), Name: s.Name, Size: s.Size, FileCount: s.FileCount, Extension: s.Extension, Files: []v1.File{}, Candidates: []v1.Candidate{}, PriorResults: []v1.Result{}}

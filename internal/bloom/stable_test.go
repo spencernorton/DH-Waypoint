@@ -20,16 +20,16 @@ package bloom
 // )
 //
 // func TestNewDefaultStableBloomFilter(t *testing.T) {
-// 	hashes := make(map[protocol.ID]struct{})
+// 	hashes := make(map[protocol.InfoHash]struct{})
 // 	bf := NewDefaultStableBloomFilter()
 // 	bytes, _ := bf.GobEncode()
 // 	t.Log(len(bytes))
 // 	for i := 0; i < 10_000_000; i++ {
-// 		id := protocol.RandomNodeID()
+// 		id := protocol.RandomV1InfoHash()
 // 		bf.Add(id[:])
 // 	}
 // 	for i := 0; i < 1_000_000; i++ {
-// 		id := protocol.RandomNodeID()
+// 		id := protocol.RandomV1InfoHash()
 // 		hashes[id] = struct{}{}
 // 		bf.Add(id[:])
 // 	}
@@ -40,9 +40,9 @@ package bloom
 // 		}
 // 	}
 // 	t.Log("fn", fn)
-// 	fps := make(map[protocol.ID]struct{})
+// 	fps := make(map[protocol.InfoHash]struct{})
 // 	for i := 0; i < 10_000_000; i++ {
-// 		id := protocol.RandomNodeID()
+// 		id := protocol.RandomV1InfoHash()
 // 		if bf.Test(id[:]) {
 // 			fps[id] = struct{}{}
 // 		}

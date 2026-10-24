@@ -34,7 +34,7 @@ type processSearchStub struct {
 
 func (s processSearchStub) TorrentsWithMissingInfoHashes(
 	_ context.Context,
-	_ []protocol.ID,
+	_ []protocol.InfoHash,
 	_ ...query.Option,
 ) (dbsearch.TorrentsWithMissingInfoHashesResult, error) {
 	return s.torrents, nil
@@ -62,7 +62,7 @@ func (r processRunnerStub) Run(
 }
 
 type blockRecord struct {
-	hashes    []protocol.ID
+	hashes    []protocol.InfoHash
 	mechanism string
 	reason    string
 	permanent bool
@@ -72,14 +72,14 @@ var _ blocking.Manager = (*recordingBlockingManager)(nil)
 
 type recordingBlockingManager struct {
 	mu      sync.Mutex
-	blocked []protocol.ID
+	blocked []protocol.InfoHash
 	records []blockRecord
 	err     error
 }
 
 func (m *recordingBlockingManager) Block(
 	_ context.Context,
-	hashes []protocol.ID,
+	hashes []protocol.InfoHash,
 	mechanism string,
 	reason string,
 	permanent bool,
@@ -91,7 +91,7 @@ func (m *recordingBlockingManager) Block(
 	}
 	m.blocked = append(m.blocked, hashes...)
 	m.records = append(m.records, blockRecord{
-		hashes:    append([]protocol.ID(nil), hashes...),
+		hashes:    append([]protocol.InfoHash(nil), hashes...),
 		mechanism: mechanism,
 		reason:    reason,
 		permanent: permanent,
@@ -101,10 +101,10 @@ func (m *recordingBlockingManager) Block(
 
 func (m *recordingBlockingManager) Flush(context.Context) error { return nil }
 
-func (m *recordingBlockingManager) blockedHashes() []protocol.ID {
+func (m *recordingBlockingManager) blockedHashes() []protocol.InfoHash {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return append([]protocol.ID(nil), m.blocked...)
+	return append([]protocol.InfoHash(nil), m.blocked...)
 }
 
 func (m *recordingBlockingManager) blockRecords() []blockRecord {
@@ -117,13 +117,13 @@ type processExporterStub struct {
 	csamblocklist.Exporter
 }
 
-func (processExporterStub) Record(context.Context, protocol.ID, string, []string) {}
+func (processExporterStub) Record(context.Context, protocol.InfoHash, string, []string) {}
 
-func processTestHash(prefix byte) protocol.ID {
-	return protocol.ID{prefix}
+func processTestHash(prefix byte) protocol.InfoHash {
+	return protocol.InfoHash{prefix}
 }
 
-func processTestTorrent(hash protocol.ID, name, extension string) model.Torrent {
+func processTestTorrent(hash protocol.InfoHash, name, extension string) model.Torrent {
 	return model.Torrent{
 		InfoHash:  hash,
 		Name:      name,
@@ -201,7 +201,7 @@ func TestProcessClassifierOnlyDeletePersistsWithoutInsert(t *testing.T) {
 		}},
 	)
 
-	if err := p.Process(context.Background(), MessageParams{InfoHashes: []protocol.ID{hash}}); err != nil {
+	if err := p.Process(context.Background(), MessageParams{InfoHashes: []protocol.InfoHash{hash}}); err != nil {
 		t.Fatalf("Process: %v", err)
 	}
 	if got := blocker.blockedHashes(); len(got) != 1 || got[0] != hash {
@@ -226,7 +226,7 @@ func TestProcessContentFilterOnlyDeletePersistsWithoutInsert(t *testing.T) {
 	cfg.BlockedExtensions = []string{"iso"}
 	p.contentFilter = contentfilter.New(cfg)
 
-	if err := p.Process(context.Background(), MessageParams{InfoHashes: []protocol.ID{hash}}); err != nil {
+	if err := p.Process(context.Background(), MessageParams{InfoHashes: []protocol.InfoHash{hash}}); err != nil {
 		t.Fatalf("Process: %v", err)
 	}
 	if got := blocker.blockedHashes(); len(got) != 1 || got[0] != hash {
@@ -261,7 +261,7 @@ func TestProcessClassifierDeletePreservesEvidenceReasonNotContentFilter(t *testi
 	cfg.BlockedExtensions = []string{"iso"}
 	p.contentFilter = contentfilter.New(cfg)
 
-	if err := p.Process(context.Background(), MessageParams{InfoHashes: []protocol.ID{hash1, hash2}}); err != nil {
+	if err := p.Process(context.Background(), MessageParams{InfoHashes: []protocol.InfoHash{hash1, hash2}}); err != nil {
 		t.Fatalf("Process: %v", err)
 	}
 
@@ -327,7 +327,7 @@ func TestProcessMixedKeepAndDeletePersistsBoth(t *testing.T) {
 	expectTorrentContentInsert(mock)
 
 	if err := p.Process(context.Background(), MessageParams{
-		InfoHashes: []protocol.ID{keepHash, deleteHash},
+		InfoHashes: []protocol.InfoHash{keepHash, deleteHash},
 	}); err != nil {
 		t.Fatalf("Process: %v", err)
 	}
@@ -348,7 +348,7 @@ func TestProcessOnlyFailureStillReturnsWithoutRepublish(t *testing.T) {
 		}},
 	)
 
-	if err := p.Process(context.Background(), MessageParams{InfoHashes: []protocol.ID{hash}}); err == nil {
+	if err := p.Process(context.Background(), MessageParams{InfoHashes: []protocol.InfoHash{hash}}); err == nil {
 		t.Fatal("Process error = nil, want classifier failure")
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -382,7 +382,7 @@ func TestProcessRecoveryOffHoldsLegacyDeleteWithoutSQLOrDeleteMetric(t *testing.
 	blocker.err = cataloguerecovery.ErrDisabled
 	p.deleteMetrics = NewDeleteMetrics()
 	// A held delete completes the job: failing it only replayed the same verdict.
-	if err := p.Process(context.Background(), MessageParams{InfoHashes: []protocol.ID{hash}}); err != nil {
+	if err := p.Process(context.Background(), MessageParams{InfoHashes: []protocol.InfoHash{hash}}); err != nil {
 		t.Fatalf("Process error = %v, want held delete to complete", err)
 	}
 	if len(blocker.blockedHashes()) != 0 {
@@ -412,7 +412,7 @@ func TestProcessRecoveryOffStillPersistsOrdinaryRowsInMixedBatch(t *testing.T) {
 	)
 	blocker.err = cataloguerecovery.ErrDisabled
 	expectTorrentContentInsert(mock)
-	if err := p.Process(context.Background(), MessageParams{InfoHashes: []protocol.ID{keepHash, deleteHash}}); err != nil {
+	if err := p.Process(context.Background(), MessageParams{InfoHashes: []protocol.InfoHash{keepHash, deleteHash}}); err != nil {
 		t.Fatalf("Process error = %v, want held delete to complete", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -420,11 +420,11 @@ func TestProcessRecoveryOffStillPersistsOrdinaryRowsInMixedBatch(t *testing.T) {
 	}
 }
 
-func expectReleaseAttributeReads(mock sqlmock.Sqlmock, hash protocol.ID, name string) {
+func expectReleaseAttributeReads(mock sqlmock.Sqlmock, hash protocol.InfoHash, name string) {
 	mock.ExpectQuery(`SELECT .* FROM "torrents".*FOR UPDATE`).WithArgs(hash.Bytes(), 1).WillReturnRows(sqlmock.NewRows([]string{"info_hash", "name"}).AddRow(hash.Bytes(), name))
 	mock.ExpectQuery(`SELECT .* FROM "torrent_contents".*FOR UPDATE`).WithArgs(hash.Bytes()).WillReturnRows(sqlmock.NewRows([]string{"info_hash", "release_attributes"}))
 }
 
-func (m *recordingBlockingManager) Filter(ctx context.Context, hashes []protocol.ID) ([]protocol.ID, error) {
+func (m *recordingBlockingManager) Filter(ctx context.Context, hashes []protocol.InfoHash) ([]protocol.InfoHash, error) {
 	return hashes, nil
 }

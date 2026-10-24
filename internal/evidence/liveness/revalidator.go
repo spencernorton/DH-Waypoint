@@ -321,7 +321,7 @@ queryLoop:
 // mismatch.
 func infoHashToID(b []byte) (protocol.ID, bool) {
 	var id protocol.ID
-	if len(b) != len(id) {
+	if len(b) != 20 && len(b) != 32 {
 		return id, false
 	}
 	copy(id[:], b)

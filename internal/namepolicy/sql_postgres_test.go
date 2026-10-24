@@ -41,8 +41,8 @@ func TestPostgresNamePredicateMatchesPureDecision(t *testing.T) {
 	pool, err := pgxpool.New(context.Background(), dsn)
 	require.NoError(t, err)
 	defer pool.Close()
-	hash := protocol.ID{1}
-	excluded := protocol.ID{2}
+	hash := protocol.InfoHash{1}
+	excluded := protocol.InfoHash{2}
 	p, err := New(Config{Enabled: true, ExcludedInfoHashes: []string{excluded.String()}})
 	require.NoError(t, err)
 	names := []string{"Synthetic.Ordinary.2026", "Amélie.2001", "テスト.2026", "테스트.2026", "Άλφα.2026", "Synthetic.测试.2026", "Synthetic.Фильм.2026", "English.Dub.中字.2026", "", "\u3000\u0085", "Fetish.XXX.2026", "F.E.T.I.S.H_X-X-X.2026", "Fetish.p0rn", "Fetish.S3X", "Fetish.Fetish.2026", "xXx.2002.1080p", "Sex.and.The.City.2008", "Fetish.2005.Drama", "Sussex.Hardcore.2026", "Fetishé.XXX", "ſex.Fetish", "Analytical.XXX", "Porn.Porno.2026", "Fetish/XXX", "Fetish\u3000XXX"}
@@ -69,7 +69,7 @@ func TestPostgresNamePredicateMatchesPureDecision(t *testing.T) {
 		}
 	}
 	for _, name := range names {
-		for _, h := range []protocol.ID{hash, excluded} {
+		for _, h := range []protocol.InfoHash{hash, excluded} {
 			var allowed bool
 			all := append([]any{name, h.Bytes()}, args...)
 			err = pool.QueryRow(context.Background(), "SELECT ("+b.String()+") FROM (SELECT $1::text name,$2::bytea info_hash) candidate", all...).Scan(&allowed)

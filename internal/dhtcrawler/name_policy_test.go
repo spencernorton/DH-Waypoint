@@ -2,10 +2,12 @@ package dhtcrawler
 
 import (
 	"context"
+	"fmt"
 	mi "github.com/anacrolix/torrent/metainfo"
 	"net/netip"
 	"testing"
 
+	"github.com/spencernorton/DH-Waypoint/internal/blocking"
 	"github.com/spencernorton/DH-Waypoint/internal/csamblocklist"
 	"github.com/spencernorton/DH-Waypoint/internal/namepolicy"
 	"github.com/spencernorton/DH-Waypoint/internal/protocol"
@@ -16,16 +18,63 @@ import (
 
 type policyCsam struct{ csamblocklist.Manager }
 
-func (policyCsam) IsBlocked(protocol.ID) bool { return false }
+func (policyCsam) IsBlocked(protocol.InfoHash) bool { return false }
 
 type policyRequester struct {
 	calls int
 	info  metainfo.Info
+	ids   *protocol.TorrentIdentities
 }
 
-func (r *policyRequester) Request(context.Context, protocol.ID, netip.AddrPort) (metainforequester.Response, error) {
+func (r *policyRequester) Request(_ context.Context, key protocol.ID, _ netip.AddrPort) (metainforequester.Response, error) {
 	r.calls++
-	return metainforequester.Response{Info: r.info}, nil
+	h := protocol.InfoHashV1(key)
+	ids := protocol.TorrentIdentities{V1: &h}
+	if r.ids != nil {
+		ids = *r.ids
+	}
+	return metainforequester.Response{Info: r.info, Validated: metainfo.ValidatedInfo{Info: r.info, Identities: ids}}, nil
+}
+
+type completeHashBlock struct {
+	blocking.Manager
+	hash protocol.InfoHash
+	seen bool
+}
+
+func (b *completeHashBlock) Filter(_ context.Context, hs []protocol.InfoHash) ([]protocol.InfoHash, error) {
+	var kept []protocol.InfoHash
+	for _, h := range hs {
+		if h == b.hash {
+			b.seen = true
+		} else {
+			kept = append(kept, h)
+		}
+	}
+	return kept, nil
+}
+
+func TestCrawlerRechecksFullV2BlockAfterDiscovery(t *testing.T) {
+	v2 := protocol.InfoHashV2([32]byte{42})
+	v1 := protocol.InfoHashV1(protocol.ID{24})
+	for _, hybrid := range []bool{false, true} {
+		t.Run(fmt.Sprint(hybrid), func(t *testing.T) {
+			ids := protocol.TorrentIdentities{V2: &v2}
+			key := v2.WireID()
+			if hybrid {
+				ids.V1 = &v1
+				key = v1.WireID()
+			}
+			r := &policyRequester{info: metainfo.Info{Name: "Synthetic.Allowed.txt"}, ids: &ids}
+			block := &completeHashBlock{hash: v2}
+			banning := &policyBanning{}
+			c := crawler{metainfoRequester: r, csamBlocklist: policyCsam{}, banningChecker: banning, blockingManager: block}
+			_, err := c.doRequestMetaInfo(context.Background(), key, []netip.AddrPort{netip.MustParseAddrPort("127.0.0.1:1")})
+			require.ErrorIs(t, err, namepolicy.ErrExcluded)
+			require.True(t, block.seen)
+			require.Zero(t, banning.calls)
+		})
+	}
 }
 
 type policyBanning struct{ calls int }

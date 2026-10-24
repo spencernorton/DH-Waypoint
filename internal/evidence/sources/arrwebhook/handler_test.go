@@ -1,6 +1,7 @@
 package arrwebhook
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/spencernorton/DH-Waypoint/internal/evidence"
@@ -127,6 +128,8 @@ func TestDecodeHex(t *testing.T) {
 	}{
 		{"", 0},
 		{"not-a-hash", 0},
+		{strings.Repeat("ab", 32), 32},
+		{strings.Repeat("zz", 32), 0},
 		{"0123456789abcdef0123456789abcdef0123456789ab", 0}, // 44 chars, wrong length
 		{"0123456789abcdef0123456789abcdef01234567", 20},    // 40 chars, valid
 		{"0123456789ABCDEF0123456789ABCDEF01234567", 20},    // uppercase tolerated

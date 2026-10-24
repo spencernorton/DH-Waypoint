@@ -20,10 +20,10 @@ import (
 
 type publicHashSearchStub struct {
 	search.ServingSearch
-	read func(context.Context, []protocol.ID, ...query.Option) (search.TorrentsWithMissingInfoHashesResult, error)
+	read func(context.Context, []protocol.InfoHash, ...query.Option) (search.TorrentsWithMissingInfoHashesResult, error)
 }
 
-func (s publicHashSearchStub) TorrentsWithMissingInfoHashes(c context.Context, h []protocol.ID, opts ...query.Option) (search.TorrentsWithMissingInfoHashesResult, error) {
+func (s publicHashSearchStub) TorrentsWithMissingInfoHashes(c context.Context, h []protocol.InfoHash, opts ...query.Option) (search.TorrentsWithMissingInfoHashesResult, error) {
 	return s.read(c, h, opts...)
 }
 
@@ -43,9 +43,9 @@ func TestPublicHashChecksStoredNameAndKeepsUnknownAndPrivateIneligible(t *testin
 	token := strings.Repeat("synthetic-internal-", 3)
 	p, err := namepolicy.New(namepolicy.Config{Enabled: true, InternalCheckToken: namepolicy.SecretToken(token)})
 	require.NoError(t, err)
-	hashes := []protocol.ID{{1}, {2}, {3}, {4}}
+	hashes := []protocol.InfoHash{{1}, {2}, {3}, {4}}
 	read := 0
-	s := publicHashSearchStub{read: func(ctx context.Context, h []protocol.ID, _ ...query.Option) (search.TorrentsWithMissingInfoHashesResult, error) {
+	s := publicHashSearchStub{read: func(ctx context.Context, h []protocol.InfoHash, _ ...query.Option) (search.TorrentsWithMissingInfoHashesResult, error) {
 		read++
 		_, hasDeadline := ctx.Deadline()
 		require.True(t, hasDeadline)
@@ -84,11 +84,11 @@ func TestPublicHashDefaultOffAuthenticationAndInvalidRequestsDoNotRead(t *testin
 	require.NoError(t, err)
 	off, err := namepolicy.New(namepolicy.NewDefaultConfig())
 	require.NoError(t, err)
-	s := publicHashSearchStub{read: func(context.Context, []protocol.ID, ...query.Option) (search.TorrentsWithMissingInfoHashesResult, error) {
+	s := publicHashSearchStub{read: func(context.Context, []protocol.InfoHash, ...query.Option) (search.TorrentsWithMissingInfoHashesResult, error) {
 		t.Fatal("invalid request read database")
 		return search.TorrentsWithMissingInfoHashesResult{}, nil
 	}}
-	h := protocol.ID{1}.String()
+	h := protocol.InfoHash{1}.String()
 	valid := `{"infoHashes":["` + h + `"]}`
 	require.Equal(t, http.StatusNotFound, publicHashRequest(t, off, s, token, valid).Code)
 	require.Equal(t, http.StatusForbidden, publicHashRequest(t, on, s, "wrong", valid).Code)

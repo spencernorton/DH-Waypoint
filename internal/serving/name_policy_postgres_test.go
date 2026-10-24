@@ -33,9 +33,9 @@ func TestServingPostgresNamePolicyUsesReleaseNameAcrossHashContentFilesAndTags(t
 	ctx := context.Background()
 	pool, q := newServingPostgresDatabase(t, ctx)
 	names := []string{"Synthetic.测试.2026.mkv", "Synthetic.Фильм.2026.mkv", "Synthetic.Fetish.XXX.2026.mkv", "xXx.2002.1080p.mkv", "Amélie.2001.mkv", "Synthetic.테스트.2026.mkv", "Synthetic.Fetish.2005.Drama.mkv", "Synthetic.Ordinary.2026.mkv"}
-	hashes := make([]protocol.ID, len(names))
+	hashes := make([]protocol.InfoHash, len(names))
 	for i, name := range names {
-		hashes[i] = protocol.ID{byte(90 + i)}
+		hashes[i] = protocol.InfoHash{byte(90 + i)}
 		_, err := pool.Exec(ctx, `INSERT INTO torrents(info_hash,name,size,private,files_status,files_count,created_at,updated_at) VALUES($1,$2,4096,false,'multi',1,now(),now());
 INSERT INTO torrent_contents(info_hash,content_type,size,is_anime,created_at,updated_at) VALUES($1,'movie',4096,false,now(),now());
 INSERT INTO torrent_files(info_hash,"index",path,size,created_at,updated_at) VALUES($1,0,'Support.字幕.srt',4096,now(),now());
@@ -55,7 +55,7 @@ INSERT INTO torrent_tags(info_hash,name,created_at,updated_at) VALUES($1,$3,now(
 		if i < 3 || i == 7 {
 			want = 0
 		}
-		raw, err := consumer.TorrentsWithMissingInfoHashes(ctx, []protocol.ID{hash})
+		raw, err := consumer.TorrentsWithMissingInfoHashes(ctx, []protocol.InfoHash{hash})
 		require.NoError(t, err)
 		require.Len(t, raw.Torrents, want)
 		content, err := consumer.TorrentContent(ctx, query.WithTotalCount(true), query.WithAggregationBudget(0), query.Where(search.TorrentContentInfoHashCriteria(hash)))

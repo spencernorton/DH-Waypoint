@@ -101,7 +101,7 @@ func New(p Params) Result {
 							done = true
 							break
 						}
-						var infoHashes []protocol.ID
+						var infoHashes []protocol.InfoHash
 						for _, t := range torrents {
 							maxInfoHash = t.InfoHash
 							infoHashes = append(infoHashes, t.InfoHash)

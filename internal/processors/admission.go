@@ -71,7 +71,7 @@ func (s *Store) AdmissionHistory(ctx context.Context, before int64, limit int) (
 // matches can steer selection. A fixed seed gives nested percentage cohorts.
 func admissionBucket(hash []byte, seed string) (uint64, error) {
 	b, err := hex.DecodeString(seed)
-	if err != nil || len(b) != 32 || len(hash) != 20 || hex.EncodeToString(b) != seed {
+	if err != nil || len(b) != 32 || (len(hash) != 20 && len(hash) != 32) || hex.EncodeToString(b) != seed {
 		return 0, ErrControl
 	}
 	h := sha256.New()

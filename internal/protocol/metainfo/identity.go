@@ -107,6 +107,26 @@ func parseInfoBytes(raw []byte) (ValidatedInfo, error) {
 		if !pieces || files == length {
 			return result, errors.New("v1 requires pieces and exactly one of length or files")
 		}
+		if files {
+			var entries []map[string]bencode.Bytes
+			if err := bencode.Unmarshal(fields["files"], &entries); err != nil {
+				return result, err
+			}
+			if len(entries) == 0 {
+				return result, errors.New("empty v1 file list")
+			}
+			for _, entry := range entries {
+				var attr string
+				if b, ok := entry["attr"]; ok {
+					if err := bencode.Unmarshal(b, &attr); err != nil {
+						return result, err
+					}
+				}
+				if _, ok := entry["length"]; !ok && !strings.Contains(attr, "l") {
+					return result, errors.New("v1 file missing length")
+				}
+			}
+		}
 		if err := validateV1(info); err != nil {
 			return result, err
 		}
@@ -160,14 +180,19 @@ func validateV1(info Info) error {
 			return errors.New("file length overflows total")
 		}
 		total += f.Length
+		if len(info.Files) > 0 && len(f.BestPath()) == 0 && !strings.Contains(f.Attr, "p") {
+			return errors.New("multi-file entry has no path")
+		}
 		if err := validatePath(f.BestPath()); err != nil {
 			return err
 		}
 		path := strings.Join(f.BestPath(), "/")
-		if _, exists := seen[path]; exists {
-			return errors.New("duplicate file path")
+		if !strings.Contains(f.Attr, "p") {
+			if _, exists := seen[path]; exists {
+				return errors.New("duplicate file path")
+			}
+			seen[path] = struct{}{}
 		}
-		seen[path] = struct{}{}
 	}
 	n := total / info.PieceLength
 	if total%info.PieceLength != 0 {

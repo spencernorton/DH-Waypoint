@@ -34,7 +34,7 @@ func TestReleaseNamePolicyExplicitScopeAndLookalikes(t *testing.T) {
 		"P0rn.X.X.X.mkv",
 		"Gaping.Anal.XXX.mkv",
 	} {
-		d := p.Evaluate(protocol.ID{}, name)
+		d := p.Evaluate(protocol.InfoHash{}, name)
 		require.False(t, d.Eligible, name)
 		require.Equal(t, Version, d.Version)
 	}
@@ -60,30 +60,30 @@ func TestReleaseNamePolicyExplicitScopeAndLookalikes(t *testing.T) {
 		"Hentai.Documentary.XXX.mkv",
 		"FétishXXX.mkv",
 	} {
-		d := p.Evaluate(protocol.ID{}, name)
+		d := p.Evaluate(protocol.InfoHash{}, name)
 		require.True(t, d.Eligible, name)
 	}
 	// A release name is the only string this pure gate examines; paths and
 	// original-language metadata are not supplied as surrogate release names.
-	require.True(t, p.Evaluate(protocol.ID{}, "Allowed.Release.ENG.mkv").Eligible)
-	require.False(t, p.EvaluateClassified(protocol.ID{}, "Allowed.Release.mkv", "xxx").Eligible)
-	require.True(t, p.EvaluateClassified(protocol.ID{}, "xXx.2002.mkv", "movie").Eligible)
+	require.True(t, p.Evaluate(protocol.InfoHash{}, "Allowed.Release.ENG.mkv").Eligible)
+	require.False(t, p.EvaluateClassified(protocol.InfoHash{}, "Allowed.Release.mkv", "xxx").Eligible)
+	require.True(t, p.EvaluateClassified(protocol.InfoHash{}, "xXx.2002.mkv", "movie").Eligible)
 }
 
 func TestDefaultOffPrivateHashConfigurationAndMissingName(t *testing.T) {
 	p, err := New(NewDefaultConfig())
 	require.NoError(t, err)
-	require.True(t, p.Evaluate(protocol.ID{}, "汉字.XXX.Fetish").Eligible)
-	require.Equal(t, ReasonDisabled, p.Evaluate(protocol.ID{}, "").Reason)
-	h := protocol.ID{1}
+	require.True(t, p.Evaluate(protocol.InfoHash{}, "汉字.XXX.Fetish").Eligible)
+	require.Equal(t, ReasonDisabled, p.Evaluate(protocol.InfoHash{}, "").Reason)
+	h := protocol.InfoHash{1}
 	p, err = New(Config{Enabled: true, ExcludedInfoHashes: []string{h.String()}})
 	require.NoError(t, err)
 	require.Equal(t, ReasonOwnerHash, p.Evaluate(h, "Allowed.Name").Reason)
-	require.Equal(t, ReasonMissingName, p.Evaluate(protocol.ID{}, " \u00a0\t").Reason)
-	require.Equal(t, []protocol.ID{h}, p.ExcludedHashes())
+	require.Equal(t, ReasonMissingName, p.Evaluate(protocol.InfoHash{}, " \u00a0\t").Reason)
+	require.Equal(t, []protocol.InfoHash{h}, p.ExcludedHashes())
 	copy := p.ExcludedHashes()
-	copy[0] = protocol.ID{2}
-	require.Equal(t, []protocol.ID{h}, p.ExcludedHashes())
+	copy[0] = protocol.InfoHash{2}
+	require.Equal(t, []protocol.InfoHash{h}, p.ExcludedHashes())
 }
 
 func TestSharedScriptRangesExactlyMatchGoUnicodeMembership(t *testing.T) {

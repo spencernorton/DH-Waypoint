@@ -33,7 +33,7 @@ func (c Config) Validate() error {
 		return fmt.Errorf("name policy: excluded hash list exceeds bound")
 	}
 	for _, h := range c.ExcludedInfoHashes {
-		if _, err := protocol.ParseID(h); err != nil {
+		if _, err := protocol.ParseInfoHash(h); err != nil {
 			return fmt.Errorf("name policy: invalid excluded info hash")
 		}
 	}

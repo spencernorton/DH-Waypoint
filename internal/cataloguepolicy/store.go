@@ -90,7 +90,7 @@ order by t.info_hash limit $2`, after, limit)
 // against invisible data. Dry-run is a read-only transaction.
 func (s *Store) Evaluate(ctx context.Context, hash []byte, write, allowAnimeSubs bool, now time.Time, cfg AvailabilityConfig) (Receipt, error) {
 	var zero Receipt
-	if len(hash) != 20 {
+	if len(hash) != 20 && len(hash) != 32 {
 		return zero, fmt.Errorf("policy shadow: expected 20-byte hash")
 	}
 	opts := pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly}

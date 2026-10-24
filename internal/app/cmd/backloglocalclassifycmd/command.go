@@ -267,10 +267,10 @@ func localOnlyFlags() classifier.Flags {
 	}
 }
 
-func uniquePage(rows []*model.TorrentContent) ([]protocol.ID, []model.Torrent) {
-	hashes := make([]protocol.ID, 0, len(rows))
+func uniquePage(rows []*model.TorrentContent) ([]protocol.InfoHash, []model.Torrent) {
+	hashes := make([]protocol.InfoHash, 0, len(rows))
 	torrents := make([]model.Torrent, 0, len(rows))
-	seen := make(map[protocol.ID]struct{}, len(rows))
+	seen := make(map[protocol.InfoHash]struct{}, len(rows))
 	for _, row := range rows {
 		if _, ok := seen[row.InfoHash]; ok {
 			continue

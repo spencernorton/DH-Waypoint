@@ -9,6 +9,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	v1 "github.com/spencernorton/DH-Waypoint/processorapi/v1"
+	v2 "github.com/spencernorton/DH-Waypoint/processorapi/v2"
 )
 
 var jobIdentity = regexp.MustCompile(`^[0-9a-f]{64}$`)
@@ -61,6 +62,20 @@ func (s *Store) ExportJob(ctx context.Context, id string) (v1.JobExport, error) 
 	if len(prepared) > 0 {
 		if err = json.Unmarshal(prepared, &out.PreparedJob); err != nil {
 			return out, err
+		}
+	}
+	if len(hash) == 32 {
+		out.Contract = v2.JobExportContract
+	}
+	var sourceIdentity source
+	if json.Unmarshal(out.SourceSnapshot, &sourceIdentity) == nil && sourceIdentity.InfoHashV2 != nil {
+		out.SourceSchema = "dh-waypoint.core-source.v2"
+		out.Contract = v2.JobExportContract
+	}
+	for _, step := range plan.Steps {
+		if step.Entry.Manifest.Contract == v2.Contract {
+			out.Contract = v2.JobExportContract
+			out.PlanSchema = "dh-waypoint.processor-plan.v2"
 		}
 	}
 	if len(plan.Steps) > 0 {

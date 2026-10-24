@@ -217,8 +217,8 @@ func entryToEvidence(inst evidence.ConfiguredArrInstance, eventType string, e ar
 	}
 
 	var ih []byte
-	if e.DownloadID != "" && len(e.DownloadID) == 40 {
-		if b, err := hex.DecodeString(strings.ToLower(e.DownloadID)); err == nil && len(b) == 20 {
+	if len(e.DownloadID) == 40 || len(e.DownloadID) == 64 {
+		if b, err := hex.DecodeString(strings.ToLower(e.DownloadID)); err == nil && (len(b) == 20 || len(b) == 32) {
 			ih = b
 		}
 	}

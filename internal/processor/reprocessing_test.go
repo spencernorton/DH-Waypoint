@@ -39,7 +39,7 @@ func TestAuditedReprocessingRetainsCatalogueOnDestructiveVerdicts(t *testing.T) 
 			recorder := &receiptCapture{}
 			p.coreRecorder = recorder
 			id := strings.Repeat("a", 64)
-			require.NoError(t, p.Process(context.Background(), MessageParams{ReprocessRequestID: id, InfoHashes: []protocol.ID{h}}))
+			require.NoError(t, p.Process(context.Background(), MessageParams{ReprocessRequestID: id, InfoHashes: []protocol.InfoHash{h}}))
 			require.Empty(t, blocker.blockedHashes())
 			require.NoError(t, mock.ExpectationsWereMet())
 			require.Len(t, recorder.receipts, 1)
@@ -59,7 +59,7 @@ func TestAuditedReprocessingRecordsNormalProcessingWithoutInventingAMiss(t *test
 	recorder := &receiptCapture{}
 	p.coreRecorder = recorder
 	id := strings.Repeat("b", 64)
-	require.NoError(t, p.Process(context.Background(), MessageParams{ReprocessRequestID: id, InfoHashes: []protocol.ID{h}}))
+	require.NoError(t, p.Process(context.Background(), MessageParams{ReprocessRequestID: id, InfoHashes: []protocol.InfoHash{h}}))
 	require.NoError(t, mock.ExpectationsWereMet())
 	require.Len(t, recorder.receipts, 1)
 	require.Equal(t, id, recorder.receipts[0].ReprocessRequestID)
@@ -75,8 +75,8 @@ func TestAuditedReprocessingRejectsBypassMessages(t *testing.T) {
 	for _, params := range []MessageParams{
 		{ReprocessRequestID: "bad"},
 		{ReprocessRequestID: strings.Repeat("c", 64)},
-		{ReprocessRequestID: strings.Repeat("c", 64), InfoHashes: []protocol.ID{{1}}, SkipContentFilter: true},
-		{ReprocessRequestID: strings.Repeat("c", 64), InfoHashes: []protocol.ID{{1}}, ClassifyMode: ClassifyModeRematch},
+		{ReprocessRequestID: strings.Repeat("c", 64), InfoHashes: []protocol.InfoHash{{1}}, SkipContentFilter: true},
+		{ReprocessRequestID: strings.Repeat("c", 64), InfoHashes: []protocol.InfoHash{{1}}, ClassifyMode: ClassifyModeRematch},
 	} {
 		require.Error(t, p.Process(context.Background(), params))
 	}

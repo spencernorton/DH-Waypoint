@@ -15,7 +15,7 @@ import (
 )
 
 func TestInternalPureNameCheckBoundedNoEchoAndPrivateHashAuthority(t *testing.T) {
-	hash := protocol.ID{1}
+	hash := protocol.InfoHash{1}
 	token := strings.Repeat("synthetic-key-", 3)
 	p, err := namepolicy.New(namepolicy.Config{Enabled: true, ExcludedInfoHashes: []string{hash.String()}, InternalCheckToken: namepolicy.SecretToken(token)})
 	require.NoError(t, err)

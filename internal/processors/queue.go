@@ -134,7 +134,7 @@ func (s *Store) Scan(ctx context.Context) (int, error) {
 			}
 			continue
 		}
-		if s.names != nil && !s.names.Evaluate(src.torrent(hex.EncodeToString(h)).InfoHash, src.Name).Eligible {
+		if !src.admittedByNames(s.names, h) {
 			if priority[string(h)] {
 				if _, err = tx.Exec(ctx, `UPDATE processor_reprocess_requests SET state='held',state_reason='current_authority_denied',updated_at=clock_timestamp() WHERE info_hash=$1 AND state='ready'`, h); err != nil {
 					return 0, err
@@ -142,7 +142,11 @@ func (s *Store) Scan(ctx context.Context) (int, error) {
 			}
 			continue
 		}
-		revision, pipeline := digest(raw), digest(plan)
+		effectivePlan := planForIdentity(plan, h)
+		if len(effectivePlan.Steps) == 0 {
+			continue
+		}
+		revision, pipeline := digest(raw), digest(effectivePlan)
 		var already bool
 		err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM processor_applications WHERE info_hash=$1 AND applied_revision=$2 AND pipeline_revision=$3)`, h, revision, pipeline).Scan(&already)
 		if err != nil {
@@ -153,7 +157,7 @@ func (s *Store) Scan(ctx context.Context) (int, error) {
 		}
 		input := src.input(h, s.policy, s.noiseV2)
 		ib, _ := json.Marshal(input)
-		pb, _ := json.Marshal(plan)
+		pb, _ := json.Marshal(effectivePlan)
 		if len(ib) > 100000 {
 			s.metrics.admission.WithLabelValues("oversize").Inc()
 			continue
@@ -256,7 +260,7 @@ func (s *Store) fresh(ctx context.Context, tx pgx.Tx, l Lease, lock bool) (sourc
 	if !src.admitted() || digest(raw) != l.InputRevision {
 		return src, ErrStale
 	}
-	if s.names != nil && !s.names.Evaluate(src.torrent(hex.EncodeToString(l.Hash)).InfoHash, src.Name).Eligible {
+	if !src.admittedByNames(s.names, l.Hash) {
 		return src, ErrStale
 	}
 	return src, nil
@@ -302,7 +306,7 @@ func (s *Store) Prepare(ctx context.Context, l Lease) (v1.Job, error) {
 			return saved, e
 		}
 		saved.Deadline = time.Now().Add(s.cfg.RequestTimeout).UTC().Format(time.RFC3339Nano)
-		return saved, saved.Validate()
+		return saved, validateJob(saved)
 	}
 	var src source
 	_ = json.Unmarshal(l.Source, &src)
@@ -341,7 +345,7 @@ func (s *Store) Prepare(ctx context.Context, l Lease) (v1.Job, error) {
 	revision := digest([]any{l.InputRevision, in})
 	j := v1.Job{
 		Binding: v1.Binding{
-			Contract:            v1.Contract,
+			Contract:            step.Entry.Manifest.Contract,
 			JobID:               digest([]any{l.ID, l.Step, revision}),
 			InputRevision:       revision,
 			PipelineRevision:    l.PipelineRevision,
@@ -354,7 +358,7 @@ func (s *Store) Prepare(ctx context.Context, l Lease) (v1.Job, error) {
 		Input:         in,
 		Deadline:      time.Now().Add(s.cfg.RequestTimeout).UTC().Format(time.RFC3339Nano),
 	}
-	if e = j.Validate(); e != nil {
+	if e = validateJob(j); e != nil {
 		return j, e
 	}
 	raw, _ := json.Marshal(j)
@@ -398,7 +402,7 @@ func (s *Store) startAttempt(ctx context.Context, l Lease) error {
 // Finish is a compare-and-swap on the still-valid lease. Terminal results are
 // applied once in this transaction, or not at all; duplicate/late responses lose.
 func (s *Store) Finish(ctx context.Context, l Lease, j v1.Job, r v1.Result, dispatched bool) error {
-	if e := r.Validate(j); e != nil {
+	if e := validateResult(r, j); e != nil {
 		return e
 	}
 	ctx, c := context.WithTimeout(ctx, 2*time.Second)

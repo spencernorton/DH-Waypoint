@@ -9,7 +9,7 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-func (t *torrentTag) Put(ctx context.Context, infoHashes []protocol.ID, tagNames []string) error {
+func (t *torrentTag) Put(ctx context.Context, infoHashes []protocol.InfoHash, tagNames []string) error {
 	if len(infoHashes) == 0 || len(tagNames) == 0 {
 		return nil
 	}
@@ -24,7 +24,7 @@ func (t *torrentTag) Put(ctx context.Context, infoHashes []protocol.ID, tagNames
 		tagMap[tagName] = struct{}{}
 	}
 
-	hashMap := make(map[protocol.ID]struct{}, len(infoHashes))
+	hashMap := make(map[protocol.InfoHash]struct{}, len(infoHashes))
 	torrentTags := make([]*model.TorrentTag, 0, len(infoHashes)*len(tagMap))
 
 	for _, infoHash := range infoHashes {
@@ -45,7 +45,7 @@ func (t *torrentTag) Put(ctx context.Context, infoHashes []protocol.ID, tagNames
 	}).CreateInBatches(torrentTags, 100)
 }
 
-func (t *torrentTag) Set(ctx context.Context, infoHashes []protocol.ID, tagNames []string) error {
+func (t *torrentTag) Set(ctx context.Context, infoHashes []protocol.InfoHash, tagNames []string) error {
 	if len(infoHashes) == 0 {
 		return nil
 	}
@@ -60,7 +60,7 @@ func (t *torrentTag) Set(ctx context.Context, infoHashes []protocol.ID, tagNames
 		tagMap[tagName] = struct{}{}
 	}
 
-	hashMap := make(map[protocol.ID]struct{}, len(infoHashes))
+	hashMap := make(map[protocol.InfoHash]struct{}, len(infoHashes))
 	valuers := make([]driver.Valuer, 0, len(infoHashes))
 	torrentTags := make([]*model.TorrentTag, 0, len(infoHashes)*len(tagMap))
 
@@ -93,7 +93,7 @@ func (t *torrentTag) Set(ctx context.Context, infoHashes []protocol.ID, tagNames
 	})
 }
 
-func (t *torrentTag) Delete(ctx context.Context, infoHashes []protocol.ID, tagNames []string) error {
+func (t *torrentTag) Delete(ctx context.Context, infoHashes []protocol.InfoHash, tagNames []string) error {
 	if len(infoHashes) == 0 && len(tagNames) == 0 {
 		return nil
 	}

@@ -9,7 +9,7 @@ import (
 
 func TestDoubleHash_KnownVector(t *testing.T) {
 	// 20 zero bytes — well-defined SHA-256 output.
-	var zeroHash protocol.ID
+	var zeroHash protocol.InfoHash
 	got := DoubleHashHex(zeroHash)
 	want := "de47c9b27eb8d300dbb5f2c353e632c393262cf06340c4fa7f1b40c4cbd36f90"
 	if got != want {
@@ -22,7 +22,7 @@ func TestDoubleHash_KnownVector(t *testing.T) {
 }
 
 func TestDoubleHash_DifferentInputsDifferOutputs(t *testing.T) {
-	var a, b protocol.ID
+	var a, b protocol.InfoHash
 	for i := range a {
 		a[i] = byte(i)
 		b[i] = byte(i + 1)
@@ -33,7 +33,7 @@ func TestDoubleHash_DifferentInputsDifferOutputs(t *testing.T) {
 }
 
 func TestParseDoubleHashHex_Roundtrip(t *testing.T) {
-	var ih protocol.ID
+	var ih protocol.InfoHash
 	for i := range ih {
 		ih[i] = byte(i*7 + 1)
 	}
@@ -70,7 +70,7 @@ func TestParseDoubleHashHex_Rejects(t *testing.T) {
 }
 
 func TestParseDoubleHashHex_TrimsSurroundingWhitespace(t *testing.T) {
-	var ih protocol.ID
+	var ih protocol.InfoHash
 	hexStr := DoubleHashHex(ih)
 	padded := "  \t" + hexStr + "  \n"
 	parsed, err := ParseDoubleHashHex(padded)

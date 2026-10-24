@@ -53,7 +53,7 @@ func GuardNameRows(ctx context.Context, tx *dao.Query, p *namepolicy.Policy, row
 	if !p.Enabled() {
 		return nil
 	}
-	names := map[protocol.ID]string{}
+	names := map[protocol.InfoHash]string{}
 	for _, row := range rows {
 		names[row.InfoHash] = row.Torrent.Name
 	}
@@ -62,21 +62,24 @@ func GuardNameRows(ctx context.Context, tx *dao.Query, p *namepolicy.Policy, row
 
 // Resolve minimum authoritative names before loading files, attached metadata
 // or running the classifier. Denial is a terminal no-op, never a delete/retry.
-func (c processor) admitNames(ctx context.Context, hashes []protocol.ID) ([]protocol.ID, error) {
+func (c processor) admitNames(ctx context.Context, hashes []protocol.InfoHash) ([]protocol.InfoHash, error) {
 	values := make([]driver.Valuer, len(hashes))
 	for i, h := range hashes {
 		values[i] = h
 	}
-	rows, err := c.dao.Torrent.WithContext(ctx).Select(c.dao.Torrent.InfoHash, c.dao.Torrent.Name).Where(c.dao.Torrent.InfoHash.In(values...)).Find()
+	rows, err := c.dao.Torrent.WithContext(ctx).Select(c.dao.Torrent.InfoHash, c.dao.Torrent.InfoHashV2, c.dao.Torrent.Name).Where(c.dao.Torrent.InfoHash.In(values...)).Find()
 	if err != nil {
 		return nil, err
 	}
-	byHash := map[protocol.ID]model.Torrent{}
+	byHash := map[protocol.InfoHash]model.Torrent{}
 	for _, t := range rows {
 		byHash[t.InfoHash] = *t
 	}
-	kept := make([]protocol.ID, 0, len(hashes))
+	kept := make([]protocol.InfoHash, 0, len(hashes))
 	for _, h := range hashes {
+		if alias := byHash[h].InfoHashV2; alias != nil && c.namePolicy.ExcludesHash(*alias) {
+			continue
+		}
 		d := c.namePolicy.Evaluate(h, byHash[h].Name)
 		if !d.Eligible {
 			c.namePolicy.Observe("processor", d)
@@ -95,7 +98,7 @@ func (c processor) admitNames(ctx context.Context, hashes []protocol.ID) ([]prot
 	if err != nil {
 		return nil, err
 	}
-	adult := map[protocol.ID]bool{}
+	adult := map[protocol.InfoHash]bool{}
 	for _, tc := range contents {
 		adult[tc.InfoHash] = adult[tc.InfoHash] || tc.ContentType.Valid && tc.ContentType.ContentType == model.ContentTypeXxx
 	}
@@ -142,11 +145,11 @@ func (c processor) providerNameAdmission(ctx context.Context, source namepolicy.
 // Direct classification can complete after a stored name changes. Lock and
 // re-read that source before any derived rows/tags are written, leaving the raw
 // source intact and the response unapplied when its admission no longer holds.
-func (c processor) guardNameApplications(ctx context.Context, tx *dao.Query, names map[protocol.ID]string) error {
+func (c processor) guardNameApplications(ctx context.Context, tx *dao.Query, names map[protocol.InfoHash]string) error {
 	if !c.namePolicy.Enabled() {
 		return nil
 	}
-	hashes := make([]protocol.ID, 0, len(names))
+	hashes := make([]protocol.InfoHash, 0, len(names))
 	for h := range names {
 		hashes = append(hashes, h)
 	}

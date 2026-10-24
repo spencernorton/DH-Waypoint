@@ -1,7 +1,6 @@
 package model
 
 import (
-	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -9,6 +8,7 @@ import (
 
 	"github.com/facette/natsort"
 	"github.com/spencernorton/DH-Waypoint/internal/lexer"
+	"github.com/spencernorton/DH-Waypoint/internal/protocol"
 	"gorm.io/gorm"
 )
 
@@ -98,9 +98,20 @@ func (t Torrent) PublishedAt() time.Time {
 }
 
 func (t Torrent) MagnetURI() string {
-	return "magnet:?xt=urn:btih:" + t.InfoHash.String() +
-		"&dn=" + url.QueryEscape(t.Name) +
+	return t.Identities().Magnet(t.Name) +
 		"&xl=" + strconv.FormatUint(uint64(t.Size), 10)
+}
+
+func (t Torrent) Identities() protocol.TorrentIdentities {
+	ids := protocol.TorrentIdentities{V2: t.InfoHashV2}
+	if t.InfoHash.IsV2() {
+		h := t.InfoHash
+		ids.V2 = &h
+	} else {
+		h := t.InfoHash
+		ids.V1 = &h
+	}
+	return ids
 }
 
 // HasFilesInfo returns true if we know about the files in this torrent.

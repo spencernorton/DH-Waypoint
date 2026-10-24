@@ -87,7 +87,7 @@ func TestSearchCountProvenance(t *testing.T) {
 }
 
 func TestToItemMapping(t *testing.T) {
-	hash := protocol.ID{0xab}
+	hash := protocol.InfoHash{0xab}
 	seeders := uint(12)
 	tc := model.TorrentContent{
 		InfoHash:    hash,
@@ -113,4 +113,7 @@ func TestOpenAPIDocsCopyMatchesEmbedded(t *testing.T) {
 	doc, err := os.ReadFile(filepath.Join("..", "..", "docs", "reference", "openapi.yaml"))
 	require.NoError(t, err)
 	require.Equal(t, openAPISpec, doc)
+	v2, err := os.ReadFile(filepath.Join("..", "..", "docs", "reference", "openapi-v2.yaml"))
+	require.NoError(t, err)
+	require.Equal(t, openAPIV2Spec, v2)
 }

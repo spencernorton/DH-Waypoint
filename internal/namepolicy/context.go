@@ -17,7 +17,7 @@ func WithAdmission(ctx context.Context, check Admission) context.Context {
 	return context.WithValue(ctx, admissionKey{}, check)
 }
 
-func (p *Policy) AdmitContext(ctx context.Context, h protocol.ID, name, contentType string) (Decision, error) {
+func (p *Policy) AdmitContext(ctx context.Context, h protocol.InfoHash, name, contentType string) (Decision, error) {
 	d := p.EvaluateContext(ctx, h, name, contentType)
 	if !p.Enabled() || !d.Eligible {
 		return d, nil
@@ -38,18 +38,18 @@ func WithPolicy(ctx context.Context, p *Policy) context.Context {
 func FromContext(ctx context.Context) *Policy { p, _ := ctx.Value(policyKey{}).(*Policy); return p }
 
 type Source struct {
-	InfoHash          protocol.ID
+	InfoHash          protocol.InfoHash
 	Name, ContentType string
 }
 
-func WithSource(ctx context.Context, h protocol.ID, name, contentType string) context.Context {
+func WithSource(ctx context.Context, h protocol.InfoHash, name, contentType string) context.Context {
 	return context.WithValue(ctx, sourceKey{}, Source{h, name, contentType})
 }
 func SourceFrom(ctx context.Context) (Source, bool) {
 	s, ok := ctx.Value(sourceKey{}).(Source)
 	return s, ok
 }
-func (p *Policy) EvaluateContext(ctx context.Context, h protocol.ID, name, contentType string) Decision {
+func (p *Policy) EvaluateContext(ctx context.Context, h protocol.InfoHash, name, contentType string) Decision {
 	if s, ok := SourceFrom(ctx); ok {
 		return p.EvaluateClassified(s.InfoHash, s.Name, s.ContentType)
 	}

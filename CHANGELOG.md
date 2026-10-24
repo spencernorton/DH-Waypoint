@@ -38,10 +38,13 @@
   as well as dependency names; enforce the adapter's public-contract boundary.
 
 
-- Add algorithm-aware torrent identity and bounded BEP 52 metadata validation
-  foundations, including verified hybrid layouts, original-info-byte hashing,
-  v2 piece-layer checks and full SHA-256 magnet helpers. Runtime integration
-  follows separately; this increment does not yet enable v2 crawling or APIs.
+- Index v1, pure v2 and hybrid torrent metadata with complete SHA-256 identities,
+  verified hybrid associations, original-info-byte hashing and bounded BEP 52
+  validation. Add validated torrent-file import, a raw zero-plugin REST v2
+  catalogue, complete magnets and explicit processor v2 negotiation. Preserve
+  v1 API and processor semantics. Identity migrations refuse unsafe downgrade;
+  raw name search gains a concurrent trigram index. Metadata indexing does not
+  download payloads or claim unavailable BEP 9 outer piece layers were verified.
 
 ## 5.7.0 — 2026-10-24
 

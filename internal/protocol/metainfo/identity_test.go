@@ -64,6 +64,11 @@ func TestParseIdentityV1V2AndHybrid(t *testing.T) {
 			if kind == "v2" {
 				_, err := ParseInfoBytes(v1, raw)
 				require.ErrorIs(t, err, ErrWrongInfoHash)
+				_, err = ParseMetaInfoBytes(v1.WireID(), raw)
+				require.ErrorIs(t, err, ErrWrongInfoHash, "legacy callers must not invent a pure-v2 SHA-1 identity")
+			} else {
+				_, err := ParseMetaInfoBytes(v1.WireID(), raw)
+				require.NoError(t, err)
 			}
 			wrong := expected
 			wrong[19] ^= 1
@@ -131,6 +136,27 @@ func TestOriginalBytesAndEncodingBounds(t *testing.T) {
 	modified := bytes.Replace(raw, []byte("Synthetic"), []byte("synthetic"), 1)
 	_, err := ParseInfoBytes(protocol.InfoHashV2(sha256.Sum256(raw)), modified)
 	require.ErrorIs(t, err, ErrWrongInfoHash)
+}
+
+func TestHybridRepeatedPaddingAndAlignedFileOrder(t *testing.T) {
+	root := sha256.Sum256([]byte("x"))
+	file := map[string]any{"": map[string]any{"length": 1, "pieces root": root[:]}}
+	v1 := []any{map[string]any{"length": 1, "path": []string{"a"}}, map[string]any{"length": 16383, "path": []string{".pad", "16383"}, "attr": "p"}, map[string]any{"length": 1, "path": []string{"b"}}, map[string]any{"length": 16383, "path": []string{".pad", "16383"}, "attr": "p"}, map[string]any{"length": 1, "path": []string{"c"}}}
+	m := map[string]any{"name": "Synthetic.Collection", "piece length": 16384, "pieces": make([]byte, 60), "files": v1, "meta version": 2, "file tree": map[string]any{"a": file, "b": file, "c": file}}
+	raw := encoded(t, m)
+	parsed, err := ParseInfoBytes(protocol.InfoHashV2(sha256.Sum256(raw)), raw)
+	require.NoError(t, err)
+	require.NotNil(t, parsed.Identities.V1)
+	require.Len(t, parsed.Files, 3)
+	v1[1].(map[string]any)["length"] = 16382
+	raw = encoded(t, m)
+	_, err = ParseInfoBytes(protocol.InfoHashV2(sha256.Sum256(raw)), raw)
+	require.Error(t, err, "a hybrid cannot shift a payload file off the v2 piece boundary")
+	v1[1].(map[string]any)["length"] = 16383
+	v1[2].(map[string]any)["path"] = []string{"c"}
+	raw = encoded(t, m)
+	_, err = ParseInfoBytes(protocol.InfoHashV2(sha256.Sum256(raw)), raw)
+	require.Error(t, err, "file order and names must match")
 }
 
 func TestV2OuterPieceLayersAndInfoOnlyDistinction(t *testing.T) {

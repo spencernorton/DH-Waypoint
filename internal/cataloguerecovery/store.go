@@ -97,8 +97,8 @@ func validateNow(now time.Time) error {
 	return nil
 }
 func validateHash(hash []byte) error {
-	if len(hash) != 20 {
-		return fmt.Errorf("catalogue recovery: 20-byte hash required")
+	if len(hash) != 20 && len(hash) != 32 {
+		return fmt.Errorf("catalogue recovery: full 20-byte or 32-byte hash required")
 	}
 	return nil
 }
@@ -495,7 +495,7 @@ func (s *Store) Restore(ctx context.Context, id int64, now time.Time) (bool, err
 	if err = tx.QueryRow(ctx, schemaQuery, tables).Scan(&schema); err != nil {
 		return false, err
 	}
-	if !bytes.Equal(p["_schema"], schema) {
+	if !compatibleIdentitySchema(p["_schema"], schema) {
 		return false, ErrConflict
 	}
 	if len(p) != len(tables)+1 {
@@ -612,6 +612,11 @@ func restoreTable(ctx context.Context, tx pgx.Tx, table string, b json.RawMessag
 		return ErrConflict
 	}
 	for _, r := range records {
+		// Migration 70 adds exactly this nullable column. Restore's schema gate
+		// has already proved every older column and constraint is unchanged.
+		if _, exists := r["info_hash_v2"]; table == "torrents" && !exists && all["info_hash_v2"] && len(r) == len(all)-1 {
+			r["info_hash_v2"] = json.RawMessage("null")
+		}
 		if len(r) != len(all) {
 			return ErrConflict
 		}
@@ -620,6 +625,10 @@ func restoreTable(ctx context.Context, tx pgx.Tx, table string, b json.RawMessag
 				return ErrConflict
 			}
 		}
+	}
+	b, err = json.Marshal(records)
+	if err != nil {
+		return err
 	}
 	name := pgx.Identifier{table}.Sanitize()
 	col := strings.Join(columns, ",")

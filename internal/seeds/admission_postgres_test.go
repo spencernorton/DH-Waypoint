@@ -83,8 +83,8 @@ func TestPostgresSeedsSelectionAndPacketAdmission(t *testing.T) {
 			require.NoError(t, err)
 			_, err = pool.Exec(ctx, `insert into torrent_contents values('adult-sibling',$1,'xxx',100,100)`, admissionHash(12))
 			require.NoError(t, err)
-			var excluded protocol.ID
-			copy(excluded[:], admissionHash(5))
+			var excluded protocol.InfoHash
+			require.NoError(t, excluded.Scan(admissionHash(5)))
 			r := admissionRunner(t, pool, enabled, excluded.String())
 			var sent [][]byte
 			r.scraper.scrape = func(_ context.Context, _ string, hashes []infohash.T) ([]scrapeItem, error) {

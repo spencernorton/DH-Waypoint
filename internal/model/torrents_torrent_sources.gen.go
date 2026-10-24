@@ -15,15 +15,15 @@ const TableNameTorrentsTorrentSource = "torrents_torrent_sources"
 
 // TorrentsTorrentSource mapped from table <torrents_torrent_sources>
 type TorrentsTorrentSource struct {
-	Source        string        `gorm:"column:source;primaryKey;<-:create" json:"source"`
-	InfoHash      protocol.ID   `gorm:"column:info_hash;primaryKey;<-:create" json:"infoHash"`
-	ImportID      NullString    `gorm:"column:import_id" json:"importId"`
-	Seeders       NullUint      `gorm:"column:seeders" json:"seeders"`
-	Leechers      NullUint      `gorm:"column:leechers" json:"leechers"`
-	PublishedAt   sql.NullTime  `gorm:"column:published_at" json:"publishedAt"`
-	CreatedAt     time.Time     `gorm:"column:created_at;not null;<-:create" json:"createdAt"`
-	UpdatedAt     time.Time     `gorm:"column:updated_at;not null" json:"updatedAt"`
-	TorrentSource TorrentSource `gorm:"foreignKey:Source" json:"torrent_source"`
+	Source        string            `gorm:"column:source;primaryKey;<-:create" json:"source"`
+	InfoHash      protocol.InfoHash `gorm:"column:info_hash;primaryKey;<-:create" json:"infoHash"`
+	ImportID      NullString        `gorm:"column:import_id" json:"importId"`
+	Seeders       NullUint          `gorm:"column:seeders" json:"seeders"`
+	Leechers      NullUint          `gorm:"column:leechers" json:"leechers"`
+	PublishedAt   sql.NullTime      `gorm:"column:published_at" json:"publishedAt"`
+	CreatedAt     time.Time         `gorm:"column:created_at;not null;<-:create" json:"createdAt"`
+	UpdatedAt     time.Time         `gorm:"column:updated_at;not null" json:"updatedAt"`
+	TorrentSource TorrentSource     `gorm:"foreignKey:Source" json:"torrent_source"`
 }
 
 // TableName TorrentsTorrentSource's table name

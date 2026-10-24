@@ -96,7 +96,7 @@ func TestDefaultModeNeedsNoClassifierOrPlugin(t *testing.T) {
 	)
 	p.mode = NewDefaultConfig().Mode
 	expectTorrentContentInsert(mock)
-	if err := p.Process(context.Background(), MessageParams{InfoHashes: []protocol.ID{hash}}); err != nil {
+	if err := p.Process(context.Background(), MessageParams{InfoHashes: []protocol.InfoHash{hash}}); err != nil {
 		t.Fatal(err)
 	}
 	if got := blocker.blockedHashes(); len(got) != 0 {
@@ -127,7 +127,7 @@ func TestProcessRawModeSkipsRunnerAndContentFilter(t *testing.T) {
 	p.contentFilter = contentfilter.New(cfg)
 
 	expectTorrentContentInsert(mock)
-	if err := p.Process(context.Background(), MessageParams{InfoHashes: []protocol.ID{hash}}); err != nil {
+	if err := p.Process(context.Background(), MessageParams{InfoHashes: []protocol.InfoHash{hash}}); err != nil {
 		t.Fatalf("Process: %v", err)
 	}
 	if runnerCalled {

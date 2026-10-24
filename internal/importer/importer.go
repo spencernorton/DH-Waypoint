@@ -16,6 +16,7 @@ import (
 	"github.com/spencernorton/DH-Waypoint/internal/namepolicy"
 	"github.com/spencernorton/DH-Waypoint/internal/processor"
 	"github.com/spencernorton/DH-Waypoint/internal/protocol"
+	"github.com/spencernorton/DH-Waypoint/internal/protocol/metainfo"
 	"gorm.io/gorm/clause"
 )
 
@@ -24,8 +25,9 @@ type Importer interface {
 }
 
 type Item struct {
+	metadata        *metainfo.ValidatedInfo
 	Source          string
-	InfoHash        protocol.ID
+	InfoHash        protocol.InfoHash
 	Name            string
 	Size            uint
 	Private         bool
@@ -162,7 +164,7 @@ func (i *activeImport) buffer(item Item) {
 	defer i.mutex.Unlock()
 
 	i.itemBuffer = append(i.itemBuffer, item)
-	if len(i.itemBuffer) >= int(i.bufferSize) {
+	if item.metadata != nil || len(i.itemBuffer) >= int(i.bufferSize) {
 		i.flushLocked()
 	}
 }
@@ -201,9 +203,12 @@ func (i *activeImport) gateItems(items []Item) ([]Item, error) {
 	if len(items) == 0 {
 		return items, nil
 	}
-	hashes := make([]protocol.ID, len(items))
-	for idx, it := range items {
-		hashes[idx] = it.InfoHash
+	hashes := make([]protocol.InfoHash, 0, 2*len(items))
+	for _, it := range items {
+		hashes = append(hashes, it.InfoHash)
+		if it.metadata != nil && it.metadata.Identities.V2 != nil && *it.metadata.Identities.V2 != it.InfoHash {
+			hashes = append(hashes, *it.metadata.Identities.V2)
+		}
 	}
 
 	before := len(hashes)
@@ -227,16 +232,18 @@ func (i *activeImport) gateItems(items []Item) ([]Item, error) {
 		}
 	}
 
-	if len(hashes) == len(items) {
-		return items, nil // nothing dropped — avoid the rebuild
-	}
-	keep := make(map[protocol.ID]struct{}, len(hashes))
+	keep := make(map[protocol.InfoHash]struct{}, len(hashes))
 	for _, h := range hashes {
 		keep[h] = struct{}{}
 	}
 	out := make([]Item, 0, len(hashes))
 	for _, it := range items {
 		if _, ok := keep[it.InfoHash]; ok {
+			if it.metadata != nil && it.metadata.Identities.V2 != nil {
+				if _, exists := keep[*it.metadata.Identities.V2]; !exists {
+					continue
+				}
+			}
 			out = append(out, it)
 		}
 	}
@@ -246,6 +253,17 @@ func (i *activeImport) gateItems(items []Item) ([]Item, error) {
 func (i *activeImport) persistItems(items ...Item) error {
 	if len(items) == 0 {
 		return nil
+	}
+	for _, item := range items {
+		if err := item.InfoHash.Validate(); err != nil {
+			return err
+		}
+		if item.InfoHash.IsV2() && item.metadata == nil {
+			return errors.New("v2 imports require verified torrent metadata")
+		}
+		if item.metadata != nil && item.metadata.Identities.Canonical() != item.InfoHash {
+			return errors.New("metadata identity mismatch")
+		}
 	}
 	if !i.namePolicy.Enabled() {
 		var err error
@@ -289,7 +307,7 @@ func (i *activeImport) admitNamesTx(tx *dao.Query, items []Item) ([]Item, error)
 	if err != nil {
 		return nil, err
 	}
-	names := map[protocol.ID]string{}
+	names := map[protocol.InfoHash]string{}
 	for _, t := range existing {
 		names[t.InfoHash] = t.Name
 	}
@@ -298,12 +316,15 @@ func (i *activeImport) admitNamesTx(tx *dao.Query, items []Item) ([]Item, error)
 	if err != nil {
 		return nil, err
 	}
-	adult := map[protocol.ID]bool{}
+	adult := map[protocol.InfoHash]bool{}
 	for _, c := range contents {
 		adult[c.InfoHash] = adult[c.InfoHash] || c.ContentType.Valid && c.ContentType.ContentType == model.ContentTypeXxx
 	}
 	kept := make([]Item, 0, len(items))
 	for _, it := range items {
+		if it.metadata != nil && (!i.namePolicy.Evaluate(it.InfoHash, it.Name).Eligible || it.metadata.Identities.V2 != nil && i.namePolicy.ExcludesHash(*it.metadata.Identities.V2)) {
+			continue
+		}
 		name := it.Name
 		if n, ok := names[it.InfoHash]; ok {
 			name = n
@@ -346,7 +367,9 @@ func (i *activeImport) persistItemsTx(tx *dao.Query, items []Item, committedSour
 	torrents := make([]*model.Torrent, 0, len(items))
 	torrentsTorrentSources := make([]*model.TorrentsTorrentSource, 0, len(items))
 	torrentHints := make([]*model.TorrentHint, 0, len(items))
-	infoHashes := make([]protocol.ID, 0, len(items))
+	var torrentFiles []*model.TorrentFile
+	var metadataUpdates []model.Torrent
+	infoHashes := make([]protocol.InfoHash, 0, len(items))
 
 	for _, item := range items {
 		if _, ok1 := i.importedSources[item.Source]; !ok1 {
@@ -360,6 +383,14 @@ func (i *activeImport) persistItemsTx(tx *dao.Query, items []Item, committedSour
 		}
 
 		torrent := createTorrentModel(i.info, item)
+		if item.metadata != nil {
+			metadataUpdates = append(metadataUpdates, torrent)
+			for _, file := range torrent.Files {
+				f := file
+				torrentFiles = append(torrentFiles, &f)
+			}
+			torrent.Files = nil
+		}
 		if !torrent.Hint.IsNil() {
 			hint := torrent.Hint
 			torrentHints = append(torrentHints, &hint)
@@ -412,6 +443,21 @@ func (i *activeImport) persistItemsTx(tx *dao.Query, items []Item, committedSour
 			return namepolicy.ErrExcluded
 		}
 	}
+	for _, torrent := range metadataUpdates {
+		updates := map[string]any{"name": torrent.Name, "size": torrent.Size, "files_status": torrent.FilesStatus, "files_count": torrent.FilesCount,
+			"private": clause.Expr{SQL: "torrents.private OR ?", Vars: []any{torrent.Private}}, "updated_at": time.Now()}
+		if torrent.InfoHashV2 != nil {
+			updates["info_hash_v2"] = torrent.InfoHashV2
+		}
+		if err := tx.Torrent.WithContext(i.ctx).UnderlyingDB().Model(&model.Torrent{}).Where("info_hash = ?", torrent.InfoHash).Updates(updates).Error; err != nil {
+			return err
+		}
+	}
+	if len(torrentFiles) > 0 {
+		if err := tx.TorrentFile.WithContext(i.ctx).Clauses(clause.OnConflict{DoNothing: true}).CreateInBatches(torrentFiles, 100); err != nil {
+			return err
+		}
+	}
 
 	if len(torrentHints) > 0 {
 		if createTorrentHintsErr := tx.TorrentHint.WithContext(i.ctx).Clauses(clause.OnConflict{
@@ -448,6 +494,11 @@ func createTorrentModel(info Info, item Item) model.Torrent {
 				},
 			},
 		},
+	}
+	if item.metadata != nil {
+		metadataTorrent := model.TorrentFromMetadata(*item.metadata, item.Source, false, metainfo.MaxFilesCount)
+		metadataTorrent.Sources = t.Sources
+		t = metadataTorrent
 	}
 	if item.ContentType.Valid {
 		t.Hint = model.TorrentHint{

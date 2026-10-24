@@ -71,7 +71,7 @@ func TestPostgresImportUsesStoredNameAndRollsBackConcurrentInsertAdmission(t *te
 		require.NoError(t, pool.QueryRow(ctx, "SELECT count(*) FROM "+table).Scan(&n))
 		before[table] = n
 	}
-	h := protocol.ID{1}
+	h := protocol.InfoHash{1}
 	_, err := pool.Exec(ctx, `INSERT INTO torrents(info_hash,name,size,private,files_status,created_at,updated_at) VALUES($1,'Synthetic.电影.ENG.mkv',1,false,'no_info',now(),now())`, h.Bytes())
 	require.NoError(t, err)
 	require.NoError(t, i.persistItems(Item{InfoHash: h, Name: "Allowed.Caller.Name.mkv", Source: "synthetic-source", Size: 1}))
@@ -91,7 +91,7 @@ func TestPostgresImportUsesStoredNameAndRollsBackConcurrentInsertAdmission(t *te
 	_, err = barrier.Exec(ctx, `SELECT pg_advisory_lock(793105)`)
 	require.NoError(t, err)
 	defer barrier.Exec(context.Background(), `SELECT pg_advisory_unlock(793105)`)
-	h = protocol.ID{2}
+	h = protocol.InfoHash{2}
 	finished := make(chan error, 1)
 	go func() {
 		finished <- i.persistItems(Item{InfoHash: h, Name: "Allowed.Concurrent.Name.mkv", Source: "synthetic-race-source", Size: 1})
@@ -120,7 +120,7 @@ func TestPostgresImportUsesStoredNameAndRollsBackConcurrentInsertAdmission(t *te
 func TestPostgresDirectPrivacyReaderNormalizesIndependentQBSourceAndCategory(t *testing.T) {
 	_, pool := nameImportFixture(t)
 	ctx := context.Background()
-	hash := protocol.ID{3}
+	hash := protocol.InfoHash{3}
 	store := evidence.NewStore(lazy.New(func() (*pgxpool.Pool, error) { return pool, nil }))
 	cases := []struct {
 		source, category string

@@ -65,7 +65,7 @@ func TestVerdictEvidenceNoPII(t *testing.T) {
 	}, model.Torrent{
 		// Leading byte 0 puts this squarely INSIDE the 1-in-128 audit
 		// sample, so only the disabled flag can be keeping the name out.
-		InfoHash: protocol.ID([20]byte{0}),
+		InfoHash: protocol.InfoHashV1(protocol.ID{0}),
 		Name:     torrentName,
 	}, []string{filePath}, newDeleteAuditBudget(false, 1000, nil)))
 	assert.False(t, strings.Contains(ev, torrentName),

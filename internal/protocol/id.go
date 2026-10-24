@@ -84,6 +84,9 @@ func MustParseID(str string) ID {
 }
 
 func NewIDFromRawString(s string) (id ID) {
+	if len(s) != 20 {
+		panic("protocol ID must be exactly 20 bytes")
+	}
 	if n := copy(id[:], s); n != 20 {
 		panic(n)
 	}
@@ -92,6 +95,9 @@ func NewIDFromRawString(s string) (id ID) {
 }
 
 func NewIDFromByteSlice(b []byte) (id ID, _ error) {
+	if len(b) != 20 {
+		return id, errors.New("protocol ID must be exactly 20 bytes")
+	}
 	if n := copy(id[:], b); n != 20 {
 		return id, errors.New("must be 20 bytes")
 	}
@@ -130,7 +136,7 @@ func (id ID) Bytes() []byte {
 
 func (id *ID) Scan(value interface{}) error {
 	v, ok := value.([]byte)
-	if !ok {
+	if !ok || len(v) != 20 {
 		return errors.New("invalid bytes type")
 	}
 
@@ -165,6 +171,9 @@ func (id *ID) UnmarshalBencode(b []byte) error {
 	var s string
 	if err := bencode.Unmarshal(b, &s); err != nil {
 		return err
+	}
+	if len(s) != 20 {
+		return errors.New("protocol ID must be exactly 20 bytes")
 	}
 
 	if n := copy(id[:], s); n != 20 {

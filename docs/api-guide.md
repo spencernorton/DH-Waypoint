@@ -10,11 +10,12 @@ exhaustive references are linked at the end.
 | Surface | Path | Auth | Use it for |
 |---|---|---|---|
 | GraphQL | `POST /graphql` | `HTTP_SERVER_API_KEY` when set (Bearer or `X-API-Key`) | Search, facets, files, health — the fullest catalogue API for custom UIs/clients |
-| REST | `GET /api/v1/*` | same API key when set | Search, detail, files, stats for clients that do not want GraphQL; spec at `/api/v1/openapi.yaml` |
+| REST v1 | `GET /api/v1/*` | same API key when set | Search, detail, files, stats for clients that do not want GraphQL; spec at `/api/v1/openapi.yaml` |
+| Raw catalogue v2 | `GET /api/v2/*` | same API key when set | Unclassified v1/v2/hybrid metadata, full identities and magnets; [contract](reference/openapi-v2.yaml) |
 | Torznab | `GET /torznab/api` | `apikey=` or `Authorization: Bearer` when `TORZNAB_API_KEY` is set | Sonarr/Radarr/Lidarr/Readarr/Prowlarr indexer feed |
 | Processors admin | `/api/processors/v1/*` | `Authorization: Bearer $PROCESSORS_ADMIN_TOKEN` (503 when unset) | Register/pause/remove plugins, job status |
 | Evidence webhook | `POST /evidence/arr/<instance>` | `X-Evidence-Token: $EVIDENCE_WEBHOOK_SECRET` | Feed *arr grab/import outcomes back into matching |
-| Import | `POST /import` | none built-in | Bulk NDJSON import of torrent records |
+| Import | `POST /import`, `POST /import/torrent` | same API key when set | Bulk v1 NDJSON or one validated v1/v2/hybrid torrent file |
 | Private files + tracker | `/api/private/v1/*`, `/announce/<passkey>`, `/scrape/<passkey>` | admin bearer token / member passkey | Private `.torrent` upload, personalised download, swarm tracking ([guide](private-tracker.md)) |
 | Metrics / status | `GET /metrics`, `GET /status` | none built-in | Prometheus scrape, liveness |
 
@@ -75,6 +76,23 @@ is approximate; `false` means the count is exact. Use `has_next_page` to decide
 whether another page is available.
 The `/stats` response likewise includes `torrent_contents_is_estimate` alongside
 `torrent_contents`.
+
+## 2c. Raw v1/v2/hybrid metadata without processors
+
+```sh
+curl -s "$B/api/v2/search?q=Synthetic&limit=20"
+curl -s "$B/api/v2/torrents/<complete-40-or-64-hex-hash>"
+curl -s "$B/api/v2/torrents/<complete-hash>/files?limit=100"
+curl -s --data-binary @synthetic.torrent "$B/import/torrent"
+```
+
+REST v2 queries torrent metadata directly, so it works without classification
+rows or external plugins. Follow `next_after` for search and `next_after_index`
+for files; no count or offset is exposed. V2 hashes remain complete SHA-256.
+Verified hybrids resolve through either identity and magnets contain both exact
+topics. REST v1, GraphQL and Torznab remain SHA-1 views. See
+[BitTorrent v2](bittorrent-v2.md) for bounds, processor opt-in and migration rules.
+When the operator API key is configured, include it in these calls too.
 
 ## 3. Feed an *arr (Torznab)
 

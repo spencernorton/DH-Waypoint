@@ -22,12 +22,12 @@ import (
 )
 
 type persistPayload struct {
-	applications     map[protocol.ID]*classification.ApplicationPreservation
+	applications     map[protocol.InfoHash]*classification.ApplicationPreservation
 	torrentContents  []model.TorrentContent
 	deleteIDs        []string
-	deleteInfoHashes []protocol.ID
+	deleteInfoHashes []protocol.InfoHash
 	deleteReasons    []string
-	addTags          map[protocol.ID]map[string]struct{}
+	addTags          map[protocol.InfoHash]map[string]struct{}
 }
 
 func (p persistPayload) isEmpty() bool {
@@ -59,7 +59,7 @@ func (p persistPayload) isEmpty() bool {
 // one transaction; the only 'llm' writer is this code path, and the
 // worst-case lost race re-heals on the next (cached) LLM pass.
 func (c processor) restoreLLMEnglishAudio(ctx context.Context, tx *dao.Query, tcs []*model.TorrentContent) error {
-	byHash := make(map[protocol.ID][]*model.TorrentContent, len(tcs))
+	byHash := make(map[protocol.InfoHash][]*model.TorrentContent, len(tcs))
 	hashes := make([]driver.Valuer, 0, len(tcs))
 	for _, tc := range tcs {
 		if tc.EnglishAudioSource.Valid {
@@ -97,7 +97,7 @@ func (c processor) persist(ctx context.Context, payload persistPayload) error {
 	torrentContentsPtr := make([]*model.TorrentContent, 0, len(payload.torrentContents))
 	torrentTagsPtr := make([]*model.TorrentTag, 0, len(payload.addTags))
 
-	sourceNames := map[protocol.ID]string{}
+	sourceNames := map[protocol.InfoHash]string{}
 	for _, tc := range payload.torrentContents {
 		sourceNames[tc.InfoHash] = tc.Torrent.Name
 		tcCopy := tc
@@ -194,7 +194,7 @@ func (c processor) persist(ctx context.Context, payload persistPayload) error {
 		}
 	}
 	if len(payload.deleteInfoHashes) > 0 {
-		grouped := make(map[string][]protocol.ID)
+		grouped := make(map[string][]protocol.InfoHash)
 		for i, h := range payload.deleteInfoHashes {
 			grouped[payload.deleteReasons[i]] = append(grouped[payload.deleteReasons[i]], h)
 		}
@@ -213,12 +213,12 @@ var errReleaseAttributesChanged = errors.New("retained release attribute source 
 // Non-null advertised claims are name-owned retained facts. A later cycle that
 // skips parsing must not erase them, and automatic processing never overwrites
 // a retained value with another interpretation of the same name.
-func (c processor) restoreReleaseAttributes(ctx context.Context, tx *dao.Query, tcs []*model.TorrentContent, names map[protocol.ID]string) error {
-	byHash := map[protocol.ID][]*model.TorrentContent{}
+func (c processor) restoreReleaseAttributes(ctx context.Context, tx *dao.Query, tcs []*model.TorrentContent, names map[protocol.InfoHash]string) error {
+	byHash := map[protocol.InfoHash][]*model.TorrentContent{}
 	for _, tc := range tcs {
 		byHash[tc.InfoHash] = append(byHash[tc.InfoHash], tc)
 	}
-	hashes := make([]protocol.ID, 0, len(byHash))
+	hashes := make([]protocol.InfoHash, 0, len(byHash))
 	for hash := range byHash {
 		hashes = append(hashes, hash)
 	}
@@ -268,7 +268,7 @@ func (c processor) restoreReleaseAttributes(ctx context.Context, tx *dao.Query, 
 
 // Recheck normal refreshes in their writing transaction. This closes the gap
 // between a read-only preservation lookup and the processor's UpdateAll upsert.
-func guardPreservedApplications(ctx context.Context, tx *dao.Query, guards map[protocol.ID]*classification.ApplicationPreservation) error {
+func guardPreservedApplications(ctx context.Context, tx *dao.Query, guards map[protocol.InfoHash]*classification.ApplicationPreservation) error {
 	if len(guards) == 0 {
 		return nil
 	}
@@ -276,7 +276,7 @@ func guardPreservedApplications(ctx context.Context, tx *dao.Query, guards map[p
 	if err := db.Exec(`LOCK TABLE label_evidence,torrent_canonical_labels,torrent_verdict_state,junkpurge_quarantine IN SHARE MODE`).Error; err != nil {
 		return err
 	}
-	hashes := make([]protocol.ID, 0, len(guards))
+	hashes := make([]protocol.InfoHash, 0, len(guards))
 	for hash := range guards {
 		hashes = append(hashes, hash)
 	}
