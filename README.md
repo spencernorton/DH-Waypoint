@@ -56,9 +56,10 @@ separate HTTP processor that you register by dropping a plugin file into
 `./plugins`. Processors only propose: the core validates every proposal and
 never lets one delete a record.
 
-**Curation runs dry first.** Content filtering and retention are off until
-enabled, then run in shadow with `would_*` metrics until you also set them to
-enforce, and quarantined records stay restorable. A CSAM blocklist, fed from
+**Curation hides; it does not delete.** Content filtering and retention
+report what they would remove through `would_*` metrics, while the opt-in
+adult filter and name policy keep releases out of Torznab and GraphQL results
+without deleting them. A CSAM blocklist, fed from
 lists you choose, is checked before any metadata fetch.
 
 **The APIs are standard and bounded.** Torznab for the \*arrs, GraphQL over
@@ -142,7 +143,7 @@ go vet ./...
 go test -race ./...
 python3 scripts/check_headless_boundary.py
 python3 scripts/check_processor_boundary.py
-task build    # ./dh-waypoint, versioned from VERSION
+task build    # ./DH-Waypoint, versioned from VERSION
 task lint
 ```
 

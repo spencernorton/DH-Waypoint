@@ -366,6 +366,10 @@ entries (5), which the ladder's own title evidence now resolves for the EP-numbe
 
 ### Reproduce
 
+`eval-freeze` and `eval-replay` are no longer in the CLI; their source is kept
+under `_legacy/embedded/` as evidence. The steps below record how the numbers
+above were produced and need a historical build to rerun.
+
 Inside the running container (`worker run --all`; replay is read-only against
 the catalogue):
 

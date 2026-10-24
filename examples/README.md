@@ -25,7 +25,7 @@ curl --fail http://localhost:3333/graphql \
 
 There is no browser UI or GraphQL playground in this image. The backend
 runs without the hosted site, any account system, or private hardware.
-Optional metadata and LLM stages use your own configuration and credentials.
+Optional metadata providers and processors use your own configuration and credentials.
 
 ## Endpoints
 
@@ -35,12 +35,13 @@ Optional metadata and LLM stages use your own configuration and credentials.
 | `/torznab` | Torznab feed for *arr clients | `TORZNAB_API_KEY` when set |
 | `/metrics` | Prometheus metrics | Trusted proxy required when exposed |
 | `POST /import` | NDJSON bulk import | Trusted proxy required when exposed |
-| `/evidence/arr/*` | *arr webhook ingestion | `X-Evidence-Token` header |
+| `/evidence/arr/*` | *arr webhook ingestion | `X-Evidence-Token` when `EVIDENCE_WEBHOOK_SECRET` is set |
 
 PostgreSQL has no published host port. Protect the HTTP API independently
 before exposing it outside your trusted network. Set `TORZNAB_API_KEY` before
-sharing the feed. LLM, content-filter enforcement and destructive retention
-remain opt-in; inspect their shadow metrics before enabling live changes.
+sharing the feed. Content filtering and retention
+remain opt-in and report through shadow metrics; catalogue deletion is
+disabled in current releases ([catalogue removal](../docs/OPERATIONS.md#catalogue-removal)).
 
 The persistent volumes store PostgreSQL, core configuration and core data.
 Existing upstream-compatible paths under `/root/.config/bitmagnet` and

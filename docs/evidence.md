@@ -175,7 +175,7 @@ the next poll.
 - **GraphQL:** `evidence { list(input:{limit:…}) { totalCount items { … } } }`
   and `evidence { indexerStats }`.
 - **Metrics:** `dh_waypoint_evidence_events_received_total{source,kind}`,
-  `dh_waypoint_evidence_events_persisted_total`, `dh_waypoint_evidence_rejected_total{reason}`,
+  `dh_waypoint_evidence_events_persisted_total`, `dh_waypoint_evidence_events_rejected_total{source,kind,reason}`,
   `dh_waypoint_evidence_canonical_upserts_total{source,media_type}`,
   `dh_waypoint_classifier_preempt_preempted_total`, `dh_waypoint_priors_observations_total{event}`,
   `dh_waypoint_priors_outcomes_total{class}`, `dh_waypoint_priors_pending_grabs`,

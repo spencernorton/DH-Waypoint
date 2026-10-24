@@ -45,7 +45,7 @@ driver: builtin/filter-list
 endpoint: ""               # http processor services only
 mode: shadow               # shadow (record only) | apply
 state: active              # active | paused | draining
-priority: 100              # lower runs earlier within a stage
+priority: 100              # lower runs earlier; ties break by stage, then id
 auth_env: ""               # DH_WAYPOINT_PROCESSOR_TOKEN_* name, never a value
 selector:                  # optional; see below
   content_types: [movie]
@@ -141,8 +141,9 @@ non-matching torrents record an abstention without a network call:
 2. Watch proposals: processor status API, `dh-waypoint plugin list`,
    `dh_waypoint_processors_outcomes_total` metrics.
 3. When shadow results are right, set `mode: apply`.
-4. Stack deliberately: lower `priority` runs first within a stage;
-   stages run `classify → extract → match → language → policy → embed`.
+4. Stack deliberately: lower `priority` runs first across the plan; equal
+   priorities run in stage order `classify → extract → match → language →
+   policy → embed`, then by id.
 
 ## Processing modes compose with plugins
 

@@ -1,18 +1,18 @@
 # CLI reference
 
-The DH-Waypoint binary is named `dh-waypoint`. Commands are sorted alphabetically by the underlying `urfave/cli` runtime. Run with no arguments — or `--help` — for the live command list:
+The DH-Waypoint binary is named `dh-waypoint`. Run with no arguments — or `--help` — for the live command list, sorted alphabetically:
 
 ```bash
 dh-waypoint --help
 ```
 
-The command set is small and stable. Anything not on this page does not exist.
+`dh-waypoint <command> --help` shows each command's flags.
 
 ## Top-level commands
 
 | Command | Purpose |
 |---|---|
-| `worker run` | Start one or more workers and block (the container default) |
+| `worker run` | Start one or more workers and block (what the bundled Compose files run) |
 | `worker list` | Print the registered worker keys |
 | `classifier show` | Print the currently loaded classifier workflow source |
 | `classifier schema` | Print the JSON schema describing the workflow source |
@@ -23,15 +23,25 @@ The command set is small and stable. Anything not on this page does not exist.
 | `plugin validate` | Validate a `*.plugin.yml` file without registering it |
 | `plugin test` | Probe a processor service manifest and status |
 | `torrent create` | Hash a file or directory into a `.torrent` file (`--private`, `--tracker`, `--piece-length`) |
-| `process` | One-shot: run the classification + persistence pipeline once over enqueued items, then exit |
+| `process` | One-shot: rematch the torrents given with `--infoHash` through the classification + persistence pipeline, then exit |
 | `reprocess` | Re-classify already-indexed torrents through the current classifier |
-| `attribution` | Attribution sub-commands (powers wantbridge + `*arr` grab attribution) |
-| `migrate` | (dev) database migrations — wraps goose; the worker auto-migrates on startup |
-| `gorm` | (dev) GORM tooling |
+| `anime-backfill` | Recompute the stored `is_anime` flag from torrent names |
+| `backlog-local-classify` | Classify unmatched movie/TV rows locally, without queue jobs or API calls |
+| `catalogue-policy-shadow` | Evaluate English and availability evidence without changing catalogue eligibility |
+| `derived-backfill` | Fill derived `torrent_contents` columns for rows classified before they existed (alias `granularity-backfill`) |
+| `episodes-backfill` | Re-parse 3+ digit or concatenated episode numbers in `tv_show` rows |
+| `purge-content-types` | Count and sample out-of-scope content types; `--write` is refused in current builds (catalogue removal is disabled) |
+| `refresh-alt-titles` | Backfill alternative titles onto existing TMDB content rows |
+| `refresh-anime-titles` | Rebuild the anime alias table from AniDB and Anime-Lists data |
+| `refresh-seeds` | Scrape public UDP trackers (BEP 15) for seeder and leecher counts |
+| `release-fields-repair` | `freeze`, `apply` or `rollback` a bounded filename-field repair plan (see [Configuration](../configuration.md)) |
+| `attribution recon` | Read-only report correlating Torznab results with Prowlarr grabs, qBittorrent state and `*arr` imports |
+
+Commands with a `--write` flag only report until it is given; the `refresh-*` commands persist unless `--dryRun` is given. Pending migrations apply automatically on first database use; `migrate` and `gorm` exist only in the development binary (`go run ./internal/dev`), not in the release image.
 
 ## `dh-waypoint worker`
 
-The entry point for running DH-Waypoint. The container's default command is `worker run --all`.
+The entry point for running DH-Waypoint. The bundled Compose files run `worker run --all`; the image itself has no default command.
 
 ### `worker run`
 
@@ -47,7 +57,7 @@ worker run [--all] [--keys k1,k2,...]
 Examples:
 
 ```bash
-# Production — all workers (default for the container)
+# Production — all workers (what the bundled Compose files run)
 dh-waypoint worker run --all
 
 # Debug a single worker locally
@@ -87,7 +97,7 @@ dh-waypoint classifier show
 dh-waypoint classifier show > current-rules.yaml
 
 # JSON for programmatic consumers
-dh-waypoint classifier show --format json | jq '.rules[0]'
+dh-waypoint classifier show --format json | jq '.workflows | keys'
 ```
 
 ### `classifier schema`
@@ -112,11 +122,11 @@ Renders every resolved configuration path. Output is a wide table:
 
 | Column | Meaning |
 |---|---|
-| `path` | Dot-notation config key (e.g. `dht.scaling_factor`) |
+| `path` | Dot-notation config key (e.g. `dht_crawler.scaling_factor`) |
 | `Type` | Go type |
 | `Value` | Currently resolved value |
 | `Default` | Default if no override applies |
-| `From` | Which resolver produced the value (env-var name, `default`, or `file`) |
+| `From` | Which resolver produced the value (`env`, `default`, or the config file path) |
 
 The `From` column is the most useful single signal — it tells you exactly why a config has the value it does, including whether your env-var override actually took effect.
 
@@ -131,10 +141,10 @@ dh-waypoint config show | grep -i csam
 ## `dh-waypoint process`
 
 ```bash
-dh-waypoint process
+dh-waypoint process --infoHash <hash> [--infoHash <hash> ...]
 ```
 
-One-shot batch processor: runs the classification + persistence pipeline once over enqueued items, then exits. Useful for catch-up runs after a long downtime, or for scripted batch jobs.
+One-shot: rematches each given torrent through the classification + persistence pipeline, ignoring any existing match, then exits. Use `reprocess` for the whole catalogue.
 
 ## `dh-waypoint reprocess`
 
@@ -144,19 +154,11 @@ dh-waypoint reprocess
 
 Re-classifies already-indexed torrents through the current classifier. Idempotent. Run after editing CEL rules to apply the new logic to existing data without re-crawling.
 
-The operation is staged through the queue, so it can be safely interrupted and resumed. Watch progress via Prometheus (`dh_waypoint_classifier_examined_total`).
+The operation is staged through the queue, so it can be safely interrupted and resumed.
 
 ## `dh-waypoint attribution`
 
-Sub-commands powering the wantbridge and `*arr` grab-attribution flow. Not normally invoked by an operator — exposed for diagnostic use during incident response.
-
-## `dh-waypoint migrate` (dev)
-
-Wraps goose for dev/CI use. The worker auto-applies migrations on startup, so you don't need this in normal operation. Available for integration tests and local DB setup.
-
-## `dh-waypoint gorm` (dev)
-
-GORM tooling. Internal use; the surface is unstable.
+`attribution recon` prints a one-shot, read-only report correlating Torznab results with Prowlarr grab history, qBittorrent state and `*arr` import outcomes. It runs only with `ATTRIBUTION_ENABLED=true` and falls back to the `WANTBRIDGE_*` `*arr` settings. Not normally invoked by an operator — exposed for diagnostic use during incident response.
 
 ## Running inside the container
 
@@ -182,15 +184,15 @@ docker exec dh-waypoint dh-waypoint reprocess
 
 | Code | Meaning |
 |---|---|
-| `0` | Success |
-| `1` | Application error (the worker, the resolver, or a sub-command failed) |
-| `2` | CLI flag parsing error (urfave/cli convention) |
+| `0` | Success. An unknown command also exits `0` after logging `command not found`. |
+| `1` | Startup failed (for example invalid configuration), or a command reported its own error (for example `torrent create`, `plugin validate`) |
+| `2` | Any other command error, including flag errors; it is printed as a Go panic with a stack trace |
 
-A subcommand that runs to completion always exits `0`. SIGTERM/SIGINT during `worker run` exits `0` after a clean shutdown.
+SIGTERM/SIGINT during `worker run` exits `0` after a clean shutdown.
 
 ## See also
 
 - [Configuration](../configuration.md)
 - [Examples / self-hoster quickstart](../../examples/README.md)
-- [Upgrading](../../examples/README.md#upgrading)
+- [Upgrade and recovery](../../examples/README.md#upgrade-and-recovery)
 - [Concepts / classification](../concepts/classification.md)

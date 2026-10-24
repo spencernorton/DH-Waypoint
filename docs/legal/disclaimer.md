@@ -35,7 +35,7 @@ Legal treatment of peer-to-peer metadata indexing varies significantly by jurisd
 
 **The DH-Waypoint project does not operate a hosted indexing service and cannot access, modify, or remove records from self-hosted operator databases.**
 - Each operator controls their own PostgreSQL instance, network exposure, blocklists, and retention rules.
-- Operators who receive a copyright or compliance notice regarding their deployment can permanently remove and block specific infohashes using the documented GraphQL deletion mutations, the `internal/verdicts` blocklist ledger, and the blocking manager (`docs/operations/security.md`).
+- Catalogue deletion and crawler blocking are disabled in current releases ([catalogue removal](../OPERATIONS.md#catalogue-removal)). Operators who receive a copyright or compliance notice regarding their deployment can withdraw specific infohashes from Torznab and GraphQL results with `NAME_POLICY_ENABLED` and `NAME_POLICY_EXCLUDED_INFO_HASHES` ([configuration](../configuration.md), [release-name eligibility](../RELEASE_NAME_POLICY.md)); the rows stay in the operator's own PostgreSQL database.
 
 ---
 

@@ -13,8 +13,8 @@ DH-Waypoint's Torznab caps declare music-search support; Lidarr consumes it as a
    | Enable | ✓ |
    | URL | `http://dh-waypoint:3333/torznab` (compose) or `https://dh-waypoint.example.com/torznab` (public) |
    | API Key | your `TORZNAB_API_KEY` |
-   | Categories | `3000` (Audio), `3010` (Audio/MP3), `3020` (Audio/Lossless), `3030` (Audio/Audiobook — optional) |
-   | Search modes | `q`, `artist`, `album` (auto-negotiated via caps) |
+   | Categories | `3000` (Audio), `3030` (Audio/Audiobook — optional) |
+   | Search modes | `q` only (from caps; `artist` and `album` are not supported) |
    | Priority | `25–50` |
    | Early Download Limit | leave default (Lidarr's value) |
 
@@ -25,13 +25,7 @@ DH-Waypoint's Torznab caps declare music-search support; Lidarr consumes it as a
 
 ## Search modes
 
-Lidarr calls the Torznab endpoint with these patterns:
-
-- `?t=music&q=Artist+Name` — generic music search
-- `?t=music&artist=Pink+Floyd&album=Animals` — discrete artist+album
-- `?t=search&q=...` — fallback when artist/album metadata is missing
-
-DH-Waypoint's classifier parses the release name to identify artist + album + format. Releases without recognisable music-shape names (no artist tag, no album-position, etc.) are tagged `unknown` rather than `music`, so they don't pollute Lidarr's results.
+DH-Waypoint's caps always advertise `music-search` with `q` as its only parameter and mark `audio-search` unavailable, so Lidarr searches with free text (`q`) rather than discrete `artist`/`album` parameters. `t=music`, like `cat=3000`, matches only torrents typed `music`.
 
 `[screenshot: lidarr-indexer-test-success]`
 
@@ -39,29 +33,20 @@ DH-Waypoint's classifier parses the release name to identify artist + album + fo
 
 | Newznab ID | Lidarr label | Notes |
 |---|---|---|
-| 3000 | Audio | catch-all |
-| 3010 | Audio/MP3 | lossy |
-| 3020 | Audio/Lossless | FLAC, ALAC, WAV |
+| 3000 | Audio | music |
 | 3030 | Audio/Audiobook | optional; also handled by Readarr |
-| 3040 | Audio/Other | rare |
 
 `[screenshot: lidarr-categories-selector]`
 
 ## Troubleshooting
 
-**Test fails with "Indexer doesn't support music-search"**
-DH-Waypoint's caps endpoint declares `music-search` only when the classifier has at least one music-tagged entry in the index. If you've just deployed and the DHT hasn't surfaced music yet, the cap is omitted. Wait for the first music classification (typically within 10–30 minutes) and re-test.
-
-**0 results on artist+album search**
-Verify by hand: `curl "https://dh-waypoint.example.com/torznab?t=music&artist=Pink+Floyd&album=Animals&apikey=$KEY"`. If the XML returns 0 items, DH-Waypoint hasn't crawled that release. If items return but Lidarr still shows 0, it's a category-filter mismatch — check that 3010/3020 are in your indexer config.
-
-**Quality Profile mis-matches**
-DH-Waypoint's classifier emits format tags (MP3, FLAC, ALAC) into the Torznab `<info>` block. Lidarr maps these to its quality profile. If your custom Quality Profile expects "FLAC 24bit" specifically, the classifier may need a CEL rule extension to extract bit-depth tags — see the classifier customization guide.
+**0 results on a music search**
+Verify by hand: `curl "https://dh-waypoint.example.com/torznab/api?t=music&q=Pink+Floyd+Animals&apikey=$KEY"`. If the XML returns 0 items, DH-Waypoint hasn't crawled that release. If items return but Lidarr still shows 0, it's a category-filter mismatch — check that 3000 is in your indexer config.
 
 `[screenshot: lidarr-custom-formats]`
 
 ## Recommended companions
 
-- **MusicBrainz integration** — Lidarr resolves artist/album metadata via MusicBrainz before querying indexers; DH-Waypoint doesn't change this flow. The combination of MusicBrainz IDs + DH-Waypoint's content tags gives high accuracy.
+- **MusicBrainz integration** — Lidarr resolves artist/album metadata via MusicBrainz before querying indexers; DH-Waypoint doesn't change this flow.
 - **Quality Profiles** — start with Lidarr's defaults; tune later as you see what DH-Waypoint surfaces.
 - **Search delays** — leave default; DH-Waypoint's classifier finishes processing within seconds of DHT discovery.

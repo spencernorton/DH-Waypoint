@@ -17,7 +17,7 @@ The single load-bearing assumption is that the host running DH-Waypoint is trust
 
 ## Network attack surface
 
-The default `examples/docker-compose.public.yml` binds HTTP port `3333` to loopback. If you expand that binding, review every API below. All of these paths answer on it:
+Both Compose files publish HTTP port `3333` on every host interface (`${DH_WAYPOINT_HTTP_PORT:-3333}:3333`). Bind it to `127.0.0.1` or firewall it unless other hosts must reach it, and review every API below. All of these paths answer on it:
 
 | Path | Auth (default) | Sensitive? |
 |---|---|---|
@@ -25,7 +25,11 @@ The default `examples/docker-compose.public.yml` binds HTTP port `3333` to loopb
 | `/torznab/api` | none — gates on `TORZNAB_API_KEY` if set | Yes if `*arr` uses it |
 | `/metrics` | none — gates on `HTTP_SERVER_API_KEY` if set | Information disclosure (DB sizes, infohash counts) |
 | `/import` | none — gates on `HTTP_SERVER_API_KEY` if set | Yes — accepts NDJSON bulk-import |
-| `/evidence/arr/<instance>` | gates on `X-Evidence-Token` matching `EVIDENCE_WEBHOOK_SECRET` | Yes |
+| `/api/v1/*`, `/api/v2/*` | none — gates on `HTTP_SERVER_API_KEY` if set | Catalogue reads |
+| `/evidence/arr/<instance>` | none — gates on `X-Evidence-Token` matching `EVIDENCE_WEBHOOK_SECRET` if set | Yes — writes evidence that outranks the classifier |
+| `/api/processors/v1/*` | `Authorization: Bearer` matching `PROCESSORS_ADMIN_TOKEN`; 503 when unset | Yes — registers processors |
+| `/announce/<passkey>`, `/scrape/<passkey>`, `/api/private/v1/*` | tracker passkey or `TRACKER_ADMIN_TOKEN`; off unless `TRACKER_ENABLED` | Yes if the tracker is on |
+| `/status` | none, by design | Liveness only |
 
 **Do not expose port `3333` directly to the internet.** Always front it with a reverse proxy that adds auth.
 
@@ -88,7 +92,7 @@ CSAM — the one category where post-fetch detection is too late — has its own
 
 Briefly: a pre-fetch double-hashed bloom filter rejects known-CSAM infohashes *before* DH-Waypoint ever opens a TCP connection to a peer. Defaults are safe (enabled, no feeds = NoOp). Layered architecture in [csam-defense.md](../csam-defense.md).
 
-The post-classify regex (`keywords.banned`) provides a second layer for any infohash that slips past the pre-fetch filter. The self-export pipeline contributes back to community feeds, so each operator's observations harden the pre-fetch defense for the next operator.
+The post-classify regex (`keywords.banned`, `PROCESSING_MODE=full` only) provides a second layer for any infohash that slips past the pre-fetch filter. While catalogue removal is disabled its delete is held rather than applied, but the self-export still records the observation. The self-export pipeline contributes back to community feeds, so each operator's observations harden the pre-fetch defense for the next operator.
 
 ## Database hardening
 

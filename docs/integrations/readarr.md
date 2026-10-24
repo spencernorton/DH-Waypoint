@@ -13,7 +13,7 @@ Readarr is the ebook + audiobook member of the `*arr` family. DH-Waypoint answer
    | Enable | ✓ |
    | URL | `http://dh-waypoint:3333/torznab/api` (compose service name) or `https://dh-waypoint.example.com/torznab/api` (public host) |
    | API Key | your `TORZNAB_API_KEY` |
-   | Categories | `7020` Comics, `7030` Magazines, `7040` Technical/eBook, `7050` Other, `7060` Foreign — pick what your library tracks |
+   | Categories | `7000` Books, `7020` EBook, `7030` Comics — pick what your library tracks |
    | Early Download Limit | leave default |
    | Priority | `25` (high) to `50` (medium-fallback) — tune per your stack |
    | Tags | optional |
@@ -25,24 +25,16 @@ For a separate Readarr **audiobook** instance, repeat the setup with category `3
 
 ## Search modes
 
-Readarr issues two distinct Torznab functions depending on which media class is monitored:
-
-- `t=book` — for ebooks. Sends `author`, `title`, sometimes `q`. DH-Waypoint maps to 7000-series.
-- `t=audio` — for audiobooks. Sends `artist`, `album`. DH-Waypoint maps to category `3030`.
-
-Both functions are answered by the same DH-Waypoint endpoint; the routing is per-request, not per-indexer-entry.
+DH-Waypoint's caps always advertise `book-search` with `q` as its only parameter and mark `audio-search` unavailable (`t=audio` returns error `202`), so Readarr searches ebooks and audiobooks with free text (`q`) rather than `author`/`title` parameters. `t=book` matches ebooks, comics and audiobooks; the categories on the indexer entry narrow the results.
 
 ## Categories reference
 
 | Newznab ID | Readarr label | Notes |
 |---|---|---|
 | 3030 | Audio / Audiobook | use for audiobook instances |
-| 7000 | Books | catch-all |
-| 7020 | Books / Comics | comics + manga |
-| 7030 | Books / Magazines | periodicals |
-| 7040 | Books / Technical | non-fiction, eBook releases |
-| 7050 | Books / Other | misc |
-| 7060 | Books / Foreign | non-English |
+| 7000 | Books | catch-all: ebooks, comics and audiobooks |
+| 7020 | Books / EBook | same filter as 7000 |
+| 7030 | Books / Comics | comics only |
 
 If your Readarr instance only tracks audiobooks, leave the 7000-series boxes unchecked and pick `3030` only — this keeps Readarr's indexer cache lean.
 
@@ -55,15 +47,14 @@ The URL field is referencing `localhost`, which from inside Readarr's container 
 The API Key field does not match `TORZNAB_API_KEY`. Common causes: trailing whitespace pasted from a `.env` file, surrounding quotes, a stale value left over from a previous DH-Waypoint install.
 
 **Search returns 0 results**
-Inspect crawl metrics and the [GraphQL catalog](../reference/graphql-api.md). If no torrents have been discovered, review [troubleshooting](../troubleshooting.md). If the catalog contains torrents but Readarr's search misses, try the same `author`+`title` query manually via curl against `/torznab/api?t=book`. If curl returns results and Readarr does not, the issue is most likely a Readarr category-map mismatch.
+Inspect crawl metrics and the [GraphQL catalog](../reference/graphql-api.md). If no torrents have been discovered, review [troubleshooting](../troubleshooting.md). If the catalog contains torrents but Readarr's search misses, try the same title as `q` manually via curl against `/torznab/api?t=book&q=...`. If curl returns results and Readarr does not, the issue is most likely a Readarr category-map mismatch.
 
 **Audiobook search returns ebooks (or vice versa)**
-The category map on the DH-Waypoint indexer entry is wrong for the Readarr instance type. For an ebook instance, only 7000-series categories should be selected. For an audiobook instance, only `3030`. Mixed selections cause Readarr to ingest results from the wrong media class.
+The category map on the DH-Waypoint indexer entry is wrong for the Readarr instance type. For an audiobook instance, select only `3030`. DH-Waypoint's `7000` and `7020` filters also match audiobooks (returned as `3030`), so an ebook instance can still receive them.
 
 ## Recommended companions
 
-- **Custom Formats** — once DH-Waypoint's evidence-pipeline confidence stabilises (typically after 1–2 weeks of `*arr` grab feedback), layer Readarr Custom Formats to prefer high-confidence releases.
-- **Quality Profiles** — leave standard; DH-Waypoint's classifier already tags audio format / bitrate / source, so Readarr's parser handles the rest.
+- **Quality Profiles** — leave standard.
 - **Indexer flags** — flag DH-Waypoint as a fallback indexer for hard-to-find titles. Private trackers handle the headline catalog; DH-Waypoint extends reach into older or less-popular titles that aren't on private indexers.
 
 For multi-instance Readarr setups (typical: one ebook instance + one audiobook instance), repeat the setup in each — DH-Waypoint does not require any special multi-tenant configuration.

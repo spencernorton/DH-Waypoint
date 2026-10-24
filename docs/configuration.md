@@ -3,26 +3,26 @@
 DH-Waypoint is configured through environment variables and, optionally,
 a YAML file — no config file is required for any deployment shape.
 The runtime resolves settings at startup (precedence:
-`EXTRA_CONFIG_FILES` > environment > `./config.yml` > XDG
+environment > `EXTRA_CONFIG_FILES` > `./config.yml` > XDG
 `bitmagnet/config.yml` > defaults), and keeps everything in a single
 resolved-config tree that you can introspect with
 `dh-waypoint config show`. `dh-waypoint init` scaffolds a starter
 `config.yml` and `.env`; YAML keys are the dotted paths `config show`
 prints, nested (for example `processing: {mode: basic}`). Unknown keys in YAML files fail startup — a typo is never silently ignored.
 
-This page is the authoritative list. If a variable is not on this page, it does not exist.
+This page covers the common settings. `dh-waypoint config show` lists every key the binary reads; its environment variable is the path upper-cased with `.` replaced by `_` (`dht_crawler.scaling_factor` → `DHT_CRAWLER_SCALING_FACTOR`). Variables marked *Compose only* are read by the bundled Compose files, not by the binary.
 
 For first-time setup see [Quickstart](quickstart.md). For production layouts see [examples/README.md](../examples/README.md). For the security implications of each auth knob see [operations/security.md](operations/security.md).
 
 ## Secrets: prefer the `_FILE` form
 
-**Every variable on this page also accepts a `<NAME>_FILE` form** that names a file to read the value from, the same convention the official `postgres` and `mysql` images use:
+**Every variable the binary reads also accepts a `<NAME>_FILE` form** that names a file to read the value from, the same convention the official `postgres` and `mysql` images use:
 
 ```yaml
 environment:
   PROCESSORS_ADMIN_TOKEN_FILE: /run/secrets/processors_admin_token
 volumes:
-  - /srv/secrets/dh-waypoint/openai_api_key:/run/secrets/openai_api_key:ro
+  - /srv/secrets/dh-waypoint/processors_admin_token:/run/secrets/processors_admin_token:ro
 ```
 
 Use it for every credential. A value passed as a plain environment variable is stored in container metadata and printed in cleartext by `docker inspect`, so anyone who can reach the docker socket — and anything that scrapes container metadata, including stack-backup tooling — can read it. A mounted file is not in that metadata.
@@ -36,7 +36,7 @@ Rules:
 
 ## Required
 
-The single hard requirement is the database password. The container will exit on startup if it is empty.
+The single hard requirement is the database password. The bundled Compose files refuse to start without it.
 
 | Variable | Default | Purpose |
 |---|---|---|
@@ -44,27 +44,27 @@ The single hard requirement is the database password. The container will exit on
 
 ## Networking
 
-Two ports and a Postgres connection. Defaults work for the bundled `examples/docker-compose.public.yml` stack; override only if you have a port conflict or external Postgres.
+Two ports and a Postgres connection. The bundled Compose files set working values; override only if you have a port conflict or external Postgres.
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `DH_WAYPOINT_HTTP_PORT` | `3333` | HTTP API port. Hosts `/graphql`, `/torznab/api`, `/metrics`, `/import`, `/evidence/arr/*`. |
-| `DH_WAYPOINT_PEER_PORT` | `3334` | BitTorrent peer protocol port. Outbound-dominant; opening it inbound increases throughput but is not required. |
-| `POSTGRES_HOST` | `postgres` | Hostname or IP. Defaults to the compose service name in the bundled stack. |
+| `DH_WAYPOINT_HTTP_PORT` | `3333` | *Compose only:* host port for the HTTP API, which the binary serves on `HTTP_SERVER_LOCAL_ADDRESS` (default `:3333`). Hosts `/graphql`, `/torznab/api`, `/metrics`, `/import`, `/evidence/arr/*`. |
+| `DH_WAYPOINT_PEER_PORT` | `3334` | *Compose only:* host port (TCP and UDP) for the BitTorrent peer protocol, which the binary serves on `DHT_SERVER_PORT` (default `3334`). Outbound-dominant; opening it inbound increases throughput but is not required. |
+| `POSTGRES_HOST` | `localhost` | Hostname or IP. The bundled Compose files set `postgres`, the service name. |
 | `POSTGRES_PORT` | `5432` | Postgres port. |
 | `POSTGRES_NAME` | `bitmagnet` | Database name. The legacy schema name is preserved for compatibility with deployments that pre-date the rebrand; do not rename without a planned migration. |
-| `POSTGRES_USER` | `bitmagnet` | Postgres user. Same compat reasoning as `POSTGRES_NAME`. |
+| `POSTGRES_USER` | `postgres` | Postgres user. The bundled Compose files set `bitmagnet`, for the same compatibility reason as `POSTGRES_NAME`. |
 
 ## Authentication
 
-DH-Waypoint's HTTP server has no opinions about auth — it trusts whoever connects. Two env vars gate the two surfaces that face external clients.
+By default DH-Waypoint's HTTP server trusts whoever connects. These variables gate the surfaces that face external clients.
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `TORZNAB_API_KEY` | *(none)* | When set, every `/torznab/api` request must include `apikey=<value>`. Empty leaves `/torznab` open — fine on a tailnet or behind a reverse proxy with its own auth, **not fine on the open internet.** Constant-time compare. |
-| `EVIDENCE_WEBHOOK_SECRET` | *(none)* | Shared secret for the `*arr` webhook ingester. Mirror this value as the `X-Evidence-Token` Custom Header on every Sonarr/Radarr/Lidarr/Readarr Connect → Webhook configuration. Operator-internal stack only. |
-
-| `HTTP_SERVER_API_KEY` | unset | Optional key gating GraphQL, `/import`, `/metrics` and `/api/v1/*` (`Authorization: Bearer` or `X-API-Key`). Torznab, tracker, processors and private APIs keep their own credentials; `/status` stays public. Unset preserves the open trusted-network posture. |
+| `TORZNAB_API_KEY` | *(none)* | When set, every `/torznab/api` request must include `apikey=<value>` (or an `X-Api-Key` header). With this and `TORZNAB_API_KEYS` empty, `/torznab` is open — fine on a tailnet or behind a reverse proxy with its own auth, **not fine on the open internet.** Constant-time compare. |
+| `TORZNAB_API_KEYS` | *(none)* | Comma-separated `name:value` keys accepted alongside `TORZNAB_API_KEY`; the name labels `dh_waypoint_torznab_requests_total`. Malformed entries are skipped. |
+| `EVIDENCE_WEBHOOK_SECRET` | *(none)* | Shared secret for the `*arr` webhook ingester. Mirror this value as the `X-Evidence-Token` Custom Header on every Sonarr/Radarr/Lidarr/Readarr Connect → Webhook configuration. Empty leaves `/evidence/arr/*` unauthenticated. |
+| `HTTP_SERVER_API_KEY` | unset | Optional key gating GraphQL, `/import`, `/metrics` and `/api/v1/*` (`Authorization: Bearer` or `X-API-Key`). Torznab, tracker, processors, private and evidence APIs keep their own credentials; `/status` stays public. Unset preserves the open trusted-network posture. |
 
 ## Release-name eligibility
 
@@ -106,7 +106,7 @@ classification and filtering live in plugins or a custom dataset.
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `PROCESSING_MODE` | `basic` | `full`: complete CEL classifier workflow (title parsing, matching, TMDB/anime enrichment) plus the content filter when separately enabled. `basic`: no workflow, no metadata providers, no network — core stamps only a coarse content type from file-extension byte majority (episode pattern separates TV from movies); hints still win; nothing is ever deleted by classification. `raw`: metainfo persisted untouched, content type stays unknown until a plugin proposes one; classifier and content filter never run. Invalid values fail startup. Name policy and the CSAM pre-fetch blocklist are independent safety controls and are unaffected. Changing the mode stales outstanding processor pipelines by design. |
+| `PROCESSING_MODE` | `basic` (`full` through 5.7.1) | `full`: complete CEL classifier workflow (title parsing, matching, TMDB/anime enrichment) plus the content filter when separately enabled. `basic`: no workflow, no metadata providers, no network — core stamps only a coarse content type from file-extension byte majority (episode pattern separates TV from movies); hints still win; nothing is ever deleted by classification. `raw`: metainfo persisted untouched, content type stays unknown until a plugin proposes one; classifier and content filter never run. Invalid values fail startup. Name policy and the CSAM pre-fetch blocklist are independent safety controls and are unaffected. Changing the mode stales outstanding processor pipelines by design. |
 
 ## Classifier
 
@@ -114,7 +114,7 @@ The classifier runs locally with no external dependencies. TMDB enrichment is op
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `TMDB_API_KEY` | *(none)* | Free TMDB v3 API key. Enriches movie + TV records with title, release year, and episode metadata. Empty disables the TMDB stage; the rest of the classifier still works. Get a key at <https://www.themoviedb.org/settings/api>. |
+| `TMDB_API_KEY` | *(none)* | Free TMDB v3 API key. Enriches movie + TV records with title, release year, and episode metadata. Without a key, also set `TMDB_ENABLED=false` so the classifier skips TMDB lookups instead of failing them. Get a key at <https://www.themoviedb.org/settings/api>. |
 
 ## Optional processors
 
@@ -162,8 +162,8 @@ A single multiplicative knob covers DHT worker concurrency. Higher values mean m
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `DHT_SCALING_FACTOR` | `1` | Multiplier applied to internal DHT worker counts. `1` is safe on a 4 GB host. `4`–`10` is appropriate on a beefier box; anything higher should be informed by `dh_waypoint_dht_*` Prometheus signal. |
-| `DHT_CRAWLER_SCALING_FACTOR` | inherits | The internal config path that `DHT_SCALING_FACTOR` resolves into. The bundled compose file maps the shorter name to this one — you do not normally need to set it directly. Note there is **no** `BITMAGNET_` prefix on any key: the resolver builds keys from the config section plus the snake_cased Go field name, and an unmatched key is ignored in silence rather than rejected. |
+| `DHT_CRAWLER_SCALING_FACTOR` | `10` | Multiplier applied to internal DHT worker counts. `1` is safe on a 4 GB host. `4`–`10` is appropriate on a beefier box; anything higher should be informed by `dh_waypoint_dht_*` Prometheus signal. |
+| `DHT_SCALING_FACTOR` | `1` | *Compose only:* the bundled Compose files pass it to `DHT_CRAWLER_SCALING_FACTOR`; the binary ignores it. Note there is **no** `BITMAGNET_` prefix on any key: the resolver builds keys from the config section plus the snake_cased Go field name, and an unmatched environment variable is ignored in silence rather than rejected. |
 
 ## Logging
 
@@ -202,9 +202,9 @@ Periodic deletion of torrents that haven't been seen in DHT announcements for a 
 | Variable | Default | Purpose |
 |---|---|---|
 | `RETENTION_ENABLED` | `false` | Stage 1: dry run. The `would_purge` counter increments for each torrent that *would* be deleted. Nothing actually deletes. |
-| `RETENTION_ENABLE_PURGE` | `false` | Stage 2: real delete. Requires `RETENTION_ENABLED=true`. |
+| `RETENTION_ENABLE_PURGE` | `false` | Stage 2: delete. Requires `RETENTION_ENABLED=true`. Held in current builds: each cycle logs a recovery-disabled error and deletes nothing. |
 
-The default predicate is conservative: no canonical label, no evidence record, age > 60 days, `updated_at` older than 180 days, and every torrent source reports `seeders=0`. Validate the dry-run trend before flipping `ENABLE_PURGE`.
+The default predicate is conservative: no canonical label, no evidence record, age > 60 days, `updated_at` older than 180 days, and every torrent source reports `seeders=0` observed within the last 30 days.
 
 ## Quarantine maintenance
 
@@ -277,14 +277,6 @@ update corresponding committed application snapshots atomically, so
 ordinary processing preserves the corrected facts after response retention.
 The journal is retained even after rollback and blocks a destructive schema
 downgrade. Retain the matching database backup and compatible binary.
-Deferred tasks apply through a narrow compare-and-set adapter. A type task can
-only enrich one still-unknown, unattached public row with a qualified movie/TV
-prediction and local metadata. A matcher task must retain the normal final
-identity, year, confidence and audit checks before attaching an identity. A
-language task can add the audited review tag; it cannot remove content. Current
-source files, hints, privacy, quarantine, policy, request and response receipts
-are rechecked before dispatch and in the transaction that writes the target,
-tags, application provenance and task completion.
 
 Committed application facts are retained separately from expiring provider
 bodies. Ordinary processing may preserve those facts after response retention

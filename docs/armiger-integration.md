@@ -152,9 +152,7 @@ To stack both the fast `8.3 MB` INT8 model and `Armiger Ultra` in a two-tier cas
 
 ## 4. Whole-Pipeline Admission Policy (`dh-waypoint.processors.admission.v1`)
 
-DH-Waypoint controls what percentage of discovered torrents enter the optional processor queue via a deterministic SHA-256 cohort hash (`algorithm: "sha256-seed-infohash-v1"`, domain separator `dh-waypoint.processors.admission.v1
-<seed>
-<info_hash>`):
+DH-Waypoint controls what percentage of discovered torrents enter the optional processor queue via a deterministic SHA-256 cohort hash (`algorithm: "sha256-seed-infohash-v1"`). The hash covers `dh-waypoint.processors.admission.v1` and one newline, then the 32 raw seed bytes, then the raw info-hash bytes; its first eight bytes, big-endian, modulo 10,000 give the torrent's bucket, and a torrent is admitted when that bucket is below `basis_points`:
 
 - `basis_points: 0` pauses optional processor admission without stopping DHT crawling or deterministic Core classification.
 - `basis_points: 1000` admits a deterministic 10% cohort (ideal for initial capacity sizing).
@@ -166,13 +164,16 @@ Inspect or update the admission policy via the Operator API:
 # Read current admission policy
 curl -s http://localhost:3333/api/processors/v1/admission   -H "Authorization: Bearer ${PROCESSORS_ADMIN_TOKEN}" | jq .
 
-# Admit 100% of eligible torrents (10000 basis points)
+# Admit 100% of eligible torrents (10000 basis points). The seed must be 64
+# lowercase hex characters; keep it fixed so percentage cohorts stay nested.
+# policy_version and reason allow only letters, digits, '.', '_' and '-'.
+SEED=$(openssl rand -hex 32)
 curl -s -X PUT http://localhost:3333/api/processors/v1/admission   -H "Authorization: Bearer ${PROCESSORS_ADMIN_TOKEN}"   -H "Content-Type: application/json"   -d '{
     "expected_generation": 1,
-    "seed": "production-v1",
+    "seed": "'"${SEED}"'",
     "basis_points": 10000,
     "policy_version": "v1",
-    "reason": "Enable full Armiger Ultra admission"
+    "reason": "enable-armiger-ultra"
   }'
 ```
 
@@ -206,7 +207,7 @@ When Armiger returns `request_feedback: true` on a `v1.Result`, DH-Waypoint join
 | `operational_receipt` | Core validation outcome (`applied`, `rejected_ambiguous`, `rejected_policy`). | Tracks distribution drift and schema/policy rejection rates per execution generation. |
 | `teacher_consensus` | Multi-processor / teacher agreement on shadow or sampled cohorts. | Updates soft-label calibration buffers without overriding verified physical imports. |
 | `verified_import` | `*arr` grab + import webhooks (`POST /evidence/arr/:instance`) and `qBittorrent` completion state (`import_succeeded`, `import_failed`). | Updates per-head temperature scaling ($T_h$), Mondrian conformal thresholds (`calibration.json`), and Empirical Bayes release-group priors. |
-| `human_gold` | Explicit operator overrides and curated benchmark freezes (`eval-freeze`). | Highest-precedence ground truth; updates the local golden canary suite and (when opt-in `BEP-44`/`BEP-46` publishing is enabled) contributes to anonymized differential-privacy telemetry bundles. |
+| `human_gold` | Explicit operator overrides. | Highest-precedence ground truth; updates the local golden canary suite and (when opt-in `BEP-44`/`BEP-46` publishing is enabled) contributes to anonymized differential-privacy telemetry bundles. |
 
 ---
 
@@ -232,7 +233,7 @@ Armiger and Armiger Ultra include optional decentralized `BEP-44` / `BEP-46` int
 | Variable | Default | Purpose |
 |---|---|---|
 | `PROCESSING_MODE` | `basic` | `basic` stamps coarse file-extension categories in Core and delegates full classification to registered plugins; `full` runs Core's built-in classifier first; `raw` skips Core classification. |
-| `PROCESSORS_PLUGINS_DIR` | `/plugins` | Directory reconciled every 30 seconds for `*.plugin.yml` files. |
+| `PROCESSORS_PLUGINS_DIR` | `plugins` (the Compose files set `/plugins`) | Directory reconciled every 30 seconds for `*.plugin.yml` files. |
 | `PROCESSORS_ADMIN_TOKEN` | *(empty)* | Bearer token required for `/api/processors/v1/*` operator endpoints (`503` when unset). |
 | `DH_WAYPOINT_PROCESSOR_TOKEN_<NAME>` | *(empty)* | Outbound Bearer token sent by DH-Waypoint to the processor service referenced by `auth_env`. |
 

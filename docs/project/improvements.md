@@ -7,10 +7,10 @@ processing and operational features that run with configuration you supply.
 | Area | Backend behavior | Reference |
 |---|---|---|
 | Evidence | Configurable *arr webhooks/history and qBittorrent observations derive canonical labels | [Evidence](../evidence.md) |
-| Classification | Evidence preempt, CEL rules and bounded optional LLM fallback | [Classification](../concepts/classification.md) |
-| Matching | Shared title normalization, anime aliases, metadata matching and evaluation tools | [Benchmarks](benchmarks.md) |
+| Classification | Processing modes, evidence preempt, CEL rules and optional external processors | [Classification](../concepts/classification.md) |
+| Matching | Shared title normalization, anime aliases and metadata matching | [Benchmarks](benchmarks.md) |
 | Curation | Deterministic content filters, verdicts, junk quarantine and safe cleanup gates | [Configuration](../configuration.md) |
-| Retention | Dry-run and explicit purge controls for stale metadata | [Configuration](../configuration.md) |
+| Retention | Dry-run purge reports for stale metadata; removal is held | [Configuration](../configuration.md) |
 | Swarm observations | Tracker scrapes keep authoritative zero distinct from unknown | [Swarm health](../concepts/swarm-health.md) |
 | Defense | Pre-fetch double-hash blocklist and post-fetch checks | [CSAM defense](../csam-defense.md) |
 | Observability | Prometheus families, database observations and generic Grafana resources | [Monitoring](../operations/monitoring.md) |

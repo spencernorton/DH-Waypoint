@@ -26,7 +26,7 @@ DH-Waypoint implements seven BEPs, each with a specific job in the discovery pip
 
 3. **BEP-51 sampling.** Once the k-table reaches a working threshold (typically a few hundred nodes), the crawler issues `sample_infohashes` RPCs to neighbours. Each neighbour returns a small batch of infohashes from their own routing tables. We dedupe and queue them.
 
-4. **Deferred metadata fetch.** Queued infohashes do *not* trigger immediate peer connections. They first pass through the CEL classifier (cheap drops on banned-keyword regex), the CSAM blocklist (pre-fetch double-hash filter), and any retention rules. Only survivors get a BEP-9 metainfo fetch — a real TCP/uTP handshake to a peer claiming to seed.
+4. **Deferred metadata fetch.** Queued infohashes do *not* trigger immediate peer connections. They first pass the pre-fetch filters: the CSAM blocklist (double-hash bloom filter) and this instance's own block list. Only survivors get a BEP-9 metainfo fetch — a real TCP handshake to a peer claiming to seed; uTP is not used. The CEL classifier runs after the fetch, once the title and file list are known.
 
 This deferred-fetch design is deliberate. The DHT is noisy; most discovered infohashes are dead, private, or unwanted. Pre-fetch filtering keeps our network footprint proportional to genuinely interesting traffic.
 

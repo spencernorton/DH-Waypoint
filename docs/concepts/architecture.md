@@ -16,8 +16,8 @@ flowchart LR
   Filter --> Classifier[Evidence preempt and CEL classifier]
   Classifier --> Match[Title and metadata matching]
   Match --> PG[(PostgreSQL)]
-  Classifier -. opt-in .-> LLM[Bounded LLM stages]
-  LLM --> PG
+  PG -. queued jobs .-> Proc[Optional processor services]
+  Proc -. validated proposals .-> PG
   PG --> APIs[Torznab and GraphQL]
   Clients[Configured *arr clients] --> APIs
   Clients --> Evidence[Evidence webhooks and pollers]
@@ -32,8 +32,8 @@ flowchart LR
 The DHT crawler discovers public infohashes, applies the blocklist before
 metadata retrieval, and sends recovered metainfo through processing. Labels
 backed by evidence can preempt the classifier. Deterministic title normalization
-and provider matching enrich the corpus; optional LLM stages retain separate
-shadow/live gates and budgets.
+and provider matching enrich the corpus; optional processors, including the
+LLM adapter, run as separate services whose proposals the core validates.
 
 PostgreSQL stores the corpus, evidence and processing state. Go migrations
 travel with backend releases. Retention and junk quarantine are backend work,

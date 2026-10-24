@@ -1,13 +1,15 @@
 # Prometheus metrics
 
-Version 5 retires the embedded inference families described in historical
-sections below. The current optional-processor names, populations, reset and
-unknown-value semantics are in [processor operator API](../processors/operator-api.md).
-Those new families use only `dh_waypoint_processors_*`; they are not dual-emitted.
+Version 5 retires the embedded inference families. The current
+optional-processor names, populations, reset and unknown-value semantics are in
+[processor operator API](../processors/operator-api.md). Those families use only
+`dh_waypoint_processors_*`.
 
-DH-Waypoint exposes raw Prometheus metrics on the HTTP port (`3333`) at `/metrics` with no auth. For public exposure, place a reverse proxy in front. A scrape interval of `30s` is recommended — it balances telemetry granularity with backend overhead.
+DH-Waypoint exposes raw Prometheus metrics on the HTTP port (`3333`) at `/metrics`. Setting `HTTP_SERVER_API_KEY` gates it: scrapes must then send the key as `Authorization: Bearer` (Prometheus `authorization.credentials`) or `X-API-Key`. `/status` stays public. Without the key `/metrics` is open; for public exposure, place a reverse proxy in front. A scrape interval of `30s` is recommended — it balances telemetry granularity with backend overhead.
 
-The metric namespace was migrated from `bitmagnet_*` to `dh_waypoint_*` on 2026-04-24. During the dual-emit window, every metric fires under both namespaces simultaneously. Operators using legacy `bitmagnet_*` names in dashboards or alerts continue to receive data; migrate at your own pace. The legacy emit will be turned off (one-line code change) once we have signal that downstreams are migrated — there is no fixed deadline.
+The metric namespace was migrated from `bitmagnet_*` to `dh_waypoint_*` on 2026-04-24, and the legacy `bitmagnet_*` dual-emit was switched off on 2026-09-02. Only the process collector keeps the old prefix (`bitmagnet_process_*`); Go runtime metrics are `go_*`.
+
+This page covers the main families. The live `/metrics` output is the complete list.
 
 ## Scrape configuration
 
@@ -27,24 +29,15 @@ Add this job to your Prometheus `scrape_configs`:
 
 Replace `localhost:3333` with the Tailscale IP / service hostname when scraping from a different host.
 
-## Dual-emit window
-
-Every metric below is emitted under **two** namespaces during the migration:
-
-- `dh_waypoint_<rest>` — primary, the new canonical name
-- `bitmagnet_<rest>` — legacy, kept alive while operators migrate
-
-Cost is negligible (two map lookups + two atomic increments per observation, vs the DHT socket and Postgres write that dominate the request path). Plan to migrate dashboards/alerts to `dh_waypoint_*` at your convenience; we'll announce the cutover date in `CHANGELOG.md` before flipping.
-
 ## `dh_waypoint_dht_*` — DHT crawler
 
 | Metric | Type | Labels | Purpose |
 |---|---|---|---|
-| `dh_waypoint_dht_crawler_persisted_total` | counter | `entity` | Cumulative entities (torrents) successfully persisted via the DHT crawl path. |
-| `dh_waypoint_dht_ktable_hashes_added_total` | counter | — | Cumulative node hashes added to the Kademlia routing table — the headline crawler-pulse metric. |
-| `dh_waypoint_dht_client_request_concurrency` | gauge | varies | Active DHT requests in flight. Sum across labels = your effective DHT peer count. |
-| `dh_waypoint_dht_client_request_duration_seconds_count` | counter | — | Total DHT request observations (histogram count companion). |
-| `dh_waypoint_dht_client_request_duration_seconds_bucket` | histogram | `le` | Cumulative bucketed request-duration observations. |
+| `dh_waypoint_dht_crawler_persisted_total` | counter | `entity` | Cumulative entities (`Torrent`, `TorrentsTorrentSource`) successfully persisted via the DHT crawl path. |
+| `dh_waypoint_dht_ktable_hashes_added` | counter | — | Cumulative infohashes added to the Kademlia routing table — the headline crawler-pulse metric. No `_total` suffix. |
+| `dh_waypoint_dht_client_request_concurrency` | gauge | `query` | Outbound DHT requests in flight. |
+| `dh_waypoint_dht_client_request_duration_seconds_count` | counter | `query` | Successful outbound DHT requests (histogram count companion). |
+| `dh_waypoint_dht_client_request_duration_seconds_bucket` | histogram | `query`, `le` | Cumulative bucketed durations of successful requests. |
 
 ## `dh_waypoint_postgres_*` — pgstats collector
 
@@ -59,26 +52,27 @@ Scrape-driven, 5-second per-scrape timeout.
 | `dh_waypoint_postgres_table_live_tuples` | gauge | `table` | Live tuples per table. |
 | `dh_waypoint_postgres_table_last_autovacuum_age_seconds` | gauge | `table` | Seconds since the last autovacuum on this table. |
 | `dh_waypoint_postgres_table_last_analyze_age_seconds` | gauge | `table` | Seconds since the last `ANALYZE` on this table. |
-| `dh_waypoint_postgres_connections_state` | gauge | `state` | Active backend connections grouped by state. |
-| `dh_waypoint_postgres_pgxpool_*` | gauge | varies | pgx connection pool — acquired, idle, waiting, total. |
+| `dh_waypoint_postgres_connections` | gauge | `state` | Server connections to this database from `pg_stat_activity`, grouped by state. |
+| `dh_waypoint_postgres_pool_acquired_connections` | gauge | — | Connections checked out of the pgx pool. |
+| `dh_waypoint_postgres_pool_idle_connections` | gauge | — | Idle connections held by the pgx pool. |
+| `dh_waypoint_postgres_pool_max_connections` | gauge | — | Configured maximum size of the pgx pool. |
 
 ## `dh_waypoint_evidence_*` — `*arr` evidence ingest
 
 | Metric | Type | Labels | Purpose |
 |---|---|---|---|
-| `dh_waypoint_evidence_events_persisted_total` | counter | `source` | Successful evidence persists. `source` ∈ {`arrwebhook`, `arrpoller`, `qbpoller`}. |
-| `dh_waypoint_evidence_events_duplicated_total` | counter | — | Events deduplicated against existing rows. |
-| `dh_waypoint_evidence_events_rejected_total` | counter | — | Events rejected (auth, parse, schema). |
-| `dh_waypoint_evidence_source_errors_total` | counter | `source`, `stage` | Error count per source/stage; dashboard alert candidate. |
-| `dh_waypoint_evidence_source_poll_duration_seconds` | histogram | — | Poll latency distribution per source. |
+| `dh_waypoint_evidence_events_persisted_total` | counter | `source`, `kind` | Successful evidence persists. `source` is the reporting client (`sonarr`, `radarr`, `readarr`, `lidarr`, `qbittorrent`). |
+| `dh_waypoint_evidence_events_duplicated_total` | counter | `source`, `kind` | Events deduplicated against existing rows. |
+| `dh_waypoint_evidence_events_rejected_total` | counter | `source`, `kind`, `reason` | Events rejected (auth, parse, schema). |
+| `dh_waypoint_evidence_source_errors_total` | counter | `source`, `instance`, `stage` | Error count per source/stage; dashboard alert candidate. |
+| `dh_waypoint_evidence_source_poll_duration_seconds` | histogram | `source`, `instance` | Poll latency distribution per source. |
 
 ## `dh_waypoint_classifier_*` — base classifier
 
 | Metric | Type | Labels | Purpose |
 |---|---|---|---|
-| `dh_waypoint_classifier_examined_total` | counter | — | Torrents passed through the classifier. |
-| `dh_waypoint_classifier_decision_total` | counter | `decision` | Decision distribution (matched, dropped, ambiguous, etc.). |
-| `dh_waypoint_classifier_duration_seconds` | histogram | — | Classifier-stage latency. |
+| `dh_waypoint_classifier_deleted_total` | counter | `content_type`, `rule` | Torrents deleted by a classifier workflow rule: the content type assigned before the delete (`unknown` for the pre-parse banned-keyword rule) and the dotted path of the rule that fired. Counts completed removals only. |
+| `dh_waypoint_classifier_delete_held_total` | counter | `content_type`, `rule` | Classifier deletes held because catalogue recovery is disabled: nothing was removed and the job completed. |
 
 ## `dh_waypoint_classifier_preempt_*` — canonical-label preempt
 
@@ -91,31 +85,15 @@ Scrape-driven, 5-second per-scrape timeout.
 | `dh_waypoint_classifier_preempt_unknown_media_type_total` | counter | `source` | Labels whose media type cannot short-circuit anything; the classifier ran. |
 | `dh_waypoint_classifier_preempt_evidence_title_total` | counter | `outcome` | Title-level \*arr evidence for torrents with no label of their own (`CLASSIFIER_EVIDENCE_TITLE_IDENTITY`). `applied`: the identity the \*arrs agree on for this title was hinted. `weak`: fewer than 2 other labels, or no ⅔ majority. `no_preference`: no other torrent with this title is labelled. `no_key`: the name did not parse to a title. `no_index`: labels could not be loaded. Absent while the flag is off. |
 
-## `dh_waypoint_classifier_llm_*` — optional type fallback
-
-Runs for unknown, unattached classifier results, including unresolved workflows
-that returned successfully. Admission and policy gates still apply.
-
-| Metric | Type | Labels | Purpose |
-|---|---|---|---|
-| `dh_waypoint_classifier_llm_invocations_total` | counter | `reason` | Results considered for fallback; `unmatched` does not imply a provider call or returned error. |
-| `dh_waypoint_classifier_llm_cache_hits_total` | counter | — | Hits in the sha256 LRU cache. |
-| `dh_waypoint_classifier_llm_cache_misses_total` | counter | — | Misses, including later admission denials. |
-| `dh_waypoint_classifier_llm_calls_total` | counter | `model` | Actual HTTP dispatches, excluding cache and admission rejection. |
-| `dh_waypoint_classifier_llm_call_duration_seconds` | histogram | — | Provider round-trip time; excludes admission and final application. |
-| `dh_waypoint_classifier_llm_gate_rejects_total` | counter | `reason` | Eligibility, admission and policy denials. |
-| `dh_waypoint_classifier_llm_tokens_total` | counter | `model`, `kind` | Provider usage, with cached input and reasoning reported as subsets. |
-| `dh_waypoint_classifier_llm_live_applied_total` | counter | `media_type` | Live predictions returned through policy; separate storage evidence is required to prove persistence. |
-
 ## `dh_waypoint_retention_*` — retention pipeline
 
 | Metric | Type | Labels | Purpose |
 |---|---|---|---|
-| `dh_waypoint_retention_examined_total` | counter | — | Torrents evaluated by the retention predicate. |
+| `dh_waypoint_retention_candidates_total` | counter | — | Torrents matched by the retention predicate before any cap. |
 | `dh_waypoint_retention_would_purge_total` | counter | — | Torrents that *would* be purged (dry-run signal). |
 | `dh_waypoint_retention_purged_total` | counter | — | Torrents actually deleted (only nonzero when `RETENTION_ENABLE_PURGE=true`). |
-| `dh_waypoint_retention_skipped_total` | counter | `reason` | Skip reasons — kept for operator transparency. |
-| `dh_waypoint_retention_run_duration_seconds` | histogram | — | Per-run pipeline latency. |
+| `dh_waypoint_retention_cycle_errors_total` | counter | `stage` | Cycle errors by stage (`query`, `delete`). |
+| `dh_waypoint_retention_cycle_duration_seconds` | histogram | — | Per-cycle pipeline latency. |
 
 ## `dh_waypoint_csam_blocklist_*` — CSAM defense
 
@@ -123,11 +101,11 @@ that returned successfully. Admission and policy gates still apply.
 |---|---|---|---|
 | `dh_waypoint_csam_blocklist_prefetch_blocks_total` | counter | — | Pre-fetch rejects (the headline defense win — these never touched a swarm). |
 | `dh_waypoint_csam_blocklist_lookups_total` | counter | — | Lookups against the bloom filter. |
-| `dh_waypoint_csam_blocklist_feed_refresh_total` | counter | `feed`, `result` | Per-feed refresh outcomes. |
+| `dh_waypoint_csam_blocklist_feed_refresh_total` | counter | `feed`, `outcome` | Per-feed refresh outcomes. |
 | `dh_waypoint_csam_blocklist_feed_refresh_duration_seconds` | histogram | `feed` | Per-feed refresh latency. |
 | `dh_waypoint_csam_blocklist_feed_entries` | gauge | `feed` | Active entries from each feed. |
 | `dh_waypoint_csam_blocklist_entries` | gauge | — | Total bloom filter entries (sum of all feeds, deduplicated). |
-| `dh_waypoint_csam_blocklist_export_total` | counter | `result` | Per-export outcomes (local JSONL append + optional upstream POST). |
+| `dh_waypoint_csam_blocklist_export_total` | counter | `outcome` | Per-export outcomes (local JSONL append + optional upstream POST). |
 
 See [csam-defense.md](../csam-defense.md) for the full architecture.
 
@@ -137,68 +115,32 @@ See [csam-defense.md](../csam-defense.md) for the full architecture.
 |---|---|---|---|
 | `dh_waypoint_liveness_observations_total` | counter | `class`, `outcome` | Liveness observations dispatched to the resolver. `class` ∈ {`alive`, `suspect`}; `outcome` ∈ {`upsert`, `error`, `skip_private`, `blacklisted`, `dht_recovered`}. |
 | `dh_waypoint_liveness_revalidations_total` | counter | `outcome` | DHT revalidation attempts on dead infohashes. `outcome` ∈ {`alive_again`, `still_dead`, `error`}. |
-| `dh_waypoint_liveness_blacklist_size` | gauge | — | Current size of the in-memory blacklist (seeders=0 for too long). |
-| `dh_waypoint_classifier_deleted_total` | counter | `content_type`, `rule` | Torrents deleted by a classifier workflow rule: the content type assigned before the delete (`unknown` for the pre-parse banned-keyword rule) and the dotted path of the rule that fired. The only armed destructive path; this is its rate. |
+| `dh_waypoint_liveness_blacklist_size` | gauge | — | Current count of `torrent_liveness` rows with status `dead`, sampled by the revalidator. |
 | `dh_waypoint_liveness_torznab_excluded_total` | counter | — | Torznab response items filtered out for liveness. |
 
-## `dh_waypoint_classifier_llm_match_*` — optional identity matcher
+## `dh_waypoint_quarantine_*` — quarantine maintenance
+
+Active when `JUNKPURGE_MAINTENANCE_ENABLED=true`.
 
 | Metric | Type | Labels | Purpose |
 |---|---|---|---|
-| `dh_waypoint_classifier_llm_match_calls_total` | counter | `model`, `stage` | Actual outbound attempts. Admission denials and retained replays are excluded. |
-| `dh_waypoint_classifier_llm_match_http_outcomes_total` | counter | `model`, `stage`, `outcome` | Completed HTTP attempts through bounded body reading and envelope decoding: `success`, `timeout`, `transport`, `http_status`, `read`, or `decode`. Includes controlled dispatch and embeddings. |
-| `dh_waypoint_classifier_llm_match_call_duration_seconds` | histogram | `stage` | Time from outbound attempt through body reading and envelope decoding. Excludes admission, cache/replay, receipt persistence and final policy. |
-| `dh_waypoint_classifier_llm_match_call_errors_total` | counter | `stage`, `class` | HTTP failures and downstream extraction/rerank decoding failures. |
-| `dh_waypoint_classifier_llm_match_tokens_total` | counter | `model`, `stage`, `kind` | Provider-reported usage; `cached_input` is part of `input`, and `reasoning` is part of `output`. Replays add no tokens. |
-
-Stages are `extract`, `batch_extract`, `rerank` and `embedding`. HTTP success
-does not establish an accepted or correct identity, application to storage, or
-billed cost. Use the bound capture/result/decision and application records for
-those outcomes. Missing provider usage and billing data remain unknown. A
-process restart resets aggregate counters; durable allowance usage survives.
-
-## `dh_waypoint_junkpurge_*` — junk classifier
-
-Active when `JUNKPURGE_ENABLED=true`. `JUNKPURGE_ENABLE_PURGE` independently
-controls quarantine/application; provider evaluation can run while application
-remains off.
-
-| Metric | Type | Labels | Purpose |
-|---|---|---|---|
-| `dh_waypoint_junkpurge_cycles_total` | counter | — | Synchronous cycles plus finalized provider Batch runs. |
-| `dh_waypoint_junkpurge_cycle_outcomes_total` | counter | `outcome` | Exactly one terminal outcome per counted cycle/run. Sum this series to reconcile `cycles_total`. |
-| `dh_waypoint_junkpurge_cycle_judgments_total` | counter | `outcome` | Durable judgments attributed to the terminal outcome, including breaker-blocked evaluation evidence. |
-| `dh_waypoint_junkpurge_cycle_confident_junk_total` | counter | `outcome` | Confident-junk judgments by terminal outcome. A breaker outcome means these were observed, not actioned. |
-| `dh_waypoint_junkpurge_llm_requests_total` | counter | `processing`, `model`, `outcome` | Provider requests and their success/error result. |
-| `dh_waypoint_junkpurge_llm_failures_total` | counter | `processing`, `model`, `reason` | Failed synchronous calls split into bounded operational causes such as `timeout`, `rate_limited`, `server_error`, and `invalid_response`. |
-| `dh_waypoint_junkpurge_circuit_breaks_total` | counter | `reason` | Fail-closed cycles by `capture_unavailable`, `llm_unavailable`, or `junk_rate_anomaly`. |
-| `dh_waypoint_junkpurge_llm_deferred_total` | counter | — | Names not judged because unavailable groups were skipped or the bounded consecutive-failure limit stopped the cycle. |
-| `dh_waypoint_junkpurge_would_delete_total` | counter | — | Confident junk from complete, non-breaker dry-run cycles only. |
-| `dh_waypoint_junkpurge_quarantined_total` | counter | — | Torrents moved into the restorable quarantine after all gates passed. |
-
-Synchronous judgments also carry a bounded cohort marker in
-`junkpurge_judgments.reason`: `sync_cycle:<outcome>`. In particular,
-`sync_cycle:llm_unavailable` and `sync_cycle:junk_rate_anomaly` identify paid
-outputs retained for evaluation even though the cycle was forbidden to apply
-them. Batch judgments use `batch_run`.
+| `dh_waypoint_quarantine_expired_total` | counter | — | Quarantined torrents past `JUNKPURGE_QUARANTINE_DAYS`, tombstoned with their snapshot retained. |
+| `dh_waypoint_quarantine_errors_total` | counter | `stage` | Maintenance errors (`expire`). |
 
 ## `dh_waypoint_contentfilter_*` — content filter
 
-Active when `CONTENT_FILTER_ENABLED=true` (shadow) or `..._ENFORCE=true` (apply).
+Active when `CONTENT_FILTER_ENABLED=true`. With `CONTENT_FILTER_ENFORCE=true` drop decisions count in `drop_total`, but the removal itself is held while [catalogue removal](../OPERATIONS.md#catalogue-removal) is disabled; otherwise they count in `would_drop_total`.
 
 | Metric | Type | Labels | Purpose |
 |---|---|---|---|
 | `dh_waypoint_contentfilter_examined_total` | counter | — | Torrents evaluated by the filter. |
-| `dh_waypoint_contentfilter_drop_total` | counter | `reason` | Drops by reason (`non_english`, `non_latin`, `blocked_ext`, `nsfw_keyword`, etc.). |
-| `dh_waypoint_contentfilter_llm_review_total` | counter | — | Kept torrents selected for a model-attributed review tag by an audited live decision. |
-| `dh_waypoint_contentfilter_llm_would_review_total` | counter | — | Kept torrents selected for a counterfactual review tag while model enforcement is shadow. |
+| `dh_waypoint_contentfilter_drop_total` | counter | `reason` | Enforced drop decisions by reason (`blocked_extension`, `non_english_language`, `non_latin_script`, `nsfw_keyword`, etc.). |
+| `dh_waypoint_contentfilter_would_drop_total` | counter | `reason` | Drops the filter would make while enforcement is off. |
 
 ## Recommended dashboard panels
 
-Queries below assume the `dh_waypoint_*` namespace; rewrite the prefix if you're still on legacy.
-
-- **Crawl health** — `rate(dh_waypoint_dht_ktable_hashes_added_total[5m])`
-- **Active DHT requests** — `sum(dh_waypoint_dht_client_request_concurrency)` (proxy for DHT peer count)
+- **Crawl health** — `rate(dh_waypoint_dht_ktable_hashes_added[5m])`
+- **Active DHT requests** — `sum(dh_waypoint_dht_client_request_concurrency)`
 - **DB size** — `dh_waypoint_postgres_database_size_bytes`, `dh_waypoint_postgres_table_size_bytes{table="torrents"}`, `...{table="torrent_contents"}`, `...{table="label_evidence"}`, `...{table="torrent_canonical_labels"}`
 - **Evidence flow** — `rate(dh_waypoint_evidence_events_persisted_total[5m])` by `source`, alongside `events_duplicated_total` + `events_rejected_total`
 - **Canonical coverage** — `sum(dh_waypoint_postgres_table_rows_estimate{table="torrent_canonical_labels"}) / sum(dh_waypoint_postgres_table_rows_estimate{table="torrents"})` — what fraction of indexed torrents have a ground-truth label
@@ -209,13 +151,13 @@ Queries below assume the `dh_waypoint_*` namespace; rewrite the prefix if you're
 
 ## Cardinality notes
 
-The only label that grows with operator scale is `table` on `dh_waypoint_postgres_*` metrics — bounded by the number of tables in the schema (currently ~25). All other labels are enumerated (e.g., `result`, `decision`, `class`, `source`, `stage`, `reason`) and have small bounded cardinality.
+`table` on `dh_waypoint_postgres_*` metrics has one value per table in the schema, and `instance` on `dh_waypoint_evidence_*` one per configured \*arr or qBittorrent instance. All other labels on this page are enumerated (e.g., `outcome`, `class`, `source`, `stage`, `reason`) and have small bounded cardinality.
 
 `feed` labels on `dh_waypoint_csam_blocklist_*` metrics scale with the number of configured CSAM feeds — typically ≤ 5. Not a cardinality concern.
 
 ## Grafana dashboard
 
-A pre-configured Grafana dashboard ships in the dh-waypoint-core repo at `observability/grafana-dashboards/dh-waypoint.json`. Import the JSON directly into your Grafana instance, point it at your Prometheus datasource, and the panels above render with sensible defaults.
+A pre-configured Grafana dashboard ships in this repository at `observability/grafana-dashboards/dh-waypoint.json`. Import the JSON directly into your Grafana instance and point it at your Prometheus datasource. It covers DHT, metadata-request, crawler and queue activity; it does not include the panels above.
 
 ## See also
 

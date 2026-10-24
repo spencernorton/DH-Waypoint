@@ -12,12 +12,12 @@ exhaustive references are linked at the end.
 | GraphQL | `POST /graphql` | `HTTP_SERVER_API_KEY` when set (Bearer or `X-API-Key`) | Search, facets, files, health — the fullest catalogue API for custom UIs/clients |
 | REST v1 | `GET /api/v1/*` | same API key when set | Search, detail, files, stats for clients that do not want GraphQL; spec at `/api/v1/openapi.yaml` |
 | Raw catalogue v2 | `GET /api/v2/*` | same API key when set | Unclassified v1/v2/hybrid metadata, full identities and magnets; [contract](reference/openapi-v2.yaml) |
-| Torznab | `GET /torznab/api` | `apikey=` or `Authorization: Bearer` when `TORZNAB_API_KEY` is set | Sonarr/Radarr/Lidarr/Readarr/Prowlarr indexer feed |
+| Torznab | `GET /torznab/api` | `apikey=` or `X-Api-Key` when `TORZNAB_API_KEY`/`TORZNAB_API_KEYS` is set | Sonarr/Radarr/Lidarr/Readarr/Prowlarr indexer feed |
 | Processors admin | `/api/processors/v1/*` | `Authorization: Bearer $PROCESSORS_ADMIN_TOKEN` (503 when unset) | Register/pause/remove plugins, job status |
 | Evidence webhook | `POST /evidence/arr/<instance>` | `X-Evidence-Token: $EVIDENCE_WEBHOOK_SECRET` | Feed *arr grab/import outcomes back into matching |
 | Import | `POST /import`, `POST /import/torrent` | same API key when set | Bulk v1 NDJSON or one validated v1/v2/hybrid torrent file |
 | Private files + tracker | `/api/private/v1/*`, `/announce/<passkey>`, `/scrape/<passkey>` | admin bearer token / member passkey | Private `.torrent` upload, personalised download, swarm tracking ([guide](private-tracker.md)) |
-| Metrics / status | `GET /metrics`, `GET /status` | none built-in | Prometheus scrape, liveness |
+| Metrics / status | `GET /metrics`, `GET /status` | same API key on `/metrics` when set; `/status` is open | Prometheus scrape, liveness |
 
 All examples use `B=http://localhost:3333`.
 
@@ -34,19 +34,20 @@ curl -s $B/graphql -H 'Content-Type: application/json' \
 
 ```sh
 curl -s $B/graphql -H 'Content-Type: application/json' -d '{
-  "query": "query($q:String!){ torrentContent { search(input:{queryString:$q, limit:10}) { totalCount hasNextPage items { infoHash title contentType publishedAt torrentSource } } } }",
+  "query": "query($q:String!){ torrentContent { search(input:{queryString:$q, limit:10, totalCount:true, hasNextPage:true}) { totalCount hasNextPage items { infoHash title contentType publishedAt } } } }",
   "variables": {"q": "the matrix"}
 }'
 ```
 
 Notes that save debugging time:
 
-- `items` are torrent-*content* rows (one classification per
-  torrent). Files live under `torrent { files(input:{infoHashes:[...]}) }`.
+- `items` are torrent-*content* rows (one torrent can have
+  several). Files live under `torrent { files(input:{infoHashes:[...]}) }`.
 - Private torrents never appear in GraphQL or Torznab results; the
   serving policy excludes them unconditionally.
-- Facet counts come from `aggregations` on the same search result;
-  `limit: 0` returns counts without rows.
+- `totalCount`, `hasNextPage` and `aggregations` need `totalCount: true`,
+  `hasNextPage: true` or `facets: { contentType: { aggregate: true } }`
+  in the input; `limit: 0` returns counts without rows.
 - Introspection is enabled: point any GraphQL client (Insomnia,
   Altair, `gql` codegen) at `$B/graphql` and generate types from
   the live schema instead of hand-writing them.
@@ -160,11 +161,10 @@ crawled ones. Treat this endpoint as trusted-network only.
 - Read path: GraphQL, REST (`/api/v1`) and Torznab are the stable
   contracts. Generate client types from GraphQL introspection or
   `/api/v1/openapi.yaml`; do not scrape metrics for catalogue data.
-- Auth is yours to add: put Caddy/Traefik/NPM in front and keep
-  `:3333` on a trusted network. The recipes are in
-  [operations/security](operations/security.md).
-- Live updates: poll GraphQL/`/metrics`, or use the GraphQL
-  websocket transport the endpoint already speaks.
+- Auth: set `HTTP_SERVER_API_KEY`; for public exposure also put
+  Caddy/Traefik/NPM in front and keep `:3333` on a trusted network.
+  The recipes are in [operations/security](operations/security.md).
+- Live updates: poll GraphQL or `/metrics`.
 - Versioning: the processor contract is versioned
   (`dh-waypoint.processor.v1`); GraphQL fields are additive — pin your
   queries, not the whole schema.

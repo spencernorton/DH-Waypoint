@@ -47,7 +47,7 @@ Pre-fetch double-hashed bloom-filter defense against CSAM infohashes. Closes the
 Distributed Hash Table. The decentralised peer routing layer underpinning the public BitTorrent network. DH-Waypoint's discovery layer.
 
 ### dual-emit
-The transition window during which every metric fires under both `dh_waypoint_*` (primary) and `bitmagnet_*` (legacy) namespaces simultaneously. Started 2026-04-24. Allows operators to migrate dashboards/alerts at their own pace.
+The transition window, from 2026-04-24, during which every metric fired under both `dh_waypoint_*` and legacy `bitmagnet_*` names. Legacy emission is now off; dashboards and alerts must use `dh_waypoint_*`.
 
 ## E
 
@@ -76,8 +76,8 @@ Kademlia routing table. The structured peer cache the DHT crawler maintains in m
 
 ## L
 
-### LLM rerank stage
-Optional final classifier stage that calls an external LLM for ambiguous torrents that CEL couldn't classify. Two-layer opt-in (`Enabled` + `EnableLive`), aggressively gated, sha256 LRU cached. See [concepts/classification.md#stage-3-llm-rerank-stage](classification.md#stage-3-llm-rerank-stage).
+### LLM processor
+An optional, separately run HTTP processor (`plugins/llm`) that proposes classifications over the processor contract. It replaces the retired in-core LLM rerank stage. See [processors/llm.md](../processors/llm.md).
 
 ## P
 
@@ -88,9 +88,6 @@ Any other DHT or BitTorrent node DH-Waypoint talks to. Peer port: `DH_WAYPOINT_P
 See [classifier preempt](#classifier-preempt).
 
 ## R
-
-### release
-A versioned metadata snapshot of a torrent in the Postgres `releases` table. Multiple releases can coexist for one infohash if metadata is re-observed (e.g. seeder counts change).
 
 ### retention
 Pipeline that periodically deletes torrents the predicate considers long-dead. Two-stage opt-in (`RETENTION_ENABLED`, `RETENTION_ENABLE_PURGE`) so you can validate the dry-run trend before flipping to real deletes.
@@ -114,7 +111,7 @@ The [Newznab-derived API spec](https://torznab.github.io/spec-1.3-draft/) used b
 ## W
 
 ### wantbridge
-DH-Waypoint's active-acquisition layer. Biases the crawler toward indexing infohashes that match active operator-defined or `*arr`-derived wants. See [concepts/wantbridge.md](wantbridge.md).
+DH-Waypoint's active-acquisition layer. Matches discovered infohashes against `*arr`-derived wants; it is observe-only for now and reports through `dh_waypoint_wantbridge_*` metrics without changing crawl order. See [concepts/wantbridge.md](wantbridge.md).
 
 ### wants
 The titles that configured `*arr` applications still report as missing. See [wantbridge](wantbridge.md).

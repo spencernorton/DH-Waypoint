@@ -77,7 +77,7 @@ The discovery engine (`internal/dhtcrawler`, `internal/protocol/dht`) participat
 
 | Specification | Package | Architectural Role |
 |---|---|---|
-| **BEP 5** (Mainline DHT) | `internal/protocol/dht/server`, `ktable` | Prefix-bucket Kademlia routing table (`K=20`), `ping`, `find_node`, `get_peers`, and `announce_peer` KRPC exchange. |
+| **BEP 5** (Mainline DHT) | `internal/protocol/dht/server`, `ktable` | Prefix-bucket Kademlia routing table (`K=80`), `ping`, `find_node`, `get_peers`, and `announce_peer` KRPC exchange. |
 | **BEP 51** (DHT Infohash Indexing) | `internal/dhtcrawler/sample_infohashes.go` | Primary high-velocity discovery fast path. Queries responsive neighbors with `sample_infohashes` against a rotating 160-bit target (`soughtNodeID`, rotated every `10s`). |
 | **BEP 42** (DHT Security Extension) | `internal/protocol/dht` | Derives the 20-byte node ID deterministically from the external IP (`CRC32C` masked prefix) for anti-Sybil compliance. When booting with a non-BEP-42 fallback ID (`randomFallback=true`), outbound `sample_infohashes` probes pause until external-IP verification completes. |
 | **BEP 43** (Read-Only DHT Nodes) | `internal/protocol/dht/server` | Marks outbound KRPC packets with the read-only flag (`ro=1`) so remote nodes do not waste storage announcements on the crawler. |
@@ -158,10 +158,10 @@ Once persisted or queued into `queue_jobs`, torrents pass through DH-Waypoint's 
 
 ## 5. PostgreSQL 16 + `pg_trgm` Schema Architecture
 
-DH-Waypoint uses PostgreSQL 16 (`internal/database`, `migrations/00001` through `00069`) with the `pg_trgm` extension for trigram similarity and GIN full-text `tsvector` indexes. Latency depends on corpus, query, serving policy and deployment. See the [catalogue search design](design/catalogue-search.md) and [dated benchmark evidence](project/benchmarks.md); SQL measurements are separate from end-to-end Torznab latency.
+DH-Waypoint uses PostgreSQL 16 (`internal/database`, `migrations/`) with the `pg_trgm` extension for trigram similarity and GIN full-text `tsvector` indexes. Latency depends on corpus, query, serving policy and deployment. See the [catalogue search design](design/catalogue-search.md) and [dated benchmark evidence](project/benchmarks.md); SQL measurements are separate from end-to-end Torznab latency.
 
 ### Core Catalogue & Recovery Tables
-- `torrents`: Primary entity keyed by 20-byte `info_hash` (`bytea`), storing `name`, `size`, `files_status` (`no_info`, `single`, `multi`, `over_threshold`), `files_count`, `piece_length`, `pieces`, and `private` flag (`00068_private_tracker.sql`).
+- `torrents`: Primary entity keyed by `info_hash` (`bytea`: the 20-byte SHA-1 for v1 and hybrid torrents, the 32-byte SHA-256 for pure v2, with a unique nullable `info_hash_v2` alias for hybrids from `00070_torrent_v2_identity.sql`), storing `name`, `size`, `files_status` (`no_info`, `single`, `multi`, `over_threshold`), `files_count`, `piece_length`, `pieces`, and `private` flag (`00068_private_tracker.sql`).
 - `torrent_files`: Individual file paths, indices, extensions, and byte sizes for multi-file torrents.
 - `torrent_contents`: Resolved classification and catalog linkage (`info_hash`, `content_type`, `content_source`, `content_id`, `title`, `release_date`, `release_year`, `episodes`, `video_resolution`, `video_source`, `video_codec`, `release_group`, `search_string` tsvector/trigram index).
 - `content`, `content_attributes`, `content_collections`: Enriched canonical media entities (TMDB movies/TV series, AniDB mappings, genres, localized aliases, ratings, popularity).
@@ -192,8 +192,8 @@ All HTTP surfaces are served on `DH_WAYPOINT_HTTP_PORT` (default `:3333`, wired 
 |---|---|---|
 | **Torznab Indexer API** | `GET /torznab/*any` | XML/RSS indexer feed for Prowlarr, Sonarr, Radarr, Lidarr, and Readarr (`internal/torznab`). Filters out `dead` and `excluded` swarms and re-ranks results using `Beta(α, β)` import priors. Protected by `TORZNAB_API_KEY`. |
 | **GraphQL API** | `POST /graphql` | Full corpus search, facet aggregations, tag management, and worker inspection (`internal/gql`). Designed for trusted internal networks or reverse-proxy SSO. |
-| **Evidence Ingest Webhooks** | `POST /evidence/arr/:instance` | Receives Sonarr/Radarr/Lidarr/Readarr grab, import, and failed-download webhooks (`internal/evidence`). Protected by `X-Evidence-Token`. |
+| **Evidence Ingest Webhooks** | `POST /evidence/arr/:instance` | Receives Sonarr/Radarr/Lidarr/Readarr grab, import, and failed-download webhooks (`internal/evidence`). Protected by `X-Evidence-Token` when `EVIDENCE_WEBHOOK_SECRET` is set. |
 | **Processor Operator REST API** | `/api/processors/v1/*` | Authenticated control plane (`Authorization: Bearer <PROCESSORS_ADMIN_TOKEN>`) for plugin registration (`PUT /registry/:id`), cohort admission (`PUT /admission`), job inspection (`/jobs`), feedback cursor polling (`/feedback`), and audited reprocessing (`/reprocessing`). |
 | **External Processor Webhooks** | Outbound `GET /v1/manifest`, `GET /v1/status`, `POST /v1/process`, `POST /v1/feedback` | Deadline-bounded JSON over HTTP/1.1 (`dh-waypoint.processor.v1` and `dh-waypoint.processors.feedback.v1`) with strict schema validation, no redirects, and optional `Authorization: Bearer` secrets (`DH_WAYPOINT_PROCESSOR_TOKEN_*`). See [`docs/processor-contract.md`](processor-contract.md). |
-| **Prometheus Telemetry** | `GET /metrics` | Exposes `dh_waypoint_*` counters, gauges, and histograms (`pgstats`, `dht_crawler`, `classifier`, `processors`, `evidence`, `liveness`), plus legacy `bitmagnet_*` dual-emit series (`internal/telemetry/dualemit`). |
+| **Prometheus Telemetry** | `GET /metrics` | Exposes `dh_waypoint_*` counters, gauges, and histograms (`pgstats`, `dht_crawler`, `classifier`, `processors`, `evidence`, `liveness`); gated by `HTTP_SERVER_API_KEY` when set. |
 | **Internal Protobuf / Wire Types** | `internal/protobuf` | Compact binary serialization used internally for DHT/metadata snapshots; external processor services intentionally use deterministic UTF-8 JSON over HTTP (`processorapi/v1`) rather than gRPC so lightweight sidecars require zero protobuf codegen. |

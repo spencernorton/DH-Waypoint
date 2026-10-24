@@ -5,7 +5,7 @@ an OpenAI-compatible inference endpoint and returns an attributed proposal.
 Core owns queues, leases, source revisions, provenance, validation and feedback
 routing. The adapter owns prompts, models, provider credentials and budgets.
 `builtin/llm` and built-in online calibration are retired; see
-[migration](migration.md#retired-builtin-inference-and-learning).
+[migration](migration.md#retired-built-in-inference-and-learning).
 
 ## Run without a provider or plugin
 
