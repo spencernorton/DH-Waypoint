@@ -18,6 +18,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/spencernorton/DH-Waypoint/internal/database/query"
 	"github.com/spencernorton/DH-Waypoint/internal/database/search"
+	"github.com/spencernorton/DH-Waypoint/internal/httpserver"
 	"github.com/spencernorton/DH-Waypoint/internal/lazy"
 	"github.com/spencernorton/DH-Waypoint/internal/model"
 	"github.com/spencernorton/DH-Waypoint/internal/protocol"
@@ -40,7 +41,7 @@ func New(s lazy.Lazy[search.ServingSearch], logger *zap.SugaredLogger) *API {
 func (a *API) Key() string { return "rest_api" }
 
 func (a *API) Apply(e *gin.Engine) error {
-	g := e.Group("/api/v1")
+	g := e.Group("/api/v1", httpserver.QueryBudget(30*time.Second))
 	g.GET("/search", a.handleSearch)
 	g.GET("/torrents/:hash", a.handleDetail)
 	g.GET("/torrents/:hash/files", a.handleFiles)
