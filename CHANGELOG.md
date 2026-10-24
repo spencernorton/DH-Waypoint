@@ -15,7 +15,9 @@
   accepted prefixes can remain persisted. Overall stream size remains unbounded
   so callers can import many individually bounded records. Cancellation also
   unblocks an importer waiting to dispatch and balances undispatched items so
-  draining cannot deadlock.
+  draining cannot deadlock. Catalogue socket deadlines also remain active
+  through HTTP cleanup; the next streaming request on a reused connection
+  receives fresh deadlines.
 
 - REST search returns `total_count_is_estimate` alongside `total_count`, so
   clients can distinguish an approximate total from an exact count. The flag
