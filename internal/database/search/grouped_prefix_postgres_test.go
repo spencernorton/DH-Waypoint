@@ -42,6 +42,63 @@ func TestGroupedPrefixPostgresCanonicalJoinedPathExecutes(t *testing.T) {
 	require.Positive(t, trace.prefixes.Load(), "canonical raw-name join must execute the optimized SQL, not merely compare two fallback paths")
 }
 
+func TestGroupedPrefixPostgresTextAndLanguageStayEligible(t *testing.T) {
+	f := newAdultServingPostgresFixture(t)
+	_, err := f.pool.Exec(context.Background(), `
+UPDATE torrent_contents SET search_string='Copper Acacia', languages='["en"]' WHERE info_hash=$1;
+`, f.hashes[4].Bytes())
+	require.NoError(t, err)
+	_, err = f.pool.Exec(context.Background(),
+		`UPDATE torrent_contents SET search_string='Copper Acacia', languages='["fr"]' WHERE info_hash=$1`, f.hashes[1].Bytes())
+	require.NoError(t, err)
+	f, trace := observeGroupedPrefixFixture(t, f)
+	result := requireGroupedPrefixEquivalent(t, f.serving(t, false),
+		query.SearchString("Copper Acacia"),
+		query.WithFacet(TorrentContentLanguageFacet(query.FacetHasFilter(query.FacetFilter{"en": {}}))),
+		query.OrderBy(TorrentContentOrderBySeeders.Clauses(OrderDirectionDescending)...),
+		query.Limit(1), query.WithHasNextPage(true))
+	require.EqualValues(t, 1, result.TotalCount)
+	require.Equal(t, f.hashes[4:5], adultServingContentHashes(result.Items))
+	require.False(t, result.HasNextPage)
+	require.Positive(t, trace.prefixes.Load(), "fast searched pages retain the prefix optimization")
+}
+
+func TestGroupedPrefixPostgresSlowTextPrefixFallsBackWithinCallerBudget(t *testing.T) {
+	f := newAdultServingPostgresFixture(t)
+	sqlDB, err := f.q.TorrentContent.WithContext(context.Background()).UnderlyingDB().DB()
+	require.NoError(t, err)
+	sqlDB.SetMaxOpenConns(1)
+	var jit string
+	require.NoError(t, f.pool.QueryRow(context.Background(), "SHOW jit").Scan(&jit))
+	require.Equal(t, "on", jit)
+	_, err = f.pool.Exec(context.Background(), `
+CREATE FUNCTION slow_prefix_only() RETURNS boolean LANGUAGE plpgsql VOLATILE AS $$
+BEGIN PERFORM pg_sleep(10); RETURN true; END $$`)
+	require.NoError(t, err)
+	_, err = f.pool.Exec(context.Background(),
+		`UPDATE torrent_contents SET search_string='Copper Acacia' WHERE info_hash=$1`, f.hashes[4].Bytes())
+	require.NoError(t, err)
+	f, trace := observeGroupedPrefixFixture(t, f)
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+	result, err := f.serving(t, false).TorrentContent(ctx,
+		TorrentContentCoreJoins(), HydrateTorrentContentTorrent(),
+		TorrentContentGroupByContentOption(),
+		query.SearchString("Copper Acacia"),
+		query.Where(query.DBCriteria{SQL: "(current_setting('jit') <> 'off' OR slow_prefix_only())"}),
+		query.WithTotalCount(true), query.WithAggregationBudget(0),
+		query.OrderBy(TorrentContentOrderBySeeders.Clauses(OrderDirectionDescending)...),
+		query.Limit(1), query.WithHasNextPage(true))
+	require.NoError(t, err, "the optional prefix must leave time for the authoritative grouped query")
+	require.NoError(t, ctx.Err(), "the caller's deadline remains intact")
+	require.EqualValues(t, 1, result.TotalCount)
+	require.Equal(t, f.hashes[4:5], adultServingContentHashes(result.Items))
+	require.False(t, result.HasNextPage)
+	require.Equal(t, int64(1), trace.prefixes.Load(), "stop the slow prefix before expanding it again")
+	require.NoError(t, f.q.TorrentContent.WithContext(context.Background()).UnderlyingDB().Raw("SHOW jit").Scan(&jit).Error)
+	require.Equal(t, "on", jit, "canceled prefix settings cannot leak into pooled connections")
+}
+
 func observeGroupedPrefixFixture(t *testing.T, f adultServingPostgresFixture) (adultServingPostgresFixture, *groupedPrefixTrace) {
 	t.Helper()
 	trace := &groupedPrefixTrace{Interface: gormlogger.Discard}
