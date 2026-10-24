@@ -66,7 +66,10 @@ and actual build times are recorded. Bulk population throughput is distinct from
 the concurrent ingestion phase, which always runs with the tested index set.
 
 After the main suite, `prepared.py --out results/prepared.jsonl --variant candidate`
-compares forced generic and custom plans without changing the corpus. The
+compares automatic, forced generic and forced custom plans without changing the
+corpus, recording the server's generic/custom execution counters. It includes a
+combined canonical-ID/episode/quality query and checks its complete expected
+page with an independent mathematical oracle. The
 `indexes --variant selected` experiment removes the unused raw B-tree and the
 episode GIN, replaces the experimental raw TSV GIN with the v2 API's literal
 name-substring trigram index, retains external-ID/page indexes, and adds an
@@ -88,6 +91,8 @@ To summarize raw files and render the optional chart:
 python3 scripts/catalogue_bench/summarize.py results/catalogue --out results/summary.json
 .venv/bin/pip install -r scripts/catalogue_bench/plot-requirements.txt
 .venv/bin/python scripts/catalogue_bench/plot.py results/summary.json --out results/latency.png
+.venv/bin/python scripts/catalogue_bench/plot_costs.py results/summary.json --out results/costs.png
+python3 scripts/catalogue_bench/resources.py results/summary.json results/resources.jsonl --out results/resource-summary.json
 ```
 
 ## Corpus and authority

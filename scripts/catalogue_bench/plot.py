@@ -17,7 +17,7 @@ args=p.parse_args()
 data=json.loads(args.summary.read_text())
 groups=[r for r in data['latencies'] if r['cache_state']=='warm' and not r['concurrent_writes'] and r['plan_mode']=='literal']
 sizes=sorted(set(r['rows'] for r in groups if r['rows']))
-cases=[('raw_text_rare','Raw name · rare'),('external_keyset','External ID'),
+cases=[('raw_text_rare','Raw FTS · rare · alternative'),('external_keyset','External ID'),
        ('identity_hot','Canonical ID · hot'),('type_browse','Type browse'),
        ('offset','Offset · 1,000,000'),('keyset','Published cursor'),
        ('enriched_with_fallback','Full fallback union'),('enriched_bounded_fallback','Bounded fallback merge')]
