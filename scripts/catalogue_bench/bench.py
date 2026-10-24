@@ -370,6 +370,17 @@ def verify_page(conn,args,name,result):
                          else [h for _,h in sorted(expected,reverse=True)])
         if hashes!=expected_hashes[:101 if name=='raw_substring_rare' else 100]:
             raise RuntimeError('rare identity/text page differs from independent complete oracle: '+name)
+    if name=='identity_episode_quality':
+        rows=conn.execute('SELECT max(n) FROM torrents').fetchone()[0]
+        expected=[]
+        for n in range(20,rows+1,20):
+            if (n//20)%10>=7 or n%199==0 or n%211==0 or n%8!=0 or not (n%11==0 or n%24==4):
+                continue
+            h=bytes.fromhex(hashlib.md5(('synthetic-'+str(n)).encode()).hexdigest()+
+                            hashlib.md5(('tail-'+str(n)).encode()).hexdigest()[:8])
+            expected.append((n%100000,h))
+        if hashes!=[h for _,h in sorted(expected,reverse=True)[:100]]:
+            raise RuntimeError('combined identity/episode/quality page differs from complete oracle')
     emit(args.out,{"kind":"page_correctness","case":name,"checked":len(result),"failures":0})
 
 
