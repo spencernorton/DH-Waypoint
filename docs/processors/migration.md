@@ -169,3 +169,57 @@ Exhausted deferred/technical work is retained as that outcome, not converted to
 an unsuccessful match or junk. To intentionally reconsider it after repair,
 register a new execution generation; ordinary source changes also create new
 work. Core metadata and deterministic processing never wait for this queue.
+
+## Retired built-in inference and learning
+
+The next major backend release removes `builtin/llm` execution and online
+calibration in core. The public processor job/feedback contracts and historical
+SQL migrations remain intact; no schema migration is needed for this change.
+
+Before upgrading:
+
+1. Pause affected registrations and stop their plugin-file reconciliation while
+   migrating. Export configuration, attempts, provenance, feedback and any
+   retained `learned_state` with your normal catalogue backup. Retained provider
+   results are evidence, not permission to redispatch paid requests.
+2. For each `builtin/llm`, build the [independent adapter](llm.md). Copy its
+   `configuration.model`, provider endpoint, optional temperature and prompt to
+   service-local configuration/prompt files. Set capabilities explicitly. Choose
+   the provider's output-token dialect and configure bounded inference budgets.
+   The adapter uses the full chat-completions URL; the core registration uses
+   only the adapter's base URL.
+3. Move the old provider credential out of core's environment/credential mounts
+   into the adapter's `api_key_env` or `api_key_file`. Remove its old core
+   `auth_env` reference. Create a different service-auth token shared by core
+   and adapter; provider and service credentials must differ.
+4. Start the adapter disabled/dry-run and probe manifest/status. Replace the
+   registration with `driver: http`, its adapter endpoint, `configuration: {}`,
+   matching manifest ID, and a small selector in `mode: shadow`. For API-owned
+   registrations use the current `expected_generation` and inspected complete
+   `expected_processor`; file-owned registrations update their file normally.
+   Re-registration creates a fresh execution generation and fences old jobs.
+5. Enable inference explicitly in the adapter, restart it and re-register its
+   new manifest identity. Shadow mode still incurs provider work. Compare
+   attributed results and trusted outcomes before choosing apply mode.
+6. Built-in regex rules now use only their explicit configured weights.
+   Retained learned adjustments are never consumed or changed. For exact prior
+   scoring, export each adjustment and add it to the corresponding configured
+   base weight before switching to static `learning.mode: log_only`; archive
+   the original state. Alternatively implement the learner in an HTTP service
+   and migrate its state there. Do not assume operational receipts are gold
+   labels. Core keeps feedback routing and opaque external learned-state
+   receipts, but runs no calibration algorithm.
+
+Old `builtin/llm` registrations/queued plans fail with
+`builtin_llm_retired_use_http_processor`. Built-ins with enabled learning modes
+other than logging fail with `builtin_learning_retired_use_http_processor`.
+Status reports them incompatible/unavailable, while core readiness stays
+independent. Pausing remains available for recovery. Configuration/history are
+retained, and no old provider endpoint is called by the new binary.
+
+The native default also changes from `full` to `basic`. Set
+`PROCESSING_MODE=full` explicitly if retaining the deterministic CEL workflow
+and metadata enrichment is intentional. See [processing modes](../configuration.md).
+Do not downgrade to reactivate embedded inference or learning against live
+state; restore the reviewed matching artifact/configuration/backup if rollback
+is required.

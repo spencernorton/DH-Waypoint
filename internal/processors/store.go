@@ -244,6 +244,9 @@ func validateWrite(w v1.RegistryWrite) error {
 	if driver == "" {
 		driver = v1.DriverHTTP
 	}
+	if reason := retiredBuiltinReason(driver, w.Learning); reason != "" {
+		return errors.New(reason)
+	}
 	if !slices.Contains(v1.Drivers, driver) {
 		return errors.New("invalid_driver")
 	}
@@ -421,10 +424,10 @@ func (s *Store) Control(ctx context.Context, id string, c v1.RegistryControl) er
 		return e
 	}
 	var gen, execGen int64
-	var state, mode string
+	var state, mode, driver string
 	var priority int
 	var selRaw, learnRaw []byte
-	e = tx.QueryRow(ctx, `SELECT generation,execution_generation,state,mode,priority,selector,learning FROM processor_registry WHERE id=$1 FOR UPDATE`, id).Scan(&gen, &execGen, &state, &mode, &priority, &selRaw, &learnRaw)
+	e = tx.QueryRow(ctx, `SELECT generation,execution_generation,state,mode,priority,selector,learning,driver FROM processor_registry WHERE id=$1 FOR UPDATE`, id).Scan(&gen, &execGen, &state, &mode, &priority, &selRaw, &learnRaw, &driver)
 	if errors.Is(e, pgx.ErrNoRows) {
 		return ErrAbsent
 	}
@@ -460,13 +463,22 @@ func (s *Store) Control(ctx context.Context, id string, c v1.RegistryControl) er
 	if c.Learning != nil {
 		newLearn, _ = json.Marshal(c.Learning)
 	}
+	var learning v1.LearningConfig
+	if len(newLearn) > 0 {
+		_ = json.Unmarshal(newLearn, &learning)
+	}
+	if newState != "paused" {
+		if reason := retiredBuiltinReason(driver, &learning); reason != "" {
+			return fmt.Errorf("%w: %s", ErrControl, reason)
+		}
+	}
 	if e = tx.QueryRow(ctx, `SELECT nextval('processor_registry_generation')`).Scan(&gen); e != nil {
 		return e
 	}
 	// Drain/resume and priority changes affect future plans only. A mode,
-	// selector, or pause transition cancels execution and creates a fresh
+	// selector, feedback configuration, or pause transition cancels execution and creates a fresh
 	// immutable execution generation.
-	changed := mode != newMode || state == "paused" && newState != "paused" || state != "paused" && newState == "paused" || string(canonical(selRaw)) != string(canonical(newSel))
+	changed := mode != newMode || state == "paused" && newState != "paused" || state != "paused" && newState == "paused" || string(canonical(selRaw)) != string(canonical(newSel)) || string(canonical(learnRaw)) != string(canonical(newLearn))
 	if changed {
 		execGen = gen
 		if e = invalidate(ctx, tx); e != nil {

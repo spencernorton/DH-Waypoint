@@ -1,15 +1,9 @@
 package processors
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
-	"io"
-	"math"
-	"net/http"
-	"os"
-	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
@@ -60,19 +54,6 @@ type trackerLivenessConfig struct {
 	WeightDimension string  `json:"weight_dimension,omitempty"`
 	LiveWeight      float64 `json:"live_weight,omitempty"`
 	DeadWeight      float64 `json:"dead_weight,omitempty"`
-}
-
-type builtinLLMConfig struct {
-	Model        string     `json:"model"`
-	Endpoint     string     `json:"endpoint,omitempty"`
-	SystemPrompt string     `json:"system_prompt,omitempty"`
-	Temperature  *float64   `json:"temperature,omitempty"`
-	Capabilities []v1.Stage `json:"capabilities,omitempty"`
-}
-
-type regexLearnedState struct {
-	RuleAdjustments map[string]float64 `json:"rule_adjustments,omitempty"`
-	FeedbackCount   int64              `json:"feedback_count,omitempty"`
 }
 
 func (s *Store) inspectBuiltin(_ context.Context, id string, w v1.RegistryWrite) (v1.Manifest, v1.ServiceStatus, error) {
@@ -154,25 +135,7 @@ func (s *Store) inspectBuiltin(_ context.Context, id string, w v1.RegistryWrite)
 		}
 		caps = []v1.Stage{v1.Policy}
 	case v1.DriverBuiltinLLM:
-		var cfg builtinLLMConfig
-		if err := v1.Decode(w.Configuration, &cfg); err != nil {
-			return m, st, err
-		}
-		if cfg.Model == "" || len(cfg.Model) > 96 {
-			return m, st, errors.New("invalid_model")
-		}
-		endpoint := w.Endpoint
-		if endpoint == "" {
-			endpoint = cfg.Endpoint
-		}
-		if err := validateEndpoint(endpoint, w.AuthEnv); err != nil {
-			return m, st, err
-		}
-		procID.ModelVersion = sanitizeToken(cfg.Model)
-		caps = cfg.Capabilities
-		if len(caps) == 0 {
-			caps = []v1.Stage{v1.Classify, v1.Extract, v1.Language, v1.Match}
-		}
+		return m, st, errors.New(retiredLLMReason)
 	default:
 		return m, st, errors.New("unsupported_driver")
 	}
@@ -199,26 +162,10 @@ func (s *Store) inspectBuiltin(_ context.Context, id string, w v1.RegistryWrite)
 	return m, st, nil
 }
 
-func sanitizeToken(s string) string {
-	var b strings.Builder
-	for _, r := range s {
-		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '.' || r == '_' || r == '+' || r == '-' {
-			b.WriteRune(r)
-		} else {
-			b.WriteByte('-')
-		}
-	}
-	out := strings.TrimLeft(b.String(), "._+-")
-	if out == "" {
-		return "model"
-	}
-	if len(out) > 95 {
-		out = out[:95]
-	}
-	return out
-}
-
 func (s *Store) processBuiltin(ctx context.Context, entry Entry, j v1.Job) (v1.Result, error) {
+	if reason := retiredBuiltinReason(entry.Driver, entry.Learning); reason != "" {
+		return v1.Result{}, errors.New(reason)
+	}
 	start := time.Now()
 	var r v1.Result
 	var err error
@@ -226,11 +173,9 @@ func (s *Store) processBuiltin(ctx context.Context, entry Entry, j v1.Job) (v1.R
 	case v1.DriverBuiltinFilter:
 		r, err = s.runFilterList(ctx, j)
 	case v1.DriverBuiltinRegex:
-		r, err = s.runRegexWeights(ctx, entry, j)
+		r, err = s.runRegexWeights(j)
 	case v1.DriverBuiltinLiveness:
 		r, err = s.runTrackerLiveness(ctx, j)
-	case v1.DriverBuiltinLLM:
-		r, err = s.runBuiltinLLM(ctx, entry, j)
 	default:
 		return r, errors.New("unsupported_driver")
 	}
@@ -337,17 +282,10 @@ func (s *Store) runFilterList(ctx context.Context, j v1.Job) (v1.Result, error) 
 	}, nil
 }
 
-func (s *Store) runRegexWeights(ctx context.Context, entry Entry, j v1.Job) (v1.Result, error) {
+func (s *Store) runRegexWeights(j v1.Job) (v1.Result, error) {
 	var cfg regexWeightsConfig
 	if err := json.Unmarshal(j.Configuration, &cfg); err != nil {
 		return v1.Result{}, err
-	}
-	var learned regexLearnedState
-	if p, err := s.pool.Get(); err == nil {
-		var raw []byte
-		if err := p.QueryRow(ctx, `SELECT learned_state FROM processor_registry WHERE id=$1`, entry.ID).Scan(&raw); err == nil && len(raw) > 0 {
-			_ = json.Unmarshal(raw, &learned)
-		}
 	}
 	weights := map[string]float64{}
 	var addTags []string
@@ -382,11 +320,7 @@ func (s *Store) runRegexWeights(ctx context.Context, entry Entry, j v1.Job) (v1.
 		if dim == "" {
 			dim = "score"
 		}
-		adj := 0.0
-		if learned.RuleAdjustments != nil {
-			adj = learned.RuleAdjustments[rule.ID]
-		}
-		w := rule.Weight + adj
+		w := rule.Weight
 		if w != 0 {
 			weights[dim] += w
 		}
@@ -512,151 +446,4 @@ func (s *Store) runTrackerLiveness(ctx context.Context, j v1.Job) (v1.Result, er
 		Proposal: prop,
 		Reasons:  []string{"liveness_" + liv.Observation},
 	}, nil
-}
-
-func (s *Store) runBuiltinLLM(ctx context.Context, entry Entry, j v1.Job) (v1.Result, error) {
-	var cfg builtinLLMConfig
-	if err := json.Unmarshal(j.Configuration, &cfg); err != nil {
-		return v1.Result{}, err
-	}
-	endpoint := entry.Endpoint
-	if endpoint == "" {
-		endpoint = cfg.Endpoint
-	}
-	sysPrompt := cfg.SystemPrompt
-	if sysPrompt == "" {
-		sysPrompt = `You are a DH-Waypoint torrent metadata processor. Respond with a single JSON object containing {"outcome":"completed"|"abstained","proposal":{...},"uncertainty":0.0..1.0,"reasons":[...]}.`
-	}
-	userBytes, _ := json.Marshal(j.Input)
-	temp := 0.0
-	if cfg.Temperature != nil {
-		temp = *cfg.Temperature
-	}
-	reqBody, _ := json.Marshal(map[string]any{
-		"model":       cfg.Model,
-		"temperature": temp,
-		"response_format": map[string]string{
-			"type": "json_object",
-		},
-		"messages": []map[string]string{
-			{"role": "system", "content": sysPrompt},
-			{"role": "user", "content": string(userBytes)},
-		},
-	})
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(reqBody))
-	if err != nil {
-		return v1.Result{}, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	if entry.AuthEnv != "" {
-		secret := os.Getenv(entry.AuthEnv)
-		if secret == "" && s.transport.CredentialDirectory != "" {
-			if data, readErr := os.ReadFile(filepath.Join(s.transport.CredentialDirectory, entry.AuthEnv)); readErr == nil && len(data) <= 4096 {
-				secret = strings.TrimSpace(string(data))
-			}
-		}
-		if secret == "" {
-			return v1.Result{}, errors.New("transport_credential_unavailable")
-		}
-		req.Header.Set("Authorization", "Bearer "+secret)
-	}
-	res, err := s.transport.client.Do(req)
-	if err != nil {
-		return v1.Result{}, errors.New("transport_failed")
-	}
-	defer res.Body.Close()
-	if res.StatusCode != http.StatusOK {
-		return v1.Result{}, errors.New("service_unavailable")
-	}
-	raw, err := io.ReadAll(io.LimitReader(res.Body, v1.MaxBody))
-	if err != nil {
-		return v1.Result{}, errors.New("response_read_failed")
-	}
-	var chatResp struct {
-		Choices []struct {
-			Message struct {
-				Content string `json:"content"`
-			} `json:"message"`
-		} `json:"choices"`
-	}
-	if err := json.Unmarshal(raw, &chatResp); err != nil || len(chatResp.Choices) == 0 {
-		return v1.Result{}, errors.New("malformed_response")
-	}
-	var llmOut struct {
-		Outcome     v1.Outcome   `json:"outcome"`
-		Proposal    *v1.Proposal `json:"proposal,omitempty"`
-		Uncertainty *float64     `json:"uncertainty,omitempty"`
-		Reasons     []string     `json:"reasons,omitempty"`
-	}
-	if err := json.Unmarshal([]byte(chatResp.Choices[0].Message.Content), &llmOut); err != nil {
-		return v1.Result{}, errors.New("malformed_response")
-	}
-	trace, _ := json.Marshal(map[string]any{"model": cfg.Model})
-	return v1.Result{
-		Binding:     j.Binding,
-		Outcome:     llmOut.Outcome,
-		Proposal:    llmOut.Proposal,
-		Uncertainty: llmOut.Uncertainty,
-		Reasons:     llmOut.Reasons,
-		Trace:       trace,
-	}, nil
-}
-
-func calibrateBuiltinRegex(rawState []byte, trace json.RawMessage, prediction *v1.Result, gt v1.FeedbackGroundTruth) ([]byte, bool) {
-	if len(trace) == 0 {
-		return rawState, false
-	}
-	var tr struct {
-		MatchedRules []string `json:"matched_rules"`
-	}
-	if err := json.Unmarshal(trace, &tr); err != nil || len(tr.MatchedRules) == 0 {
-		return rawState, false
-	}
-	reward := 0.0
-	switch gt.Outcome {
-	case "applied", "import_succeeded":
-		reward = 1.0
-	case "import_failed", "rejected_policy", "rejected_ambiguous":
-		reward = -1.0
-	case "teacher_consensus", "operator_override":
-		if prediction != nil && prediction.Proposal != nil && gt.ContentType != "" && prediction.Proposal.ContentType != "" {
-			if prediction.Proposal.ContentType == gt.ContentType {
-				reward = 1.0
-			} else {
-				reward = -1.0
-			}
-		} else if gt.Excluded != nil && prediction != nil {
-			predExcluded := prediction.Outcome == v1.Excluded
-			if predExcluded == *gt.Excluded {
-				reward = 1.0
-			} else {
-				reward = -1.0
-			}
-		} else {
-			reward = 1.0
-		}
-	}
-	if reward == 0 {
-		return rawState, false
-	}
-	var state regexLearnedState
-	if len(rawState) > 0 {
-		_ = json.Unmarshal(rawState, &state)
-	}
-	if state.RuleAdjustments == nil {
-		state.RuleAdjustments = map[string]float64{}
-	}
-	const stepSize = 0.05
-	const maxAdjustment = 2.0
-	for _, id := range tr.MatchedRules {
-		next := state.RuleAdjustments[id] + stepSize*reward
-		next = math.Max(-maxAdjustment, math.Min(maxAdjustment, math.Round(next*1000)/1000))
-		state.RuleAdjustments[id] = next
-	}
-	state.FeedbackCount++
-	out, err := json.Marshal(state)
-	if err != nil {
-		return rawState, false
-	}
-	return out, true
 }

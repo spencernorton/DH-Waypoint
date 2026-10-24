@@ -13,10 +13,10 @@ import (
 // torrent before optional processor services see it. It is configured by
 // PROCESSING_MODE (or `processing.mode` in YAML config).
 //
-//   - full (default): the complete CEL classifier workflow, including
+//   - full (explicit opt-in): the complete CEL classifier workflow, including
 //     title parsing, metadata matching, and the deterministic content
 //     filter when that filter is itself enabled.
-//   - basic: no CEL workflow, no metadata providers, no network calls.
+//   - basic (default): no CEL workflow, no metadata providers, no network calls.
 //     The core stamps only a coarse content type derived from file
 //     extensions (and, for video, an episode pattern in the name).
 //     Intended for installs where a processor service or custom
@@ -42,7 +42,7 @@ type Config struct {
 }
 
 func NewDefaultConfig() Config {
-	return Config{Mode: ModeFull}
+	return Config{Mode: ModeBasic}
 }
 
 func (m Mode) Valid() bool {
@@ -54,11 +54,10 @@ func (m Mode) Valid() bool {
 }
 
 // Normalize maps the empty value (direct struct construction, older
-// wiring) to ModeFull so existing behaviour is preserved unless an
-// operator opts into a leaner mode.
+// wiring) to ModeBasic. Full classification requires an explicit opt-in.
 func (m Mode) Normalize() Mode {
 	if m == "" {
-		return ModeFull
+		return ModeBasic
 	}
 	return m
 }

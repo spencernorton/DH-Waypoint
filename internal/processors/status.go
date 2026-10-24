@@ -37,6 +37,12 @@ func (s *Store) Refresh(ctx context.Context) error {
 		if e != nil {
 			return e
 		}
+		if reason := retiredBuiltinReason(entry.Driver, entry.Learning); reason != "" {
+			if _, e = p.Exec(ctx, `UPDATE processor_registry SET last_error=$3 WHERE id=$1 AND generation=$2`, entry.ID, entry.Generation, reason); e != nil {
+				return e
+			}
+			continue
+		}
 		if entry.Driver != "" && entry.Driver != v1.DriverHTTP {
 			observed := v1.ServiceStatus{
 				Contract:   v1.Contract,
@@ -125,6 +131,16 @@ func (s *Store) Status(ctx context.Context) (v1.Status, error) {
 		}
 		if p.LastError == "service_unavailable" {
 			p.Health = "unavailable"
+		}
+		if reason := retiredBuiltinReason(entry.Driver, entry.Learning); reason != "" {
+			p.Enabled = false
+			p.Compatibility = "incompatible"
+			p.Health = "unavailable"
+			p.Readiness = "unavailable"
+			p.OperatingMode = "unavailable"
+			loaded := false
+			p.Loaded = &loaded
+			p.LastError = reason
 		}
 		pop := "retained attempts for processor execution generation " + strconv.FormatInt(entry.ExecutionGeneration, 10)
 		var attempts, unique, retries, waitN, inferenceN int64

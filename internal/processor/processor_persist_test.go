@@ -163,6 +163,7 @@ func newProcessTestProcessor(
 	blocker := &recordingBlockingManager{}
 
 	return processor{
+		mode:            ModeFull, // these tests explicitly exercise legacy classifier behavior
 		defaultWorkflow: "test",
 		search: processSearchStub{
 			torrents: dbsearch.TorrentsWithMissingInfoHashesResult{Torrents: torrents},
