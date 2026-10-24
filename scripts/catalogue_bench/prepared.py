@@ -20,6 +20,9 @@ raw_policy=bench.ELIGIBLE.replace('=tc.info_hash','=raw.info_hash')
 identity=("SELECT tc.id,tc.info_hash FROM torrent_contents tc WHERE "
           "tc.content_type=$1 AND tc.content_source=$2 AND tc.content_id=$3 AND "+bench.ELIGIBLE+
           " ORDER BY "+bench.ORDER+" LIMIT 100")
+filtered_identity=identity.replace(' AND '+bench.ELIGIBLE,
+    " AND tc.video_resolution='2160p' AND (tc.episodes #> '{0}'='{}'::jsonb OR "
+    "tc.episodes #> '{0}' @> '{\"4\":{}}'::jsonb) AND "+bench.ELIGIBLE)
 external=("SELECT tc.id,tc.info_hash FROM torrent_contents tc WHERE "
           "(tc.content_type,tc.content_source,tc.content_id) IN (VALUES ($1,$2,$3) "
           "UNION ALL SELECT content_type,content_source,content_id FROM content_attributes "
@@ -32,6 +35,7 @@ substring=("SELECT encode(raw.info_hash,'hex') AS id,raw.info_hash FROM torrents
 cases={
     "identity_hot":(identity,["tv_show","synthetic","1"]),
     "identity_rare":(identity,["movie","synthetic","123456"]),
+    "identity_episode_quality":(filtered_identity,["tv_show","synthetic","1"]),
     "external_keyset":(external,["movie","imdb","tt123456"]),
     "raw_text_hot":(raw,["title1"]),
     "raw_text_rare":(raw,["title123456"]),
