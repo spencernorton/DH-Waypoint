@@ -43,7 +43,7 @@ cases={
 bench.emit(args.out,{"kind":"prepared_manifest","source_sha256":hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
                     "bench_sha256":hashlib.sha256(Path(bench.__file__).read_bytes()).hexdigest(),
                     "variant":args.variant,"samples":args.samples})
-for mode in ["force_custom_plan","force_generic_plan"]:
+for mode in ["auto","force_custom_plan","force_generic_plan"]:
     for name,(query,params) in cases.items():
         with bench.connect(os.environ['CATALOGUE_BENCH_DSN']) as conn:
             conn.execute("SET statement_timeout=180000")
@@ -67,3 +67,6 @@ for mode in ["force_custom_plan","force_generic_plan"]:
             except psycopg.Error as err:
                 bench.emit(args.out,{"kind":"sample_error","rows":rows,"variant":args.variant,"case":name,
                            "cache_state":"warm","updates":False,"plan_mode":mode,"sqlstate":err.sqlstate})
+            counters=conn.execute("SELECT generic_plans,custom_plans FROM pg_prepared_statements WHERE name='catalogue_probe'").fetchone()
+            bench.emit(args.out,{'kind':'prepared_counters','case':name,'plan_mode':mode,
+                       'generic_plans':counters[0],'custom_plans':counters[1]})
