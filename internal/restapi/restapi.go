@@ -18,6 +18,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/spencernorton/DH-Waypoint/internal/database/query"
 	"github.com/spencernorton/DH-Waypoint/internal/database/search"
+	"github.com/spencernorton/DH-Waypoint/internal/httpserver"
 	"github.com/spencernorton/DH-Waypoint/internal/lazy"
 	"github.com/spencernorton/DH-Waypoint/internal/model"
 	"github.com/spencernorton/DH-Waypoint/internal/protocol"
@@ -40,7 +41,7 @@ func New(s lazy.Lazy[search.ServingSearch], logger *zap.SugaredLogger) *API {
 func (a *API) Key() string { return "rest_api" }
 
 func (a *API) Apply(e *gin.Engine) error {
-	g := e.Group("/api/v1")
+	g := e.Group("/api/v1", httpserver.QueryBudget(30*time.Second))
 	g.GET("/search", a.handleSearch)
 	g.GET("/torrents/:hash", a.handleDetail)
 	g.GET("/torrents/:hash/files", a.handleFiles)
@@ -119,9 +120,10 @@ func toItem(tc model.TorrentContent) Item {
 }
 
 type searchResponse struct {
-	TotalCount  uint   `json:"total_count"`
-	HasNextPage bool   `json:"has_next_page"`
-	Items       []Item `json:"items"`
+	TotalCount           uint   `json:"total_count"`
+	TotalCountIsEstimate bool   `json:"total_count_is_estimate"`
+	HasNextPage          bool   `json:"has_next_page"`
+	Items                []Item `json:"items"`
 }
 
 func paging(c *gin.Context) (limit, offset uint, errMsg string) {
@@ -197,7 +199,12 @@ func (a *API) handleSearch(c *gin.Context) {
 	for _, row := range result.Items {
 		items = append(items, toItem(row.TorrentContent))
 	}
-	c.JSON(200, searchResponse{TotalCount: result.TotalCount, HasNextPage: result.HasNextPage, Items: items})
+	c.JSON(200, searchResponse{
+		TotalCount:           result.TotalCount,
+		TotalCountIsEstimate: result.TotalCountIsEstimate,
+		HasNextPage:          result.HasNextPage,
+		Items:                items,
+	})
 }
 
 func parseHash(c *gin.Context) (protocol.ID, bool) {
@@ -266,5 +273,8 @@ func (a *API) handleStats(c *gin.Context) {
 		a.fail(c, err)
 		return
 	}
-	c.JSON(200, gin.H{"torrent_contents": result.TotalCount})
+	c.JSON(200, gin.H{
+		"torrent_contents":             result.TotalCount,
+		"torrent_contents_is_estimate": result.TotalCountIsEstimate,
+	})
 }

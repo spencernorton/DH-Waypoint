@@ -1,6 +1,10 @@
 package httpserver
 
 import (
+	"bytes"
+	"io"
+	"mime"
+	"net/http"
 	"time"
 
 	"github.com/99designs/gqlgen/graphql"
@@ -51,7 +55,26 @@ func (b builder) Apply(e *gin.Engine) error {
 
 	gql := newServer(schema)
 
-	e.POST("/graphql", func(c *gin.Context) {
+	e.POST("/graphql", httpserver.QueryBudget(30*time.Second), func(c *gin.Context) {
+		mediaType, _, err := mime.ParseMediaType(c.GetHeader("Content-Type"))
+		if err != nil || mediaType != "application/json" {
+			c.AbortWithStatusJSON(http.StatusUnsupportedMediaType, gin.H{"error": "application_json_required"})
+			return
+		}
+		if c.Request.ContentLength > maxBodyBytes {
+			c.AbortWithStatusJSON(http.StatusRequestEntityTooLarge, gin.H{"error": "request_body_too_large"})
+			return
+		}
+		raw, err := io.ReadAll(io.LimitReader(c.Request.Body, maxBodyBytes+1))
+		if err != nil {
+			c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "request_body_unreadable"})
+			return
+		}
+		if len(raw) > maxBodyBytes {
+			c.AbortWithStatusJSON(http.StatusRequestEntityTooLarge, gin.H{"error": "request_body_too_large"})
+			return
+		}
+		c.Request.Body = io.NopCloser(bytes.NewReader(raw))
 		gql.ServeHTTP(c.Writer, c.Request)
 	})
 
@@ -61,19 +84,17 @@ func (b builder) Apply(e *gin.Engine) error {
 func newServer(es graphql.ExecutableSchema) *handler.Server {
 	srv := handler.New(es)
 
-	srv.AddTransport(transport.Websocket{
-		KeepAlivePingInterval: 10 * time.Second,
-	})
 	srv.AddTransport(transport.Options{})
 	srv.AddTransport(transport.POST{})
-	srv.AddTransport(transport.MultipartForm{})
 
-	srv.SetQueryCache(lru.New[*ast.QueryDocument](1000))
+	srv.SetParserTokenLimit(maxParserTokens)
+	srv.SetQueryCache(lru.New[*ast.QueryDocument](100))
 
 	srv.Use(extension.Introspection{})
 	srv.Use(extension.AutomaticPersistedQuery{
 		Cache: lru.New[string](100),
 	})
+	srv.Use(operationLimits{})
 
 	return srv
 }

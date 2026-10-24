@@ -61,13 +61,20 @@ curl -s "$B/api/v1/stats"
 curl -s "$B/api/v1/openapi.yaml"   # generate a client from this
 ```
 
-Responses are stable snake_case JSON (`total_count`, `has_next_page`,
+Responses are stable snake_case JSON (`total_count`, `total_count_is_estimate`, `has_next_page`,
 `items[]` with `info_hash`, `name`, `title`, `content_type`, `size`,
 `seeders`, `published_at`, `magnet`, …). The REST surface is
 read-only and uses the identical serving policy as GraphQL, so
 private torrents never appear. Prefer GraphQL when you need facets,
 grouping or mutations; prefer REST when you need a typed client in
 minutes.
+
+Check `total_count_is_estimate` before displaying an exact result total. It is
+always present: `true` means the count budget was exceeded and `total_count`
+is approximate; `false` means the count is exact. Use `has_next_page` to decide
+whether another page is available.
+The `/stats` response likewise includes `torrent_contents_is_estimate` alongside
+`torrent_contents`.
 
 ## 3. Feed an *arr (Torznab)
 
