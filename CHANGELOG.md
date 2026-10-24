@@ -9,6 +9,16 @@
   with bounded socket reads/writes; header and idle timeouts protect the HTTP
   listener while separate streaming imports retain their existing behavior.
 
+- Streaming NDJSON imports cap each line at 1 MiB, detect body read errors,
+  propagate client cancellation through the real HTTP request context and
+  always drain/close the importer. Failed streams never report `import complete`;
+  accepted prefixes can remain persisted. Overall stream size remains unbounded
+  so callers can import many individually bounded records. Cancellation also
+  unblocks an importer waiting to dispatch and balances undispatched items so
+  draining cannot deadlock. Catalogue socket deadlines also remain active
+  through HTTP cleanup; the next streaming request on a reused connection
+  receives fresh deadlines.
+
 - REST search returns `total_count_is_estimate` alongside `total_count`, so
   clients can distinguish an approximate total from an exact count. The flag
   is always present, including `false`, and documented in OpenAPI. REST stats
@@ -37,6 +47,12 @@
 - Check active Go syntax for direct provider HTTP calls and learning in core,
   as well as dependency names; enforce the adapter's public-contract boundary.
 
+
+- Metadata peer requests can dial IPv4 and IPv6 addresses and close connected
+  sockets promptly on context cancellation, retaining their overall deadline
+  and existing metadata checks. Synthetic peers exercise the complete exchange
+  on both families. The protocol applicability ledger distinguishes this
+  transport support from remaining IPv6 DHT, uTP, MSE/PE and holepunch work.
 
 - Add algorithm-aware torrent identity and bounded BEP 52 metadata validation
   foundations, including verified hybrid layouts, original-info-byte hashing,

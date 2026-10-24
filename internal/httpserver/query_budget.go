@@ -20,10 +20,9 @@ func QueryBudget(timeout time.Duration) gin.HandlerFunc {
 		controller := http.NewResponseController(c.Writer)
 		_ = controller.SetReadDeadline(minTime(deadline, time.Now().Add(10*time.Second)))
 		_ = controller.SetWriteDeadline(deadline.Add(5 * time.Second))
-		defer func() {
-			_ = controller.SetReadDeadline(time.Time{})
-			_ = controller.SetWriteDeadline(time.Time{})
-		}()
+		// net/http still finalizes unread bodies and buffered responses after
+		// the handler returns. Keep deadlines through that work; the server
+		// resets them before reusing the connection for another request.
 		c.Next()
 	}
 }

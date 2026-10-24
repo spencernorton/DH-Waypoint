@@ -2,8 +2,13 @@ package httpserver
 
 import (
 	"bufio"
+	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"strconv"
 	"time"
 
@@ -37,6 +42,10 @@ func New(p Params) Result {
 
 const ImportIDHeader = "X-Import-Id"
 
+const maxImportLineBytes = 1 << 20
+
+var errImportLineTooLarge = errors.New("import line exceeds 1048576 bytes")
+
 type builder struct {
 	importer lazy.Lazy[importer.Importer]
 	logger   *zap.SugaredLogger
@@ -60,41 +69,28 @@ func (b builder) Apply(e *gin.Engine) error {
 }
 
 func (b builder) handle(ctx *gin.Context, i importer.Importer) {
-	s := bufio.NewScanner(ctx.Request.Body)
-	s.Split(bufio.ScanRunes)
-
 	importID := ctx.Request.Header.Get(ImportIDHeader)
 	if importID == "" {
 		importID = strconv.FormatUint(uint64(time.Now().Unix()), 10)
 	}
 
-	ai := i.New(ctx, importer.Info{
+	ai := i.New(ctx.Request.Context(), importer.Info{
 		ID: importID,
 	})
-
-	var currentLine []rune
+	closed := false
+	defer func() {
+		if !closed {
+			ai.Drain()
+			_ = ai.Close()
+		}
+	}()
 
 	count := 0
 	writeCount := func() {
 		_, _ = fmt.Fprintf(ctx.Writer, "%d items imported\n", count)
 	}
-	addItem := func() error {
-		item := importer.Item{}
-		// todo: Fix this
-		//nolint:musttag
-		if err := json.Unmarshal([]byte(string(currentLine)), &item); err != nil {
-			b.logger.Errorw("error adding item", "error", err)
-			ctx.Status(400)
-			_, _ = ctx.Writer.WriteString(err.Error())
-
-			return err
-		}
-
+	streamErr := readImportItems(ctx.Request.Context(), ctx.Request.Body, func(item importer.Item) error {
 		if err := ai.Import(item); err != nil {
-			b.logger.Errorw("error importing item", "error", err)
-			ctx.Status(400)
-			_, _ = ctx.Writer.WriteString(err.Error())
-
 			return err
 		}
 
@@ -108,35 +104,22 @@ func (b builder) handle(ctx *gin.Context, i importer.Importer) {
 		}
 
 		return nil
-	}
-
-	for s.Scan() {
-		for _, ch := range s.Text() {
-			if ch == '\n' && len(currentLine) > 0 {
-				if err := addItem(); err != nil {
-					return
-				}
-
-				currentLine = nil
-			} else {
-				currentLine = append(currentLine, ch)
-			}
-		}
-	}
-
-	if len(currentLine) > 0 {
-		if err := addItem(); err != nil {
-			return
-		}
-	}
+	})
 
 	ai.Drain()
-
-	if err := ai.Close(); err != nil {
-		b.logger.Errorw("error closing import", "error", err)
-		ctx.Status(400)
-		_, _ = ctx.Writer.WriteString(err.Error())
-
+	closeErr := ai.Close()
+	closed = true
+	if streamErr == nil {
+		streamErr = ctx.Request.Context().Err()
+	}
+	if err := errors.Join(streamErr, closeErr); err != nil {
+		b.logger.Errorw("import failed", "error", err)
+		status, message := http.StatusBadRequest, "import failed\n"
+		if errors.Is(err, errImportLineTooLarge) {
+			status, message = http.StatusRequestEntityTooLarge, errImportLineTooLarge.Error()+"\n"
+		}
+		ctx.Status(status)
+		_, _ = ctx.Writer.WriteString(message)
 		return
 	}
 
@@ -144,4 +127,45 @@ func (b builder) handle(ctx *gin.Context, i importer.Importer) {
 	writeCount()
 
 	_, _ = ctx.Writer.WriteString("import complete\n")
+}
+
+// readImportItems bounds each NDJSON item while allowing the overall stream to
+// contain arbitrarily many bounded lines. Only LF delimits records; Unicode
+// line separators inside JSON strings are retained.
+func readImportItems(ctx context.Context, r io.Reader, add func(importer.Item) error) error {
+	s := bufio.NewScanner(r)
+	// Leave room for the CRLF delimiter at the maximum valid line size.
+	s.Buffer(make([]byte, 64<<10), maxImportLineBytes+2)
+	for s.Scan() {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		// A non-EOF read error must not turn an unterminated buffered tail
+		// into an accepted final record.
+		if err := s.Err(); err != nil {
+			return err
+		}
+		line := s.Bytes()
+		if len(line) > maxImportLineBytes {
+			return errImportLineTooLarge
+		}
+		if len(bytes.TrimSpace(line)) == 0 {
+			continue
+		}
+		var item importer.Item
+		//nolint:musttag
+		if err := json.Unmarshal(line, &item); err != nil {
+			return fmt.Errorf("decode import item: %w", err)
+		}
+		if err := add(item); err != nil {
+			return fmt.Errorf("import item: %w", err)
+		}
+	}
+	if errors.Is(s.Err(), bufio.ErrTooLong) {
+		return errImportLineTooLarge
+	}
+	if err := s.Err(); err != nil {
+		return fmt.Errorf("read import stream: %w", err)
+	}
+	return ctx.Err()
 }
