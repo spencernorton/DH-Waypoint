@@ -89,11 +89,13 @@ index can make the small-key lookup selective. Match B-tree leading equality
 columns to actual predicates, as described by the
 [PostgreSQL 16 multicolumn rules](https://www.postgresql.org/docs/16/indexes-multicolumn.html).
 
-The existing content-name GIN index serves full-text search. Raw `torrents.tsv`
-has a historical B-tree, which does not implement the `@@` full-text operator.
-GIN is the [documented preferred text-search index](https://www.postgresql.org/docs/16/textsearch-indexes.html).
-Benchmark raw GIN explicitly rather than assuming a content index covers
-unprocessed source rows.
+The existing content-name GIN index serves full-text search. Migration
+[00006](../../migrations/00006_tsv.sql) removed raw `torrents.tsv` and its index.
+The harness deliberately adds a synthetic raw TSV column to compare an
+alternative query. Its baseline includes the initial migration's historical
+TSV B-tree, which cannot serve `@@`; that extension is not the current backend
+schema. GIN is the [documented preferred text-search index](https://www.postgresql.org/docs/16/textsearch-indexes.html).
+The raw TSV experiment does not establish current raw API latency or storage.
 
 REST v2 instead implements literal case-insensitive substrings with escaped
 `ILIKE`, a minimum three-character query and canonical-hash cursors. Migration
@@ -121,9 +123,10 @@ outside a transaction. Concurrent construction still consumes I/O and disk,
 and can wait for old transactions. A failed build may leave an invalid index;
 inspect validity and remove that failed index before retrying the migration.
 Qualify build time, temporary headroom and ingestion impact on a restored
-catalogue before rollout. It removes the historical raw `torrents.tsv` B-tree,
-which cannot serve `@@` and is not used by raw v2's `ILIKE` query. Rollback
-restores that B-tree. Historical migration files stay intact.
+catalogue before rollout. Up and Down affect only those two new indexes;
+they do not recreate the raw TSV column/index already removed by migration6.
+Full-chain downgrade tests preserve the existing evidence-bearing migration
+holds. Historical migration files stay intact.
 
 Published content pages use `(published_at, info_hash, id)`. `id` distinguishes
 several content rows belonging to the same torrent. A deterministic order fixes

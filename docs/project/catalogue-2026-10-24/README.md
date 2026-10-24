@@ -32,14 +32,17 @@ Raw-name retrieval includes a missing-content-projection regression.
 
 ## Index sets and queries
 
-Baseline retains the relevant historical B-tree/GIN indexes. Candidate adds raw
+Baseline models relevant catalogue B-tree/GIN indexes and adds a synthetic raw
+TSV column with the initial schema's historical B-tree. Migration6 removed that
+raw column/index from the real backend; this experiment does not install the
+current application schema. Candidate adds raw
 TSV GIN, complete published and typed-page B-trees, an external-ID reverse
 index and whole-episode GIN. Selected is a subsequent experiment that replaces
 the raw TSV experiment with migration 00071's name trigram GIN, removes the
 unused raw B-tree and episode GIN, and adds ordered canonical-ID lookup.
 Retained removes the wider published/typed browse indexes from that experiment.
 Migration 00072 contains only ordered canonical-identity and partial external-ID
-indexes, plus removal of the unused TSV B-tree. Migration 00071 owns raw name
+indexes. Up/Down touch only those two new indexes. Migration 00071 owns raw name
 trigrams. Only baseline/candidate were tested at every scale; selected and
 retained were additional 32M experiments.
 
@@ -125,8 +128,11 @@ set. It does not support a blanket low-latency claim for every query.
 The reduced-schema totals before the timed profiles were 4.99/5.29 GiB at 2.4M
 and 17.64/19.05 GiB at 10M for baseline/candidate. At 32M they were 54.73/59.96
 GiB, with 52.82 GiB for retained (21.00 GiB indexes). Removing the large unused
-TSV B-tree is part of that reduction. This excludes WAL, temporary sort/build
-files, client memory and production-only tables.
+TSV B-tree from the synthetic extension is part of that reduction. The current
+backend already removed it in migration6, so these totals do not predict a
+production storage decrease from migration72. It adds two indexes to the current
+schema. These experimental totals exclude WAL, temporary sort/build files,
+client memory and production-only tables.
 
 The 32M main concurrent writer observed 225 inserts/s plus 1,119 reobserved
 records/s for baseline, 154 plus 754 for candidate, and 351 plus 1,755 for
@@ -203,6 +209,12 @@ index construction is measured on a quiescent synthetic corpus; it does not
 qualify construction under live ingestion. Recovery is a quiescent forced kill,
 restart and exact row-count/sentinel check, including count time. It does not
 measure restoration from backup, in-flight transaction loss or HA failover.
+
+Full-chain PostgreSQL integration caught an initial migration72 rollback that
+tried to recreate the synthetic raw TSV index on the real schema. The raw column
+was already removed by migration6. The corrected migration changes only its two
+new identity indexes; current-schema Up/Down and the full migration downgrade
+suite verify that existing evidence-retention holds remain effective.
 
 Setup/correctness/maintenance use budgets separate from measured queries.
 Development failures included an unsuitable initial query shape, insufficient

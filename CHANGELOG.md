@@ -21,8 +21,8 @@
   lookup, selected after 2.4M/10M/32M synthetic qualification. Resolve singleton
   external aliases and read their pages in one read-only snapshot, preserving
   multiple-ID alternatives, caller cancellation and serving checks before pagination; raw v2
-  substring indexing remains in migration 00071. Remove the unused historical
-  raw tsvector B-tree; rollback restores it.
+  substring indexing remains in migration 00071. Rollback removes only the two
+  new indexes and preserves the current raw schema and existing downgrade holds.
 
 - REST search returns `total_count_is_estimate` alongside `total_count`, so
   clients can distinguish an approximate total from an exact count. The flag

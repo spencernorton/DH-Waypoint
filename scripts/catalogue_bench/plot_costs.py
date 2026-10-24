@@ -54,7 +54,8 @@ axes[0,0].legend(loc='upper left',frameon=False,fontsize=8)
 axes[1,0].legend(loc='upper left',frameon=False,fontsize=8)
 fig.suptitle('Index costs: storage and mixed-write observations',x=.02,y=.985,ha='left',fontsize=18,fontweight='bold')
 fig.text(.02,.035,'Same 25 SQL cases per main profile; each index set has one measured writer window. Query timeouts remain in the raw evidence.\n'
+    'Baseline/candidate include a historical raw-TSV extension absent from the current backend; migration72 adds only two identity indexes.\n'
     'Synthetic insert/reobservation transactions and a reduced schema; these rates are not a production capacity forecast.',fontsize=9,color='#b7c5d8')
-fig.tight_layout(rect=(.01,.10,.995,.94),h_pad=3,w_pad=3)
+fig.tight_layout(rect=(.01,.13,.995,.94),h_pad=3,w_pad=3)
 args.out.parent.mkdir(parents=True,exist_ok=True)
 fig.savefig(args.out,dpi=180)

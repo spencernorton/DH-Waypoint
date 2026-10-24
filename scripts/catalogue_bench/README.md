@@ -127,9 +127,11 @@ regression covers content siblings. File-heavy and multi-content catalogues
 need their own population qualification.
 
 The same physical corpus supports raw-name FTS and accepted-identity retrieval.
-Raw-name queries read `torrents.tsv`, including a regression with the content
-projection temporarily absent. The baseline retains its historical B-tree;
-the candidate adds GIN. Content search retains its existing GIN separately.
+The alternative token-query experiment adds a synthetic `torrents.tsv` column,
+including a regression with the content projection temporarily absent. Migration6
+removed that raw column/index from the real backend. The SQL-model baseline
+includes the initial schema's historical B-tree and candidate adds GIN; neither
+is an installation of the current application schema. Content search retains its existing GIN separately.
 Seventy percent have accepted canonical mappings. Ten percent have stale
 source revisions, ten percent have uncertain proposals, and ten percent have
 no proposal. Plugin ID, confidence, verification and source revision live in
@@ -192,8 +194,11 @@ documented high-water mark for repeatable export semantics.
 
 ## Scope and cleanup
 
-The baseline models the relevant existing B-tree/GIN indexes. It does not install
-all historical migrations or count every production index and history table.
+The baseline models relevant catalogue B-tree/GIN indexes plus the declared
+historical raw-TSV extension. It does not install the current migration chain or
+count every production index/history table. Dropping the extension's TSV B-tree
+in retained experiments is not a production storage saving: migration6 already
+removed it. Migration72 adds only two identity indexes to the actual schema.
 The candidate tests raw-name GIN, ordered page indexes, an external-ID index and an episode
 GIN index. Candidate inclusion is an experiment, not a recommendation to retain
 every tested index. The decision and measured tradeoffs belong in the results.
