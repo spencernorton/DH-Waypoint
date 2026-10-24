@@ -44,6 +44,11 @@
   on both families. The protocol applicability ledger distinguishes this
   transport support from remaining IPv6 DHT, uTP, MSE/PE and holepunch work.
 
+- Add algorithm-aware torrent identity and bounded BEP 52 metadata validation
+  foundations, including verified hybrid layouts, original-info-byte hashing,
+  v2 piece-layer checks and full SHA-256 magnet helpers. Runtime integration
+  follows separately; this increment does not yet enable v2 crawling or APIs.
+
 ## 5.7.0 — 2026-10-24
 
 - GraphQL torrent search accepts `contentIdentity: {type, source, id}` to
