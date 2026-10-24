@@ -60,9 +60,7 @@ is historical evidence and must never be treated as a permanent exclusion.
 The legacy anime advertised audio tag also stops treating unnamed dual/multi
 audio as English. Its destructive foreign-audio filter keeps generic audio
 uncertainty rather than converting the corrected tag into a new drop. Explicit
-English track evidence remains supported. Matcher extraction has a new contract
-version and the same distinction in both single and grouped prompts; exact
-rendered-input cache identity prevents replaying a previous prompt's result.
+English track evidence remains supported.
 
 Promotion requires an independently labeled harm assessment, an accepted risk
 budget, reversible serving design and a qualified recovery path. This command

@@ -37,14 +37,13 @@ DHT discovery
     │
     ▼
 [4] CEL classifier ─── post-fetch, sees the title + files
-    │   `keywords.banned` regex → ErrDeleteTorrent
+    │   (PROCESSING_MODE=full only)
+    │   `keywords.banned` regex → ErrDeleteTorrent; the delete and any
+    │   BlockingManager.Block are held while catalogue removal is
+    │   disabled, so nothing is removed or added to [2]
     │
     ▼
-[5] processor → BlockingManager.Block ─── feed observation back
-    │   into [2] for this instance's future filtering
-    │
-    ▼
-[6] csamblocklist.Exporter.Record ─── re-checks banned-keyword regex,
+[5] csamblocklist.Exporter.Record ─── re-checks banned-keyword regex,
         appends double-hash to local JSONL log,
         optional POST to community upstream
         (closes the loop: this instance's observation

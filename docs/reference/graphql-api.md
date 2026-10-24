@@ -1,6 +1,6 @@
 # GraphQL API reference
 
-DH-Waypoint exposes a GraphQL endpoint at `:3333/graphql`. The schema is generated from `internal/gql/gqlgen.yml` via [gqlgen](https://github.com/99designs/gqlgen) and supports full introspection.
+DH-Waypoint exposes a GraphQL endpoint at `:3333/graphql`. The schema is defined in `graphql/schema/*.graphqls`, served with [gqlgen](https://github.com/99designs/gqlgen) (`internal/gql/gqlgen.yml`), and supports full introspection.
 
 ## Overview
 
@@ -8,7 +8,7 @@ DH-Waypoint exposes a GraphQL endpoint at `:3333/graphql`. The schema is generat
 |---|---|
 | Endpoint | `POST http://<host>:3333/graphql` |
 | Browser page | none; `GET /graphql` returns `404` |
-| Auth | none by default — front with a reverse proxy for public exposure |
+| Auth | `HTTP_SERVER_API_KEY` when set (`Authorization: Bearer` or `X-API-Key`); open when unset |
 | Schema introspection | enabled |
 
 Use curl or a separate GraphQL client with JSON POST requests.
@@ -39,11 +39,13 @@ import endpoint retains its streaming behavior.
 
 | Field | Type | Purpose |
 |---|---|---|
+| `version` | `String` | Version of the running build |
 | `torrent` | `TorrentQuery` | Torrent-centric reads — files, sources, metrics, tag suggestions |
 | `torrentContent` | `TorrentContentQuery` | Search across enriched content (movies / TV / music / books) |
 | `queue` | `QueueQuery` | Queue / job state |
 | `workers` | `WorkersQuery` | Worker registry |
-| `health` | `HealthQuery` | DB / queue / torrent health |
+| `health` | `HealthQuery` | Overall `status` plus per-component `checks` |
+| `evidence` | `EvidenceQuery` | `*arr` grab evidence and per-indexer stats |
 
 ### `TorrentQuery` fields
 
@@ -65,10 +67,10 @@ import endpoint retains its streaming behavior.
 | Field | Purpose |
 |---|---|
 | `items` | The matched torrent-content rows |
-| `totalCount` | Estimated or exact count, see next field |
+| `totalCount` | Estimated or exact count when the input sets `totalCount: true` (otherwise `0`), see next field |
 | `totalCountIsEstimate` | If `true`, `totalCount` came from a planner estimate |
-| `hasNextPage` | True when `offset+limit` < `totalCount` |
-| `aggregations` | Facet counts: `contentType`, `language`, `releaseYear`, `torrentFileType`, `torrentSource`, `torrentTag`, `videoResolution`, `videoSource` |
+| `hasNextPage` | True when another page exists; computed only when the input sets `hasNextPage: true` |
+| `aggregations` | Facet counts for each facet the input requests with `aggregate: true`: `contentType`, `genre`, `language`, `releaseYear`, `torrentFileType`, `torrentSource`, `torrentTag`, `videoResolution`, `videoSource` |
 
 ## Common queries
 
@@ -77,13 +79,12 @@ import endpoint retains its streaming behavior.
 ```graphql
 query Search {
   torrentContent {
-    search(input: { queryString: "the matrix", limit: 25 }) {
+    search(input: { queryString: "the matrix", limit: 25, totalCount: true, hasNextPage: true }) {
       items {
         infoHash
         title
         contentType
         publishedAt
-        torrentSource
       }
       totalCount
       hasNextPage
@@ -99,7 +100,10 @@ Useful for category aggregation and cardinality probes.
 ```graphql
 query Facets {
   torrentContent {
-    search(input: { queryString: "matrix", limit: 0 }) {
+    search(input: {
+      queryString: "matrix", limit: 0, totalCount: true
+      facets: { contentType: { aggregate: true } }
+    }) {
       totalCount
       aggregations {
         contentType {
@@ -154,9 +158,8 @@ query Files {
 ```graphql
 query Health {
   health {
-    db
-    queue
-    torrent
+    status
+    checks { key status error }
   }
 }
 ```
@@ -187,18 +190,18 @@ query Workers {
 
 | Field | Args | Returns |
 |---|---|---|
-| `delete` | `infoHashes: [Hash20!]!` | `Boolean!` |
-| `setTags` | `infoHashes, tagNames` | `Boolean!` |
-| `putTags` | `infoHashes, tagNames` | `Boolean!` (additive) |
-| `deleteTags` | `infoHashes, tagNames` | `Boolean!` |
-| `reprocess` | `input: TorrentReprocessInput` | `Boolean!` |
+| `delete` | `infoHashes: [Hash20!]!` | `Void` (currently refused; see [Error handling](#error-handling)) |
+| `setTags` | `infoHashes, tagNames` | `Void` |
+| `putTags` | `infoHashes, tagNames` | `Void` (additive) |
+| `deleteTags` | `infoHashes, tagNames` | `Void` |
+| `reprocess` | `input: TorrentReprocessInput!` (`infoHashes` required) | `Void` |
 
 ### `QueueMutation` fields
 
 | Field | Args | Returns |
 |---|---|---|
-| `purgeJobs` | `input: QueuePurgeJobsInput` | `Boolean!` |
-| `enqueueReprocessTorrentsBatch` | `input: QueueEnqueueReprocessTorrentsBatchInput` | `Boolean!` |
+| `purgeJobs` | `input: QueuePurgeJobsInput!` | `Void` |
+| `enqueueReprocessTorrentsBatch` | `input: QueueEnqueueReprocessTorrentsBatchInput` | `Void` |
 
 ## Common mutations
 
@@ -215,27 +218,17 @@ mutation Tag {
 }
 ```
 
-### Delete a torrent by infohash
-
-```graphql
-mutation Delete {
-  torrent {
-    delete(infoHashes: ["a1b2c3d4e5f67890123456789012345678901234"])
-  }
-}
-```
-
 ### Reprocess after editing the classifier
 
 ```graphql
 mutation Reprocess {
   torrent {
-    reprocess(input: { classifierFlags: { reclassifyAll: true } })
+    reprocess(input: { infoHashes: ["a1b2c3d4e5f67890123456789012345678901234"], classifierRematch: true })
   }
 }
 ```
 
-(For bulk reprocess across the whole corpus, use the `dh-waypoint reprocess` CLI command instead — it's transactional.)
+(For bulk reprocess across the whole corpus, use the `dh-waypoint reprocess` CLI command instead.)
 
 ## Custom scalars
 
@@ -246,44 +239,43 @@ mutation Reprocess {
 | `Date` | `YYYY-MM-DD` |
 | `Year` | Integer year |
 | `Duration` | ISO 8601 duration |
-| `ContentType` | Enum: `movie`, `tv_show`, `music`, `audiobook`, `ebook`, `comic`, `software`, `game`, `xxx`, `other` |
-| `FileType` | Enum: video / audio / archive / document / image / executable / subtitle / other |
-| `VideoResolution` | Enum: `v480p`, `v720p`, `v1080p`, `v2160p`, ... |
-| `VideoSource` | Enum: `webdl`, `bluray`, `dvd`, `cam`, `ts`, ... |
-| `VideoCodec` | Enum: `h264`, `h265`, `av1`, ... |
-| `Video3D`, `VideoModifier` | Enum |
-| `LanguageInfo` | Object: `code`, `name`, `nativeName` |
+| `Void` | Mutation result, always `null`; failures come back in `errors[]` |
+| `ContentType` | Enum: `movie`, `tv_show`, `music`, `ebook`, `comic`, `audiobook`, `game`, `software`, `xxx`, `course` |
+| `FileType` | Enum: `archive`, `audio`, `data`, `document`, `image`, `software`, `subtitles`, `video` |
+| `VideoResolution` | Enum: `V360p`, `V480p`, `V540p`, `V576p`, `V720p`, `V1080p`, `V1440p`, `V2160p`, `V4320p` |
+| `VideoSource` | Enum: `CAM`, `TELESYNC`, `TELECINE`, `WORKPRINT`, `DVD`, `TV`, `WEBDL`, `WEBRip`, `BluRay` |
+| `VideoCodec` | Enum: `H264`, `x264`, `x265`, `XviD`, `DivX`, `MPEG2`, `MPEG4`, `HEVC`, `AV1` |
+| `Video3D`, `VideoModifier` | Enums: `V3D`, `V3DSBS`, `V3DOU`; `REGIONAL`, `SCREENER`, `RAWHD`, `BRDISK`, `REMUX` |
+| `LanguageInfo` | Object: `id`, `name` |
 
 ## Pagination
 
-Set `input.offset` and `input.limit`. The result's `hasNextPage` is true when more rows exist; loop until it goes false.
+Set `input.offset`, `input.limit` and `input.hasNextPage: true`. The result's `hasNextPage` is then true when more rows exist; loop until it goes false.
 
 ```graphql
 query Page {
   torrentContent {
-    search(input: { queryString: "ubuntu", limit: 50, offset: 100 }) {
+    search(input: { queryString: "ubuntu", limit: 50, offset: 100, hasNextPage: true }) {
       items { infoHash title }
       hasNextPage
-      totalCount
     }
   }
 }
 ```
 
-`limit` should not exceed `200` for interactive queries — the resolver does not impose a cap, but Postgres planner cost grows fast on large pages.
+A `limit` above 1,000 is rejected with `OPERATION_LIMIT_EXCEEDED`.
 
 ## Error handling
 
-GraphQL errors come back in the standard `errors[]` array:
+GraphQL errors come back in the standard `errors[]` array. For example, `torrent.delete` currently refuses every hash because [catalogue recovery](../catalogue-recovery.md) is disabled:
 
 ```json
 {
-  "data": null,
+  "data": { "torrent": { "delete": null } },
   "errors": [
     {
-      "message": "input: torrent.delete: at least one infoHash required",
-      "path": ["torrent", "delete"],
-      "locations": [{ "line": 3, "column": 5 }]
+      "message": "catalogue recovery: foundation disabled",
+      "path": ["torrent", "delete"]
     }
   ]
 }
@@ -294,5 +286,5 @@ Field-level errors return `data` with the partial result and a non-empty `errors
 ## See also
 
 - [Torznab API reference](torznab-api.md)
-- [CLI reference](cli.md) — many GraphQL operations have a CLI equivalent (`reprocess`, `classifier show`)
+- [CLI reference](cli.md) — some GraphQL operations have a CLI equivalent (`reprocess`)
 - [Configuration](../configuration.md)

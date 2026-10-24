@@ -33,19 +33,16 @@ fingerprint binds the declaration, Unicode version, enabled state and sorted
 hashes. The internal token is excluded from that fingerprint and redacted from
 configuration displays.
 
-Names are checked before expensive parsing, model task admission and model
-egress. Existing imports resolve the stored name within their write transaction
+Names are checked before expensive parsing and processor task admission.
+Existing imports resolve the stored name within their write transaction
 and recheck after conflict handling. Provider boundaries use the current stored
 source when processing existing records. Application transactions recheck the
 source after a response; rejected retained work stays unapplied, with permanent
-dispatch history, responses and budget debits intact. Batch upload/create holds
-source locks through its bounded provider operation; already-paid results can
-be reconciled without a new POST and are held before settlement after denial.
-Batch admission and complete recovery remain separately configured features.
+dispatch history and responses intact.
 
-Existing direct `matcher-eval`, `batch-llm-match` and local backlog processing
-apply authoritative name/any-adult classification eligibility before hydration
-and reuse current-source admission at provider boundaries. Operator maintenance
+Local backlog processing (`backlog-local-classify`) applies authoritative
+name/any-adult classification eligibility before hydration and reuses
+current-source admission at provider boundaries. Operator maintenance
 commands `derived-backfill`, `episodes-backfill` and `anime-backfill` also filter
 selection when enabled and recheck selected source names/current classifications
 inside their write transactions. OFF deployments keep their original behavior.

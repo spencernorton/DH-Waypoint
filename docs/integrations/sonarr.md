@@ -30,7 +30,7 @@ After save, Sonarr immediately runs a series RSS sync. Within 1–2 minutes the 
 
 The first full search (manually triggered on a monitored episode) returns results within ~3–5s under typical DHT load. Results include:
 
-- **Title** — the parsed release name as discovered by DH-Waypoint's classifier
+- **Title** — the torrent name as discovered by DH-Waypoint
 - **Size** — derived from BEP-9 metainfo
 - **Seeders / Peers** — current DHT swarm health
 - **Quality** — Sonarr's parser maps from the title
@@ -43,9 +43,9 @@ The first full search (manually triggered on a monitored episode) returns result
 | Newznab ID | Sonarr label | Notes |
 |---|---|---|
 | 5000 | TV | catch-all |
-| 5030 | TV/SD | < 720p |
-| 5040 | TV/HD | 720p+ |
-| 5045 | TV/UHD | 2160p+ (if your DH-Waypoint classifier emits it) |
+| 5030 | TV/SD | 480p |
+| 5040 | TV/HD | 720p–2160p |
+| 5045 | TV/UHD | 2160p |
 | 5070 | TV/Anime | anime-specific |
 
 `[screenshot: sonarr-categories-selector]`
@@ -65,8 +65,7 @@ Confirm crawl metrics and inspect recent entries with the [GraphQL API](../refer
 
 ## Recommended companions
 
-- **Custom Formats** — once DH-Waypoint's evidence-pipeline confidence scores stabilise, you can layer Sonarr Custom Formats on top to prefer high-confidence releases.
-- **Quality Profiles** — leave standard; DH-Waypoint's classifier already tags resolution + source, so Sonarr's parser handles the rest.
+- **Quality Profiles** — leave standard.
 - **Indexer flags** — flag DH-Waypoint as a "freeleech-friendly" custom indexer if you only run it locally.
 
 For multi-instance Sonarr setups, repeat the setup in each instance — DH-Waypoint does not require any special multi-tenant configuration.

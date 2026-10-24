@@ -10,15 +10,16 @@ checks; the backend executable and container do not depend on Python.
 git clone https://github.com/spencernorton/DH-Waypoint.git
 cd DH-Waypoint
 task build
-./dh-waypoint --help
-./dh-waypoint worker list
+./DH-Waypoint --help
+./DH-Waypoint worker list
 go vet ./...
 go test -race -count=1 -timeout=10m ./...
 python3 scripts/test_headless_boundary.py
 python3 scripts/check_headless_boundary.py
 ```
 
-`task build` reads root `VERSION`. Use affected Go packages for a quick edit
+`task build` reads root `VERSION` and writes `./DH-Waypoint`, named after the
+module. Use affected Go packages for a quick edit
 loop. CI's PostgreSQL integration job defines the supported disposable test
 database and `DH_WAYPOINT_TEST_POSTGRES_DSN`; production state is never test data.
 
@@ -34,7 +35,7 @@ For a native process, export `POSTGRES_HOST`, `POSTGRES_NAME`, `POSTGRES_USER`
 and `POSTGRES_PASSWORD` for your local database, then run:
 
 ```sh
-./dh-waypoint worker run --all
+./DH-Waypoint worker run --all
 ```
 
 `config show` prints resolved values and their source; it can contain secrets,
@@ -53,9 +54,9 @@ for migration tests and keep a matching backup for upgrade recovery.
 
 ## Classifier changes
 
-CEL rules are bundled in the executable, so rebuild after changes. Use
-`dh-waypoint classifier show` to inspect the workflow, and the evaluation CLI
-commands to replay frozen synthetic or privately retained evidence.
+CEL rules are bundled in the executable, so rebuild after changes; they run only
+with `PROCESSING_MODE=full`. Use `dh-waypoint classifier show` to inspect the
+workflow.
 
 See [CONTRIBUTING.md](../../CONTRIBUTING.md) for code conventions, PR requirements
 and validation. Site development and account features use their own repository.

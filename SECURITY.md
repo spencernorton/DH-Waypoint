@@ -11,8 +11,9 @@ contains the backend and machine APIs; each operator controls their exposure.
 | Latest tagged release | yes — patch releases as needed |
 | Older tagged releases | best effort, no SLA |
 
-Every commit on `main` is a tagged release. If you are running an older
-tag, the upgrade path is the next tag — not a backport.
+Changes merge to `main` and ship in tagged releases, so `main` can be
+ahead of the latest tag. If you are running an older tag, the upgrade path
+is the next tag — not a backport.
 
 ## Reporting a vulnerability
 
@@ -62,7 +63,7 @@ findings are credited in `SECURITY.md` once a fix has shipped.
 ## Threat model (summary)
 
 - DH-Waypoint is **not** a content-moderation product. The CEL classifier
-  and the optional LLM rerank pass are best-effort labels for routing,
+  and optional processors are best-effort labels for routing,
   not safety filters. The exception is the dedicated CSAM-defense
   layer (see below) which has a stricter operational guarantee.
 - The DHT crawler ingests **untrusted, attacker-controlled input** at
@@ -94,18 +95,20 @@ window for **community-known** infohashes via a layered defense:
 2. **Defense-in-depth re-check** at the BEP-9 fetch site, in case a
    feed refresh introduced the hash after triage.
 3. **Post-fetch CEL classifier** (`keywords.banned` in
-   `internal/classifier/classifier.core.yml`) catches first-observation
-   hashes that aren't yet in any community feed — title and file paths
-   are matched against a comprehensive banned-keyword list and the
-   torrent is deleted.
-4. **BlockingManager.Block** records the infohash in this instance's
-   own bloom filter so future DHT announcements are caught at step 1
-   for this operator going forward.
-5. **Self-export** (`csamblocklist.Exporter`) re-checks the
-   banned-keyword regex on every classifier-driven delete and, on
-   match, appends the double-hash to a local JSONL log. An optional
-   outbound POST to a community collection endpoint contributes the
-   observation back into the feeds other operators consume at step 1.
+   `internal/classifier/classifier.core.yml`, `PROCESSING_MODE=full`
+   only) catches first-observation hashes that aren't yet in any
+   community feed: title and file paths are matched against a
+   banned-keyword list and the classifier decides to delete the torrent.
+   Catalogue removal and crawler blocking are disabled in current
+   releases, so that delete is held, counted by
+   `dh_waypoint_classifier_delete_held_total`, and nothing is removed or
+   added to this instance's bloom filter
+   ([catalogue removal](docs/OPERATIONS.md#catalogue-removal)).
+4. **Self-export** (`csamblocklist.Exporter`) re-checks the
+   banned-keyword regex on every classifier delete decision, held or
+   not, and on match appends the double-hash to a local JSONL log. An
+   optional outbound POST to a community collection endpoint contributes
+   the observation back into the feeds other operators consume at step 1.
 
 The double-hash function (`internal/csamblocklist/doublehash.go`) is
 **SHA-256 of the raw 20-byte SHA-1 infohash bytes**. The hex form is

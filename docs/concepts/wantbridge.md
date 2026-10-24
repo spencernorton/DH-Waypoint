@@ -42,7 +42,7 @@ Wantbridge is shipped but young. From the 2026-04-26 quality evidence pass:
 - **Tier-0 wantbridge yield: 2.07%.** Target range: 30–50%. The current matching is too conservative, and the auto-derivation pipeline is biased toward Sonarr.
 - **Source distribution: Sonarr 50, Radarr 0, Lidarr 0.** Sonarr's webhook + history-poll cadence is the only fully-wired feed today; Radarr and Lidarr are plumbed but their auto-derivation is still being tuned.
 
-This is the focus area for the next minor release. The infrastructure works (wants land, biasing applies, the classifier priority lane fires); the heuristics that decide *what* to bias on need work. Improvements being tracked:
+The infrastructure works (wants land and matches are measured), but prioritization is not wired yet (see the status note above), and the heuristics that decide *what* to bias on need work. Improvements being tracked:
 
 - Wider matching (currently regex-strict; switching to weighted tokens).
 - Radarr + Lidarr auto-derivation parity with Sonarr.

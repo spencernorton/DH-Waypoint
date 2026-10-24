@@ -42,7 +42,7 @@ are not replaced or certified by protocol conformance.
 Use bounded HTTP requests to separately supervised services. Discover operator
 manifests dynamically. Identity, processor version, optional model version,
 policy version, configuration and input revision are part of job identity.
-Persist a frozen ordered plan: stage first, then operator priority, then stable
+Persist a frozen ordered plan: operator priority first, then stage, then stable
 processor ID. Core facts take precedence; the first valid proposal for an empty
 field wins. Failed/abstaining steps leave no positive or negative authority.
 

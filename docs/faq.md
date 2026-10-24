@@ -31,8 +31,10 @@ A Torznab key does not protect the other APIs. See [security](operations/securit
 
 ## How do I rotate a key?
 
-Change the backend setting, restart the process and update every client using
-that key. There is no built-in dual-key rotation window. Do not publish keys or
+Torznab accepts named keys in `TORZNAB_API_KEYS` (`name:value,…`) alongside
+`TORZNAB_API_KEY`, so you can add the new key, move each client, then remove the
+old one. Other keys are single-valued: change the setting, restart the process
+and update every client using that key. Do not publish keys or
 resolved configuration in issues or logs.
 
 ## Can I open the GraphQL endpoint in a browser?

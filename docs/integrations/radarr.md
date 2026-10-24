@@ -26,7 +26,7 @@ DH-Waypoint's Torznab endpoint speaks Radarr's wire format natively. Add it as a
 
 Radarr's movie searches typically include both `q=` (title) and `tmdbid=` parameters. DH-Waypoint's Torznab caps declare `movie-search: [q, imdbid, tmdbid]`, so Radarr automatically uses the more accurate ID-based query when available.
 
-A title-only query falls back when Radarr doesn't have a TMDB ID for the movie yet (newly added, custom imports, etc.). DH-Waypoint's classifier still parses the year + title from the release name, so accuracy stays high.
+A title-only query falls back when Radarr doesn't have a TMDB ID for the movie yet (newly added, custom imports, etc.).
 
 `[screenshot: radarr-tmdb-search]`
 
@@ -35,10 +35,9 @@ A title-only query falls back when Radarr doesn't have a TMDB ID for the movie y
 | Newznab ID | Radarr label | Notes |
 |---|---|---|
 | 2000 | Movies | catch-all |
-| 2030 | Movies/SD | < 720p |
-| 2040 | Movies/HD | 720p+ |
-| 2045 | Movies/UHD | 2160p+ |
-| 2050 | Movies/BluRay | source-tagged |
+| 2030 | Movies/SD | 480p |
+| 2040 | Movies/HD | 720p–2160p |
+| 2045 | Movies/UHD | 2160p |
 | 2060 | Movies/3D | rare |
 
 `[screenshot: radarr-categories-selector]`
@@ -47,9 +46,6 @@ A title-only query falls back when Radarr doesn't have a TMDB ID for the movie y
 
 **Searches return 0 results**
 Use the [GraphQL API](../reference/graphql-api.md) to inspect recent movie classifications. An empty catalog can reflect DHT warmup; unexpected content types need classifier inspection.
-
-**Custom Formats not matching**
-DH-Waypoint emits source/resolution/HDR tags via Torznab `<info>` attributes. If Radarr's Custom Format engine isn't picking them up, check that your CFs match DH-Waypoint's exact tag names (case-sensitive). The reference table is in the Torznab API reference.
 
 **Quality Profile doesn't show expected upgrades**
 DH-Waypoint doesn't fabricate quality info — it parses what's in the release name. If a release is mis-tagged at the source, DH-Waypoint inherits that. For known-bad sources, add a CEL filter rule to the classifier to suppress them.

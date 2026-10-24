@@ -26,8 +26,8 @@ docker compose -f examples/docker-compose.public.yml --env-file examples/.env.pu
 curl --fail http://localhost:3333/metrics
 ```
 
-The example exposes backend HTTP on loopback and peer traffic on the configured
-peer port. PostgreSQL stays on the Compose network. There is no browser page.
+The example publishes backend HTTP (port 3333) on every host interface and
+peer traffic on the configured peer port. PostgreSQL stays on the Compose network. There is no browser page.
 Use [quickstart](quickstart.md) and [examples](../examples/README.md) for the
 exact network layout and commands.
 
@@ -45,7 +45,8 @@ exact network layout and commands.
 
 [Configuration](configuration.md) documents backend settings. Client services
 on another host cannot use your own `localhost`; choose an address reachable
-from their network. Protect APIs before expanding the loopback HTTP binding.
+from their network. Protect the APIs, or bind HTTP to `127.0.0.1`, before untrusted hosts can
+reach port 3333.
 
 ## Health and capacity
 

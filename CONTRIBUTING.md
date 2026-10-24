@@ -17,7 +17,7 @@ user data. Report vulnerabilities through [SECURITY.md](SECURITY.md).
 
 ## Local setup
 
-Use the Go version in `go.mod` (currently 1.26.8), PostgreSQL 14 or later
+Use the Go version in `go.mod` (currently 1.26.10), PostgreSQL 14 or later
 (16 recommended), and optionally Docker Compose and [Task](https://taskfile.dev).
 Python 3 is used only for repository policy checks. It is not a runtime
 requirement for the backend.
