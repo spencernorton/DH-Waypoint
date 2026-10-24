@@ -47,14 +47,15 @@ cases={
     "raw_substring_miss":(substring,["%unfindabletoken%"]),
     "raw_v2_keyset":(raw_cursor,["80"+"00"*19]),
 }
-bench.emit(args.out,{"kind":"prepared_manifest","source_sha256":hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+with bench.connect(os.environ['CATALOGUE_BENCH_DSN']) as metadata:
+    metadata.execute('SET statement_timeout=180000')
+    rows=metadata.execute('SELECT count(*) FROM torrents').fetchone()[0]
+bench.emit(args.out,{"kind":"prepared_manifest","rows":rows,"source_sha256":hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
                     "bench_sha256":hashlib.sha256(Path(bench.__file__).read_bytes()).hexdigest(),
                     "variant":args.variant,"samples":args.samples})
 for mode in ["auto","force_custom_plan","force_generic_plan"]:
     for name,(query,params) in cases.items():
         with bench.connect(os.environ['CATALOGUE_BENCH_DSN']) as conn:
-            conn.execute("SET statement_timeout=180000")
-            rows=conn.execute("SELECT count(*) FROM torrents").fetchone()[0]
             conn.execute("SET statement_timeout=5000")
             conn.execute("SET plan_cache_mode="+mode)
             conn.execute("PREPARE catalogue_probe ("+','.join(['text']*len(params))+") AS "+query)
