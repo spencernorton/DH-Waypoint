@@ -33,8 +33,8 @@ type EvidenceIndexerCount struct {
 }
 
 type EvidenceIndexerStatsDay struct {
-	Date          time.Time `json:"date"`
-	TotalGrabs    int       `json:"totalGrabs"`
+	Date            time.Time `json:"date"`
+	TotalGrabs      int       `json:"totalGrabs"`
 	DhWaypointGrabs int       `json:"dhWaypointGrabs"`
 }
 
@@ -43,11 +43,11 @@ type EvidenceIndexerStatsInput struct {
 }
 
 type EvidenceIndexerStatsResult struct {
-	TotalGrabs      int                       `json:"totalGrabs"`
+	TotalGrabs        int                       `json:"totalGrabs"`
 	DhWaypointGrabs   int                       `json:"dhWaypointGrabs"`
 	DhWaypointWinRate float64                   `json:"dhWaypointWinRate"`
-	Indexers        []EvidenceIndexerCount    `json:"indexers"`
-	Days            []EvidenceIndexerStatsDay `json:"days"`
+	Indexers          []EvidenceIndexerCount    `json:"indexers"`
+	Days              []EvidenceIndexerStatsDay `json:"days"`
 }
 
 type EvidenceItem struct {

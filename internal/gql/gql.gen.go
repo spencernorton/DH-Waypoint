@@ -122,17 +122,17 @@ type ComplexityRoot struct {
 	}
 
 	EvidenceIndexerStatsDay struct {
+		Date            func(childComplexity int) int
 		DhWaypointGrabs func(childComplexity int) int
-		Date          func(childComplexity int) int
-		TotalGrabs    func(childComplexity int) int
+		TotalGrabs      func(childComplexity int) int
 	}
 
 	EvidenceIndexerStatsResult struct {
+		Days              func(childComplexity int) int
 		DhWaypointGrabs   func(childComplexity int) int
 		DhWaypointWinRate func(childComplexity int) int
-		Days            func(childComplexity int) int
-		Indexers        func(childComplexity int) int
-		TotalGrabs      func(childComplexity int) int
+		Indexers          func(childComplexity int) int
+		TotalGrabs        func(childComplexity int) int
 	}
 
 	EvidenceItem struct {
@@ -838,13 +838,6 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.EvidenceIndexerCount.Indexer(childComplexity), true
 
-	case "EvidenceIndexerStatsDay.dhWaypointGrabs":
-		if e.complexity.EvidenceIndexerStatsDay.DhWaypointGrabs == nil {
-			break
-		}
-
-		return e.complexity.EvidenceIndexerStatsDay.DhWaypointGrabs(childComplexity), true
-
 	case "EvidenceIndexerStatsDay.date":
 		if e.complexity.EvidenceIndexerStatsDay.Date == nil {
 			break
@@ -852,12 +845,26 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.EvidenceIndexerStatsDay.Date(childComplexity), true
 
+	case "EvidenceIndexerStatsDay.dhWaypointGrabs":
+		if e.complexity.EvidenceIndexerStatsDay.DhWaypointGrabs == nil {
+			break
+		}
+
+		return e.complexity.EvidenceIndexerStatsDay.DhWaypointGrabs(childComplexity), true
+
 	case "EvidenceIndexerStatsDay.totalGrabs":
 		if e.complexity.EvidenceIndexerStatsDay.TotalGrabs == nil {
 			break
 		}
 
 		return e.complexity.EvidenceIndexerStatsDay.TotalGrabs(childComplexity), true
+
+	case "EvidenceIndexerStatsResult.days":
+		if e.complexity.EvidenceIndexerStatsResult.Days == nil {
+			break
+		}
+
+		return e.complexity.EvidenceIndexerStatsResult.Days(childComplexity), true
 
 	case "EvidenceIndexerStatsResult.dhWaypointGrabs":
 		if e.complexity.EvidenceIndexerStatsResult.DhWaypointGrabs == nil {
@@ -872,13 +879,6 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 		}
 
 		return e.complexity.EvidenceIndexerStatsResult.DhWaypointWinRate(childComplexity), true
-
-	case "EvidenceIndexerStatsResult.days":
-		if e.complexity.EvidenceIndexerStatsResult.Days == nil {
-			break
-		}
-
-		return e.complexity.EvidenceIndexerStatsResult.Days(childComplexity), true
 
 	case "EvidenceIndexerStatsResult.indexers":
 		if e.complexity.EvidenceIndexerStatsResult.Indexers == nil {
@@ -2478,6 +2478,7 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 		ec.unmarshalInputReleaseYearFacetInput,
 		ec.unmarshalInputSuggestTagsQueryInput,
 		ec.unmarshalInputTorrentContentFacetsInput,
+		ec.unmarshalInputTorrentContentIdentityInput,
 		ec.unmarshalInputTorrentContentOrderByInput,
 		ec.unmarshalInputTorrentContentSearchQueryInput,
 		ec.unmarshalInputTorrentFileTypeFacetInput,
@@ -3249,6 +3250,12 @@ scalar Year
   """
   hasNextPage: Boolean
   infoHashes: [Hash20!]
+  """
+  Match one canonical title before ordering and pagination. All three fields
+  form the identity; the same ID in another source or media type is distinct.
+  This can replace queryString when the caller already knows the title.
+  """
+  contentIdentity: TorrentContentIdentityInput
   facets: TorrentContentFacetsInput
   orderBy: [TorrentContentOrderByInput!]
   cached: Boolean
@@ -3282,6 +3289,12 @@ scalar Year
   """
   groupByContent: Boolean
   releaseAttributes: ReleaseAttributesFilterInput
+}
+
+input TorrentContentIdentityInput {
+  type: ContentType!
+  source: String!
+  id: ID!
 }
 
 input ReleaseAttributesFilterInput {
@@ -3495,7 +3508,7 @@ func (ec *executionContext) field_EvidenceQuery_indexerStats_argsInput(
 
 	ctx = graphql.WithPathContext(ctx, graphql.NewPathWithField("input"))
 	if tmp, ok := rawArgs["input"]; ok {
-		return ec.unmarshalNEvidenceIndexerStatsInput2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐEvidenceIndexerStatsInput(ctx, tmp)
+		return ec.unmarshalNEvidenceIndexerStatsInput2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐEvidenceIndexerStatsInput(ctx, tmp)
 	}
 
 	var zeroVal gen.EvidenceIndexerStatsInput
@@ -3523,7 +3536,7 @@ func (ec *executionContext) field_EvidenceQuery_list_argsInput(
 
 	ctx = graphql.WithPathContext(ctx, graphql.NewPathWithField("input"))
 	if tmp, ok := rawArgs["input"]; ok {
-		return ec.unmarshalNEvidenceListInput2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐEvidenceListInput(ctx, tmp)
+		return ec.unmarshalNEvidenceListInput2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐEvidenceListInput(ctx, tmp)
 	}
 
 	var zeroVal gen.EvidenceListInput
@@ -3579,7 +3592,7 @@ func (ec *executionContext) field_QueueMutation_enqueueReprocessTorrentsBatch_ar
 
 	ctx = graphql.WithPathContext(ctx, graphql.NewPathWithField("input"))
 	if tmp, ok := rawArgs["input"]; ok {
-		return ec.unmarshalOQueueEnqueueReprocessTorrentsBatchInput2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋqueueᚋmanagerᚐEnqueueReprocessTorrentsBatchRequest(ctx, tmp)
+		return ec.unmarshalOQueueEnqueueReprocessTorrentsBatchInput2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋqueueᚋmanagerᚐEnqueueReprocessTorrentsBatchRequest(ctx, tmp)
 	}
 
 	var zeroVal manager.EnqueueReprocessTorrentsBatchRequest
@@ -3607,7 +3620,7 @@ func (ec *executionContext) field_QueueMutation_purgeJobs_argsInput(
 
 	ctx = graphql.WithPathContext(ctx, graphql.NewPathWithField("input"))
 	if tmp, ok := rawArgs["input"]; ok {
-		return ec.unmarshalNQueuePurgeJobsInput2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋqueueᚋmanagerᚐPurgeJobsRequest(ctx, tmp)
+		return ec.unmarshalNQueuePurgeJobsInput2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋqueueᚋmanagerᚐPurgeJobsRequest(ctx, tmp)
 	}
 
 	var zeroVal manager.PurgeJobsRequest
@@ -3635,7 +3648,7 @@ func (ec *executionContext) field_QueueQuery_jobs_argsInput(
 
 	ctx = graphql.WithPathContext(ctx, graphql.NewPathWithField("input"))
 	if tmp, ok := rawArgs["input"]; ok {
-		return ec.unmarshalNQueueJobsQueryInput2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚐQueueJobsQueryInput(ctx, tmp)
+		return ec.unmarshalNQueueJobsQueryInput2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚐQueueJobsQueryInput(ctx, tmp)
 	}
 
 	var zeroVal gqlmodel.QueueJobsQueryInput
@@ -3663,7 +3676,7 @@ func (ec *executionContext) field_QueueQuery_metrics_argsInput(
 
 	ctx = graphql.WithPathContext(ctx, graphql.NewPathWithField("input"))
 	if tmp, ok := rawArgs["input"]; ok {
-		return ec.unmarshalNQueueMetricsQueryInput2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐQueueMetricsQueryInput(ctx, tmp)
+		return ec.unmarshalNQueueMetricsQueryInput2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐQueueMetricsQueryInput(ctx, tmp)
 	}
 
 	var zeroVal gen.QueueMetricsQueryInput
@@ -3691,7 +3704,7 @@ func (ec *executionContext) field_TorrentContentQuery_search_argsInput(
 
 	ctx = graphql.WithPathContext(ctx, graphql.NewPathWithField("input"))
 	if tmp, ok := rawArgs["input"]; ok {
-		return ec.unmarshalNTorrentContentSearchQueryInput2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚐTorrentContentSearchQueryInput(ctx, tmp)
+		return ec.unmarshalNTorrentContentSearchQueryInput2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚐTorrentContentSearchQueryInput(ctx, tmp)
 	}
 
 	var zeroVal gqlmodel.TorrentContentSearchQueryInput
@@ -3724,7 +3737,7 @@ func (ec *executionContext) field_TorrentMutation_deleteTags_argsInfoHashes(
 
 	ctx = graphql.WithPathContext(ctx, graphql.NewPathWithField("infoHashes"))
 	if tmp, ok := rawArgs["infoHashes"]; ok {
-		return ec.unmarshalOHash202ᚕgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋprotocolᚐIDᚄ(ctx, tmp)
+		return ec.unmarshalOHash202ᚕgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋprotocolᚐIDᚄ(ctx, tmp)
 	}
 
 	var zeroVal []protocol.ID
@@ -3770,7 +3783,7 @@ func (ec *executionContext) field_TorrentMutation_delete_argsInfoHashes(
 
 	ctx = graphql.WithPathContext(ctx, graphql.NewPathWithField("infoHashes"))
 	if tmp, ok := rawArgs["infoHashes"]; ok {
-		return ec.unmarshalNHash202ᚕgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋprotocolᚐIDᚄ(ctx, tmp)
+		return ec.unmarshalNHash202ᚕgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋprotocolᚐIDᚄ(ctx, tmp)
 	}
 
 	var zeroVal []protocol.ID
@@ -3803,7 +3816,7 @@ func (ec *executionContext) field_TorrentMutation_putTags_argsInfoHashes(
 
 	ctx = graphql.WithPathContext(ctx, graphql.NewPathWithField("infoHashes"))
 	if tmp, ok := rawArgs["infoHashes"]; ok {
-		return ec.unmarshalNHash202ᚕgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋprotocolᚐIDᚄ(ctx, tmp)
+		return ec.unmarshalNHash202ᚕgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋprotocolᚐIDᚄ(ctx, tmp)
 	}
 
 	var zeroVal []protocol.ID
@@ -3849,7 +3862,7 @@ func (ec *executionContext) field_TorrentMutation_reprocess_argsInput(
 
 	ctx = graphql.WithPathContext(ctx, graphql.NewPathWithField("input"))
 	if tmp, ok := rawArgs["input"]; ok {
-		return ec.unmarshalNTorrentReprocessInput2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐTorrentReprocessInput(ctx, tmp)
+		return ec.unmarshalNTorrentReprocessInput2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐTorrentReprocessInput(ctx, tmp)
 	}
 
 	var zeroVal gen.TorrentReprocessInput
@@ -3882,7 +3895,7 @@ func (ec *executionContext) field_TorrentMutation_setTags_argsInfoHashes(
 
 	ctx = graphql.WithPathContext(ctx, graphql.NewPathWithField("infoHashes"))
 	if tmp, ok := rawArgs["infoHashes"]; ok {
-		return ec.unmarshalNHash202ᚕgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋprotocolᚐIDᚄ(ctx, tmp)
+		return ec.unmarshalNHash202ᚕgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋprotocolᚐIDᚄ(ctx, tmp)
 	}
 
 	var zeroVal []protocol.ID
@@ -3928,7 +3941,7 @@ func (ec *executionContext) field_TorrentQuery_files_argsInput(
 
 	ctx = graphql.WithPathContext(ctx, graphql.NewPathWithField("input"))
 	if tmp, ok := rawArgs["input"]; ok {
-		return ec.unmarshalNTorrentFilesQueryInput2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚐTorrentFilesQueryInput(ctx, tmp)
+		return ec.unmarshalNTorrentFilesQueryInput2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚐTorrentFilesQueryInput(ctx, tmp)
 	}
 
 	var zeroVal gqlmodel.TorrentFilesQueryInput
@@ -3956,7 +3969,7 @@ func (ec *executionContext) field_TorrentQuery_metrics_argsInput(
 
 	ctx = graphql.WithPathContext(ctx, graphql.NewPathWithField("input"))
 	if tmp, ok := rawArgs["input"]; ok {
-		return ec.unmarshalNTorrentMetricsQueryInput2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐTorrentMetricsQueryInput(ctx, tmp)
+		return ec.unmarshalNTorrentMetricsQueryInput2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐTorrentMetricsQueryInput(ctx, tmp)
 	}
 
 	var zeroVal gen.TorrentMetricsQueryInput
@@ -3984,7 +3997,7 @@ func (ec *executionContext) field_TorrentQuery_suggestTags_argsInput(
 
 	ctx = graphql.WithPathContext(ctx, graphql.NewPathWithField("input"))
 	if tmp, ok := rawArgs["input"]; ok {
-		return ec.unmarshalOSuggestTagsQueryInput2ᚖgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐSuggestTagsQueryInput(ctx, tmp)
+		return ec.unmarshalOSuggestTagsQueryInput2ᚖgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐSuggestTagsQueryInput(ctx, tmp)
 	}
 
 	var zeroVal *gen.SuggestTagsQueryInput
@@ -4139,7 +4152,7 @@ func (ec *executionContext) _Content_type(ctx context.Context, field graphql.Col
 	}
 	res := resTmp.(model.ContentType)
 	fc.Result = res
-	return ec.marshalNContentType2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐContentType(ctx, field.Selections, res)
+	return ec.marshalNContentType2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐContentType(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_Content_type(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -4312,7 +4325,7 @@ func (ec *executionContext) _Content_releaseDate(ctx context.Context, field grap
 	}
 	res := resTmp.(model.Date)
 	fc.Result = res
-	return ec.marshalODate2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐDate(ctx, field.Selections, res)
+	return ec.marshalODate2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐDate(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_Content_releaseDate(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -4353,7 +4366,7 @@ func (ec *executionContext) _Content_releaseYear(ctx context.Context, field grap
 	}
 	res := resTmp.(model.Year)
 	fc.Result = res
-	return ec.marshalOYear2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐYear(ctx, field.Selections, res)
+	return ec.marshalOYear2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐYear(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_Content_releaseYear(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -4394,7 +4407,7 @@ func (ec *executionContext) _Content_adult(ctx context.Context, field graphql.Co
 	}
 	res := resTmp.(model.NullBool)
 	fc.Result = res
-	return ec.marshalOBoolean2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐNullBool(ctx, field.Selections, res)
+	return ec.marshalOBoolean2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐNullBool(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_Content_adult(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -4435,7 +4448,7 @@ func (ec *executionContext) _Content_originalLanguage(ctx context.Context, field
 	}
 	res := resTmp.(*model.Language)
 	fc.Result = res
-	return ec.marshalOLanguageInfo2ᚖgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐLanguage(ctx, field.Selections, res)
+	return ec.marshalOLanguageInfo2ᚖgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐLanguage(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_Content_originalLanguage(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -4482,7 +4495,7 @@ func (ec *executionContext) _Content_originalTitle(ctx context.Context, field gr
 	}
 	res := resTmp.(model.NullString)
 	fc.Result = res
-	return ec.marshalOString2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐNullString(ctx, field.Selections, res)
+	return ec.marshalOString2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐNullString(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_Content_originalTitle(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -4523,7 +4536,7 @@ func (ec *executionContext) _Content_overview(ctx context.Context, field graphql
 	}
 	res := resTmp.(model.NullString)
 	fc.Result = res
-	return ec.marshalOString2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐNullString(ctx, field.Selections, res)
+	return ec.marshalOString2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐNullString(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_Content_overview(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -4564,7 +4577,7 @@ func (ec *executionContext) _Content_runtime(ctx context.Context, field graphql.
 	}
 	res := resTmp.(model.NullUint16)
 	fc.Result = res
-	return ec.marshalOInt2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐNullUint16(ctx, field.Selections, res)
+	return ec.marshalOInt2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐNullUint16(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_Content_runtime(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -4605,7 +4618,7 @@ func (ec *executionContext) _Content_popularity(ctx context.Context, field graph
 	}
 	res := resTmp.(model.NullFloat32)
 	fc.Result = res
-	return ec.marshalOFloat2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐNullFloat32(ctx, field.Selections, res)
+	return ec.marshalOFloat2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐNullFloat32(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_Content_popularity(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -4646,7 +4659,7 @@ func (ec *executionContext) _Content_voteAverage(ctx context.Context, field grap
 	}
 	res := resTmp.(model.NullFloat32)
 	fc.Result = res
-	return ec.marshalOFloat2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐNullFloat32(ctx, field.Selections, res)
+	return ec.marshalOFloat2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐNullFloat32(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_Content_voteAverage(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -4687,7 +4700,7 @@ func (ec *executionContext) _Content_voteCount(ctx context.Context, field graphq
 	}
 	res := resTmp.(model.NullUint)
 	fc.Result = res
-	return ec.marshalOInt2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐNullUint(ctx, field.Selections, res)
+	return ec.marshalOInt2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐNullUint(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_Content_voteCount(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -4731,7 +4744,7 @@ func (ec *executionContext) _Content_attributes(ctx context.Context, field graph
 	}
 	res := resTmp.([]model.ContentAttribute)
 	fc.Result = res
-	return ec.marshalNContentAttribute2ᚕgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐContentAttributeᚄ(ctx, field.Selections, res)
+	return ec.marshalNContentAttribute2ᚕgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐContentAttributeᚄ(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_Content_attributes(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -4789,7 +4802,7 @@ func (ec *executionContext) _Content_collections(ctx context.Context, field grap
 	}
 	res := resTmp.([]model.ContentCollection)
 	fc.Result = res
-	return ec.marshalNContentCollection2ᚕgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐContentCollectionᚄ(ctx, field.Selections, res)
+	return ec.marshalNContentCollection2ᚕgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐContentCollectionᚄ(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_Content_collections(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -4849,7 +4862,7 @@ func (ec *executionContext) _Content_metadataSource(ctx context.Context, field g
 	}
 	res := resTmp.(model.MetadataSource)
 	fc.Result = res
-	return ec.marshalNMetadataSource2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐMetadataSource(ctx, field.Selections, res)
+	return ec.marshalNMetadataSource2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐMetadataSource(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_Content_metadataSource(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -4899,7 +4912,7 @@ func (ec *executionContext) _Content_externalLinks(ctx context.Context, field gr
 	}
 	res := resTmp.([]model.ExternalLink)
 	fc.Result = res
-	return ec.marshalNExternalLink2ᚕgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐExternalLinkᚄ(ctx, field.Selections, res)
+	return ec.marshalNExternalLink2ᚕgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐExternalLinkᚄ(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_Content_externalLinks(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -5169,7 +5182,7 @@ func (ec *executionContext) _ContentAttribute_metadataSource(ctx context.Context
 	}
 	res := resTmp.(model.MetadataSource)
 	fc.Result = res
-	return ec.marshalNMetadataSource2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐMetadataSource(ctx, field.Selections, res)
+	return ec.marshalNMetadataSource2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐMetadataSource(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_ContentAttribute_metadataSource(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -5483,7 +5496,7 @@ func (ec *executionContext) _ContentCollection_metadataSource(ctx context.Contex
 	}
 	res := resTmp.(model.MetadataSource)
 	fc.Result = res
-	return ec.marshalNMetadataSource2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐMetadataSource(ctx, field.Selections, res)
+	return ec.marshalNMetadataSource2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐMetadataSource(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_ContentCollection_metadataSource(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -5618,7 +5631,7 @@ func (ec *executionContext) _ContentTypeAgg_value(ctx context.Context, field gra
 	}
 	res := resTmp.(*model.ContentType)
 	fc.Result = res
-	return ec.marshalOContentType2ᚖgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐContentType(ctx, field.Selections, res)
+	return ec.marshalOContentType2ᚖgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐContentType(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_ContentTypeAgg_value(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -5838,7 +5851,7 @@ func (ec *executionContext) _Episodes_seasons(ctx context.Context, field graphql
 	}
 	res := resTmp.([]model.Season)
 	fc.Result = res
-	return ec.marshalNSeason2ᚕgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐSeasonᚄ(ctx, field.Selections, res)
+	return ec.marshalNSeason2ᚕgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐSeasonᚄ(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_Episodes_seasons(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -6240,7 +6253,7 @@ func (ec *executionContext) _EvidenceIndexerStatsResult_indexers(ctx context.Con
 	}
 	res := resTmp.([]gen.EvidenceIndexerCount)
 	fc.Result = res
-	return ec.marshalNEvidenceIndexerCount2ᚕgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐEvidenceIndexerCountᚄ(ctx, field.Selections, res)
+	return ec.marshalNEvidenceIndexerCount2ᚕgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐEvidenceIndexerCountᚄ(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_EvidenceIndexerStatsResult_indexers(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -6290,7 +6303,7 @@ func (ec *executionContext) _EvidenceIndexerStatsResult_days(ctx context.Context
 	}
 	res := resTmp.([]gen.EvidenceIndexerStatsDay)
 	fc.Result = res
-	return ec.marshalNEvidenceIndexerStatsDay2ᚕgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐEvidenceIndexerStatsDayᚄ(ctx, field.Selections, res)
+	return ec.marshalNEvidenceIndexerStatsDay2ᚕgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐEvidenceIndexerStatsDayᚄ(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_EvidenceIndexerStatsResult_days(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -6603,7 +6616,7 @@ func (ec *executionContext) _EvidenceItem_infoHash(ctx context.Context, field gr
 	}
 	res := resTmp.(*protocol.ID)
 	fc.Result = res
-	return ec.marshalOHash202ᚖgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋprotocolᚐID(ctx, field.Selections, res)
+	return ec.marshalOHash202ᚖgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋprotocolᚐID(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_EvidenceItem_infoHash(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -6955,7 +6968,7 @@ func (ec *executionContext) _EvidenceListResult_items(ctx context.Context, field
 	}
 	res := resTmp.([]gen.EvidenceItem)
 	fc.Result = res
-	return ec.marshalNEvidenceItem2ᚕgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐEvidenceItemᚄ(ctx, field.Selections, res)
+	return ec.marshalNEvidenceItem2ᚕgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐEvidenceItemᚄ(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_EvidenceListResult_items(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -7027,7 +7040,7 @@ func (ec *executionContext) _EvidenceQuery_list(ctx context.Context, field graph
 	}
 	res := resTmp.(gen.EvidenceListResult)
 	fc.Result = res
-	return ec.marshalNEvidenceListResult2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐEvidenceListResult(ctx, field.Selections, res)
+	return ec.marshalNEvidenceListResult2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐEvidenceListResult(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_EvidenceQuery_list(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -7088,7 +7101,7 @@ func (ec *executionContext) _EvidenceQuery_indexerStats(ctx context.Context, fie
 	}
 	res := resTmp.(gen.EvidenceIndexerStatsResult)
 	fc.Result = res
-	return ec.marshalNEvidenceIndexerStatsResult2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐEvidenceIndexerStatsResult(ctx, field.Selections, res)
+	return ec.marshalNEvidenceIndexerStatsResult2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐEvidenceIndexerStatsResult(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_EvidenceQuery_indexerStats(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -7155,7 +7168,7 @@ func (ec *executionContext) _ExternalLink_metadataSource(ctx context.Context, fi
 	}
 	res := resTmp.(model.MetadataSource)
 	fc.Result = res
-	return ec.marshalNMetadataSource2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐMetadataSource(ctx, field.Selections, res)
+	return ec.marshalNMetadataSource2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐMetadataSource(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_ExternalLink_metadataSource(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -7469,7 +7482,7 @@ func (ec *executionContext) _HealthCheck_status(ctx context.Context, field graph
 	}
 	res := resTmp.(gen.HealthStatus)
 	fc.Result = res
-	return ec.marshalNHealthStatus2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐHealthStatus(ctx, field.Selections, res)
+	return ec.marshalNHealthStatus2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐHealthStatus(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_HealthCheck_status(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -7598,7 +7611,7 @@ func (ec *executionContext) _HealthQuery_status(ctx context.Context, field graph
 	}
 	res := resTmp.(gen.HealthStatus)
 	fc.Result = res
-	return ec.marshalNHealthStatus2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐHealthStatus(ctx, field.Selections, res)
+	return ec.marshalNHealthStatus2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐHealthStatus(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_HealthQuery_status(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -7642,7 +7655,7 @@ func (ec *executionContext) _HealthQuery_checks(ctx context.Context, field graph
 	}
 	res := resTmp.([]gen.HealthCheck)
 	fc.Result = res
-	return ec.marshalNHealthCheck2ᚕgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐHealthCheckᚄ(ctx, field.Selections, res)
+	return ec.marshalNHealthCheck2ᚕgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐHealthCheckᚄ(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_HealthQuery_checks(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -7696,7 +7709,7 @@ func (ec *executionContext) _LanguageAgg_value(ctx context.Context, field graphq
 	}
 	res := resTmp.(model.Language)
 	fc.Result = res
-	return ec.marshalNLanguage2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐLanguage(ctx, field.Selections, res)
+	return ec.marshalNLanguage2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐLanguage(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_LanguageAgg_value(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -8048,7 +8061,7 @@ func (ec *executionContext) _Mutation_torrent(ctx context.Context, field graphql
 	}
 	res := resTmp.(gqlmodel.TorrentMutation)
 	fc.Result = res
-	return ec.marshalNTorrentMutation2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚐTorrentMutation(ctx, field.Selections, res)
+	return ec.marshalNTorrentMutation2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚐTorrentMutation(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_Mutation_torrent(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -8104,7 +8117,7 @@ func (ec *executionContext) _Mutation_queue(ctx context.Context, field graphql.C
 	}
 	res := resTmp.(gqlmodel.QueueMutation)
 	fc.Result = res
-	return ec.marshalNQueueMutation2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚐQueueMutation(ctx, field.Selections, res)
+	return ec.marshalNQueueMutation2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚐQueueMutation(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_Mutation_queue(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -8198,7 +8211,7 @@ func (ec *executionContext) _Query_workers(ctx context.Context, field graphql.Co
 	}
 	res := resTmp.(gen.WorkersQuery)
 	fc.Result = res
-	return ec.marshalNWorkersQuery2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐWorkersQuery(ctx, field.Selections, res)
+	return ec.marshalNWorkersQuery2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐWorkersQuery(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_Query_workers(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -8246,7 +8259,7 @@ func (ec *executionContext) _Query_health(ctx context.Context, field graphql.Col
 	}
 	res := resTmp.(gen.HealthQuery)
 	fc.Result = res
-	return ec.marshalNHealthQuery2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐHealthQuery(ctx, field.Selections, res)
+	return ec.marshalNHealthQuery2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐHealthQuery(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_Query_health(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -8296,7 +8309,7 @@ func (ec *executionContext) _Query_queue(ctx context.Context, field graphql.Coll
 	}
 	res := resTmp.(gqlmodel.QueueQuery)
 	fc.Result = res
-	return ec.marshalNQueueQuery2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚐQueueQuery(ctx, field.Selections, res)
+	return ec.marshalNQueueQuery2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚐQueueQuery(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_Query_queue(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -8346,7 +8359,7 @@ func (ec *executionContext) _Query_torrent(ctx context.Context, field graphql.Co
 	}
 	res := resTmp.(gqlmodel.TorrentQuery)
 	fc.Result = res
-	return ec.marshalNTorrentQuery2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚐTorrentQuery(ctx, field.Selections, res)
+	return ec.marshalNTorrentQuery2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚐTorrentQuery(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_Query_torrent(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -8400,7 +8413,7 @@ func (ec *executionContext) _Query_torrentContent(ctx context.Context, field gra
 	}
 	res := resTmp.(gqlmodel.TorrentContentQuery)
 	fc.Result = res
-	return ec.marshalNTorrentContentQuery2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚐTorrentContentQuery(ctx, field.Selections, res)
+	return ec.marshalNTorrentContentQuery2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚐTorrentContentQuery(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_Query_torrentContent(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -8448,7 +8461,7 @@ func (ec *executionContext) _Query_evidence(ctx context.Context, field graphql.C
 	}
 	res := resTmp.(gqlmodel.EvidenceQuery)
 	fc.Result = res
-	return ec.marshalNEvidenceQuery2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚐEvidenceQuery(ctx, field.Selections, res)
+	return ec.marshalNEvidenceQuery2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚐEvidenceQuery(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_Query_evidence(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -8717,7 +8730,7 @@ func (ec *executionContext) _QueueJob_status(ctx context.Context, field graphql.
 	}
 	res := resTmp.(model.QueueJobStatus)
 	fc.Result = res
-	return ec.marshalNQueueJobStatus2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐQueueJobStatus(ctx, field.Selections, res)
+	return ec.marshalNQueueJobStatus2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐQueueJobStatus(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_QueueJob_status(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -9019,7 +9032,7 @@ func (ec *executionContext) _QueueJob_error(ctx context.Context, field graphql.C
 	}
 	res := resTmp.(model.NullString)
 	fc.Result = res
-	return ec.marshalOString2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐNullString(ctx, field.Selections, res)
+	return ec.marshalOString2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐNullString(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_QueueJob_error(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -9239,7 +9252,7 @@ func (ec *executionContext) _QueueJobStatusAgg_value(ctx context.Context, field 
 	}
 	res := resTmp.(model.QueueJobStatus)
 	fc.Result = res
-	return ec.marshalNQueueJobStatus2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐQueueJobStatus(ctx, field.Selections, res)
+	return ec.marshalNQueueJobStatus2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐQueueJobStatus(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_QueueJobStatusAgg_value(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -9368,7 +9381,7 @@ func (ec *executionContext) _QueueJobsAggregations_queue(ctx context.Context, fi
 	}
 	res := resTmp.([]gen.QueueJobQueueAgg)
 	fc.Result = res
-	return ec.marshalOQueueJobQueueAgg2ᚕgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐQueueJobQueueAggᚄ(ctx, field.Selections, res)
+	return ec.marshalOQueueJobQueueAgg2ᚕgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐQueueJobQueueAggᚄ(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_QueueJobsAggregations_queue(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -9417,7 +9430,7 @@ func (ec *executionContext) _QueueJobsAggregations_status(ctx context.Context, f
 	}
 	res := resTmp.([]gen.QueueJobStatusAgg)
 	fc.Result = res
-	return ec.marshalOQueueJobStatusAgg2ᚕgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐQueueJobStatusAggᚄ(ctx, field.Selections, res)
+	return ec.marshalOQueueJobStatusAgg2ᚕgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐQueueJobStatusAggᚄ(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_QueueJobsAggregations_status(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -9554,7 +9567,7 @@ func (ec *executionContext) _QueueJobsQueryResult_items(ctx context.Context, fie
 	}
 	res := resTmp.([]model.QueueJob)
 	fc.Result = res
-	return ec.marshalNQueueJob2ᚕgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐQueueJobᚄ(ctx, field.Selections, res)
+	return ec.marshalNQueueJob2ᚕgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐQueueJobᚄ(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_QueueJobsQueryResult_items(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -9622,7 +9635,7 @@ func (ec *executionContext) _QueueJobsQueryResult_aggregations(ctx context.Conte
 	}
 	res := resTmp.(gen.QueueJobsAggregations)
 	fc.Result = res
-	return ec.marshalNQueueJobsAggregations2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐQueueJobsAggregations(ctx, field.Selections, res)
+	return ec.marshalNQueueJobsAggregations2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐQueueJobsAggregations(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_QueueJobsQueryResult_aggregations(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -9716,7 +9729,7 @@ func (ec *executionContext) _QueueMetricsBucket_status(ctx context.Context, fiel
 	}
 	res := resTmp.(model.QueueJobStatus)
 	fc.Result = res
-	return ec.marshalNQueueJobStatus2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐQueueJobStatus(ctx, field.Selections, res)
+	return ec.marshalNQueueJobStatus2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐQueueJobStatus(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_QueueMetricsBucket_status(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -9930,7 +9943,7 @@ func (ec *executionContext) _QueueMetricsQueryResult_buckets(ctx context.Context
 	}
 	res := resTmp.([]queuemetrics.Bucket)
 	fc.Result = res
-	return ec.marshalNQueueMetricsBucket2ᚕgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmetricsᚋqueuemetricsᚐBucketᚄ(ctx, field.Selections, res)
+	return ec.marshalNQueueMetricsBucket2ᚕgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmetricsᚋqueuemetricsᚐBucketᚄ(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_QueueMetricsQueryResult_buckets(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -10092,7 +10105,7 @@ func (ec *executionContext) _QueueQuery_jobs(ctx context.Context, field graphql.
 	}
 	res := resTmp.(gqlmodel.QueueJobsQueryResult)
 	fc.Result = res
-	return ec.marshalNQueueJobsQueryResult2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚐQueueJobsQueryResult(ctx, field.Selections, res)
+	return ec.marshalNQueueJobsQueryResult2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚐQueueJobsQueryResult(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_QueueQuery_jobs(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -10157,7 +10170,7 @@ func (ec *executionContext) _QueueQuery_metrics(ctx context.Context, field graph
 	}
 	res := resTmp.(*gen.QueueMetricsQueryResult)
 	fc.Result = res
-	return ec.marshalNQueueMetricsQueryResult2ᚖgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐQueueMetricsQueryResult(ctx, field.Selections, res)
+	return ec.marshalNQueueMetricsQueryResult2ᚖgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐQueueMetricsQueryResult(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_QueueQuery_metrics(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -10603,7 +10616,7 @@ func (ec *executionContext) _ReleaseYearAgg_value(ctx context.Context, field gra
 	}
 	res := resTmp.(*model.Year)
 	fc.Result = res
-	return ec.marshalOYear2ᚖgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐYear(ctx, field.Selections, res)
+	return ec.marshalOYear2ᚖgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐYear(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_ReleaseYearAgg_value(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -10952,7 +10965,7 @@ func (ec *executionContext) _Torrent_infoHash(ctx context.Context, field graphql
 	}
 	res := resTmp.(protocol.ID)
 	fc.Result = res
-	return ec.marshalNHash202githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋprotocolᚐID(ctx, field.Selections, res)
+	return ec.marshalNHash202githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋprotocolᚐID(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_Torrent_infoHash(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -11166,7 +11179,7 @@ func (ec *executionContext) _Torrent_extension(ctx context.Context, field graphq
 	}
 	res := resTmp.(model.NullString)
 	fc.Result = res
-	return ec.marshalOString2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐNullString(ctx, field.Selections, res)
+	return ec.marshalOString2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐNullString(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_Torrent_extension(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -11210,7 +11223,7 @@ func (ec *executionContext) _Torrent_filesStatus(ctx context.Context, field grap
 	}
 	res := resTmp.(model.FilesStatus)
 	fc.Result = res
-	return ec.marshalNFilesStatus2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐFilesStatus(ctx, field.Selections, res)
+	return ec.marshalNFilesStatus2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐFilesStatus(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_Torrent_filesStatus(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -11251,7 +11264,7 @@ func (ec *executionContext) _Torrent_filesCount(ctx context.Context, field graph
 	}
 	res := resTmp.(model.NullUint)
 	fc.Result = res
-	return ec.marshalOInt2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐNullUint(ctx, field.Selections, res)
+	return ec.marshalOInt2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐNullUint(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_Torrent_filesCount(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -11292,7 +11305,7 @@ func (ec *executionContext) _Torrent_fileType(ctx context.Context, field graphql
 	}
 	res := resTmp.(model.NullFileType)
 	fc.Result = res
-	return ec.marshalOFileType2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐNullFileType(ctx, field.Selections, res)
+	return ec.marshalOFileType2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐNullFileType(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_Torrent_fileType(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -11333,7 +11346,7 @@ func (ec *executionContext) _Torrent_fileTypes(ctx context.Context, field graphq
 	}
 	res := resTmp.([]model.FileType)
 	fc.Result = res
-	return ec.marshalOFileType2ᚕgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐFileTypeᚄ(ctx, field.Selections, res)
+	return ec.marshalOFileType2ᚕgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐFileTypeᚄ(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_Torrent_fileTypes(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -11374,7 +11387,7 @@ func (ec *executionContext) _Torrent_files(ctx context.Context, field graphql.Co
 	}
 	res := resTmp.([]model.TorrentFile)
 	fc.Result = res
-	return ec.marshalOTorrentFile2ᚕgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐTorrentFileᚄ(ctx, field.Selections, res)
+	return ec.marshalOTorrentFile2ᚕgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐTorrentFileᚄ(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_Torrent_files(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -11436,7 +11449,7 @@ func (ec *executionContext) _Torrent_sources(ctx context.Context, field graphql.
 	}
 	res := resTmp.([]gqlmodel.TorrentSourceInfo)
 	fc.Result = res
-	return ec.marshalNTorrentSourceInfo2ᚕgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚐTorrentSourceInfoᚄ(ctx, field.Selections, res)
+	return ec.marshalNTorrentSourceInfo2ᚕgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚐTorrentSourceInfoᚄ(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_Torrent_sources(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -11489,7 +11502,7 @@ func (ec *executionContext) _Torrent_seeders(ctx context.Context, field graphql.
 	}
 	res := resTmp.(model.NullUint)
 	fc.Result = res
-	return ec.marshalOInt2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐNullUint(ctx, field.Selections, res)
+	return ec.marshalOInt2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐNullUint(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_Torrent_seeders(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -11530,7 +11543,7 @@ func (ec *executionContext) _Torrent_leechers(ctx context.Context, field graphql
 	}
 	res := resTmp.(model.NullUint)
 	fc.Result = res
-	return ec.marshalOInt2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐNullUint(ctx, field.Selections, res)
+	return ec.marshalOInt2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐNullUint(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_Torrent_leechers(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -11794,7 +11807,7 @@ func (ec *executionContext) _TorrentContent_infoHash(ctx context.Context, field 
 	}
 	res := resTmp.(protocol.ID)
 	fc.Result = res
-	return ec.marshalNHash202githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋprotocolᚐID(ctx, field.Selections, res)
+	return ec.marshalNHash202githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋprotocolᚐID(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_TorrentContent_infoHash(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -11838,7 +11851,7 @@ func (ec *executionContext) _TorrentContent_torrent(ctx context.Context, field g
 	}
 	res := resTmp.(model.Torrent)
 	fc.Result = res
-	return ec.marshalNTorrent2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐTorrent(ctx, field.Selections, res)
+	return ec.marshalNTorrent2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐTorrent(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_TorrentContent_torrent(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -11917,7 +11930,7 @@ func (ec *executionContext) _TorrentContent_contentType(ctx context.Context, fie
 	}
 	res := resTmp.(model.NullContentType)
 	fc.Result = res
-	return ec.marshalOContentType2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐNullContentType(ctx, field.Selections, res)
+	return ec.marshalOContentType2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐNullContentType(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_TorrentContent_contentType(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -11958,7 +11971,7 @@ func (ec *executionContext) _TorrentContent_contentSource(ctx context.Context, f
 	}
 	res := resTmp.(model.NullString)
 	fc.Result = res
-	return ec.marshalOString2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐNullString(ctx, field.Selections, res)
+	return ec.marshalOString2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐNullString(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_TorrentContent_contentSource(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -11999,7 +12012,7 @@ func (ec *executionContext) _TorrentContent_contentId(ctx context.Context, field
 	}
 	res := resTmp.(model.NullString)
 	fc.Result = res
-	return ec.marshalOString2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐNullString(ctx, field.Selections, res)
+	return ec.marshalOString2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐNullString(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_TorrentContent_contentId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -12040,7 +12053,7 @@ func (ec *executionContext) _TorrentContent_content(ctx context.Context, field g
 	}
 	res := resTmp.(*model.Content)
 	fc.Result = res
-	return ec.marshalOContent2ᚖgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐContent(ctx, field.Selections, res)
+	return ec.marshalOContent2ᚖgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐContent(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_TorrentContent_content(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -12167,7 +12180,7 @@ func (ec *executionContext) _TorrentContent_languages(ctx context.Context, field
 	}
 	res := resTmp.([]model.Language)
 	fc.Result = res
-	return ec.marshalOLanguageInfo2ᚕgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐLanguageᚄ(ctx, field.Selections, res)
+	return ec.marshalOLanguageInfo2ᚕgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐLanguageᚄ(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_TorrentContent_languages(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -12214,7 +12227,7 @@ func (ec *executionContext) _TorrentContent_episodes(ctx context.Context, field 
 	}
 	res := resTmp.(*gqlmodel.Episodes)
 	fc.Result = res
-	return ec.marshalOEpisodes2ᚖgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚐEpisodes(ctx, field.Selections, res)
+	return ec.marshalOEpisodes2ᚖgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚐEpisodes(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_TorrentContent_episodes(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -12261,7 +12274,7 @@ func (ec *executionContext) _TorrentContent_videoResolution(ctx context.Context,
 	}
 	res := resTmp.(model.NullVideoResolution)
 	fc.Result = res
-	return ec.marshalOVideoResolution2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐNullVideoResolution(ctx, field.Selections, res)
+	return ec.marshalOVideoResolution2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐNullVideoResolution(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_TorrentContent_videoResolution(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -12302,7 +12315,7 @@ func (ec *executionContext) _TorrentContent_videoSource(ctx context.Context, fie
 	}
 	res := resTmp.(model.NullVideoSource)
 	fc.Result = res
-	return ec.marshalOVideoSource2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐNullVideoSource(ctx, field.Selections, res)
+	return ec.marshalOVideoSource2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐNullVideoSource(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_TorrentContent_videoSource(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -12343,7 +12356,7 @@ func (ec *executionContext) _TorrentContent_videoCodec(ctx context.Context, fiel
 	}
 	res := resTmp.(model.NullVideoCodec)
 	fc.Result = res
-	return ec.marshalOVideoCodec2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐNullVideoCodec(ctx, field.Selections, res)
+	return ec.marshalOVideoCodec2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐNullVideoCodec(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_TorrentContent_videoCodec(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -12384,7 +12397,7 @@ func (ec *executionContext) _TorrentContent_video3d(ctx context.Context, field g
 	}
 	res := resTmp.(model.NullVideo3D)
 	fc.Result = res
-	return ec.marshalOVideo3D2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐNullVideo3D(ctx, field.Selections, res)
+	return ec.marshalOVideo3D2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐNullVideo3D(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_TorrentContent_video3d(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -12425,7 +12438,7 @@ func (ec *executionContext) _TorrentContent_videoModifier(ctx context.Context, f
 	}
 	res := resTmp.(model.NullVideoModifier)
 	fc.Result = res
-	return ec.marshalOVideoModifier2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐNullVideoModifier(ctx, field.Selections, res)
+	return ec.marshalOVideoModifier2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐNullVideoModifier(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_TorrentContent_videoModifier(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -12466,7 +12479,7 @@ func (ec *executionContext) _TorrentContent_releaseGroup(ctx context.Context, fi
 	}
 	res := resTmp.(model.NullString)
 	fc.Result = res
-	return ec.marshalOString2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐNullString(ctx, field.Selections, res)
+	return ec.marshalOString2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐNullString(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_TorrentContent_releaseGroup(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -12507,7 +12520,7 @@ func (ec *executionContext) _TorrentContent_releaseAttributes(ctx context.Contex
 	}
 	res := resTmp.(*model.ReleaseAttributes)
 	fc.Result = res
-	return ec.marshalOReleaseAttributes2ᚖgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐReleaseAttributes(ctx, field.Selections, res)
+	return ec.marshalOReleaseAttributes2ᚖgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐReleaseAttributes(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_TorrentContent_releaseAttributes(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -12568,7 +12581,7 @@ func (ec *executionContext) _TorrentContent_englishAudio(ctx context.Context, fi
 	}
 	res := resTmp.(model.NullEnglishAudio)
 	fc.Result = res
-	return ec.marshalOEnglishAudio2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐNullEnglishAudio(ctx, field.Selections, res)
+	return ec.marshalOEnglishAudio2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐNullEnglishAudio(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_TorrentContent_englishAudio(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -12609,7 +12622,7 @@ func (ec *executionContext) _TorrentContent_englishAudioSource(ctx context.Conte
 	}
 	res := resTmp.(model.NullString)
 	fc.Result = res
-	return ec.marshalOString2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐNullString(ctx, field.Selections, res)
+	return ec.marshalOString2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐNullString(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_TorrentContent_englishAudioSource(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -12650,7 +12663,7 @@ func (ec *executionContext) _TorrentContent_seeders(ctx context.Context, field g
 	}
 	res := resTmp.(model.NullUint)
 	fc.Result = res
-	return ec.marshalOInt2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐNullUint(ctx, field.Selections, res)
+	return ec.marshalOInt2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐNullUint(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_TorrentContent_seeders(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -12691,7 +12704,7 @@ func (ec *executionContext) _TorrentContent_leechers(ctx context.Context, field 
 	}
 	res := resTmp.(model.NullUint)
 	fc.Result = res
-	return ec.marshalOInt2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐNullUint(ctx, field.Selections, res)
+	return ec.marshalOInt2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐNullUint(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_TorrentContent_leechers(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -12864,7 +12877,7 @@ func (ec *executionContext) _TorrentContentAggregations_contentType(ctx context.
 	}
 	res := resTmp.([]gen.ContentTypeAgg)
 	fc.Result = res
-	return ec.marshalOContentTypeAgg2ᚕgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐContentTypeAggᚄ(ctx, field.Selections, res)
+	return ec.marshalOContentTypeAgg2ᚕgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐContentTypeAggᚄ(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_TorrentContentAggregations_contentType(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -12915,7 +12928,7 @@ func (ec *executionContext) _TorrentContentAggregations_torrentSource(ctx contex
 	}
 	res := resTmp.([]gen.TorrentSourceAgg)
 	fc.Result = res
-	return ec.marshalOTorrentSourceAgg2ᚕgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐTorrentSourceAggᚄ(ctx, field.Selections, res)
+	return ec.marshalOTorrentSourceAgg2ᚕgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐTorrentSourceAggᚄ(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_TorrentContentAggregations_torrentSource(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -12966,7 +12979,7 @@ func (ec *executionContext) _TorrentContentAggregations_torrentTag(ctx context.C
 	}
 	res := resTmp.([]gen.TorrentTagAgg)
 	fc.Result = res
-	return ec.marshalOTorrentTagAgg2ᚕgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐTorrentTagAggᚄ(ctx, field.Selections, res)
+	return ec.marshalOTorrentTagAgg2ᚕgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐTorrentTagAggᚄ(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_TorrentContentAggregations_torrentTag(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -13017,7 +13030,7 @@ func (ec *executionContext) _TorrentContentAggregations_torrentFileType(ctx cont
 	}
 	res := resTmp.([]gen.TorrentFileTypeAgg)
 	fc.Result = res
-	return ec.marshalOTorrentFileTypeAgg2ᚕgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐTorrentFileTypeAggᚄ(ctx, field.Selections, res)
+	return ec.marshalOTorrentFileTypeAgg2ᚕgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐTorrentFileTypeAggᚄ(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_TorrentContentAggregations_torrentFileType(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -13068,7 +13081,7 @@ func (ec *executionContext) _TorrentContentAggregations_language(ctx context.Con
 	}
 	res := resTmp.([]gen.LanguageAgg)
 	fc.Result = res
-	return ec.marshalOLanguageAgg2ᚕgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐLanguageAggᚄ(ctx, field.Selections, res)
+	return ec.marshalOLanguageAgg2ᚕgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐLanguageAggᚄ(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_TorrentContentAggregations_language(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -13119,7 +13132,7 @@ func (ec *executionContext) _TorrentContentAggregations_genre(ctx context.Contex
 	}
 	res := resTmp.([]gen.GenreAgg)
 	fc.Result = res
-	return ec.marshalOGenreAgg2ᚕgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐGenreAggᚄ(ctx, field.Selections, res)
+	return ec.marshalOGenreAgg2ᚕgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐGenreAggᚄ(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_TorrentContentAggregations_genre(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -13170,7 +13183,7 @@ func (ec *executionContext) _TorrentContentAggregations_releaseYear(ctx context.
 	}
 	res := resTmp.([]gen.ReleaseYearAgg)
 	fc.Result = res
-	return ec.marshalOReleaseYearAgg2ᚕgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐReleaseYearAggᚄ(ctx, field.Selections, res)
+	return ec.marshalOReleaseYearAgg2ᚕgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐReleaseYearAggᚄ(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_TorrentContentAggregations_releaseYear(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -13221,7 +13234,7 @@ func (ec *executionContext) _TorrentContentAggregations_videoResolution(ctx cont
 	}
 	res := resTmp.([]gen.VideoResolutionAgg)
 	fc.Result = res
-	return ec.marshalOVideoResolutionAgg2ᚕgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐVideoResolutionAggᚄ(ctx, field.Selections, res)
+	return ec.marshalOVideoResolutionAgg2ᚕgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐVideoResolutionAggᚄ(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_TorrentContentAggregations_videoResolution(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -13272,7 +13285,7 @@ func (ec *executionContext) _TorrentContentAggregations_videoSource(ctx context.
 	}
 	res := resTmp.([]gen.VideoSourceAgg)
 	fc.Result = res
-	return ec.marshalOVideoSourceAgg2ᚕgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐVideoSourceAggᚄ(ctx, field.Selections, res)
+	return ec.marshalOVideoSourceAgg2ᚕgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐVideoSourceAggᚄ(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_TorrentContentAggregations_videoSource(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -13326,7 +13339,7 @@ func (ec *executionContext) _TorrentContentQuery_search(ctx context.Context, fie
 	}
 	res := resTmp.(gqlmodel.TorrentContentSearchResult)
 	fc.Result = res
-	return ec.marshalNTorrentContentSearchResult2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚐTorrentContentSearchResult(ctx, field.Selections, res)
+	return ec.marshalNTorrentContentSearchResult2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚐTorrentContentSearchResult(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_TorrentContentQuery_search(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -13522,7 +13535,7 @@ func (ec *executionContext) _TorrentContentSearchResult_items(ctx context.Contex
 	}
 	res := resTmp.([]gqlmodel.TorrentContent)
 	fc.Result = res
-	return ec.marshalNTorrentContent2ᚕgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚐTorrentContentᚄ(ctx, field.Selections, res)
+	return ec.marshalNTorrentContent2ᚕgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚐTorrentContentᚄ(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_TorrentContentSearchResult_items(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -13616,7 +13629,7 @@ func (ec *executionContext) _TorrentContentSearchResult_aggregations(ctx context
 	}
 	res := resTmp.(gen.TorrentContentAggregations)
 	fc.Result = res
-	return ec.marshalNTorrentContentAggregations2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐTorrentContentAggregations(ctx, field.Selections, res)
+	return ec.marshalNTorrentContentAggregations2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐTorrentContentAggregations(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_TorrentContentSearchResult_aggregations(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -13680,7 +13693,7 @@ func (ec *executionContext) _TorrentFile_infoHash(ctx context.Context, field gra
 	}
 	res := resTmp.(protocol.ID)
 	fc.Result = res
-	return ec.marshalNHash202githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋprotocolᚐID(ctx, field.Selections, res)
+	return ec.marshalNHash202githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋprotocolᚐID(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_TorrentFile_infoHash(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -13809,7 +13822,7 @@ func (ec *executionContext) _TorrentFile_extension(ctx context.Context, field gr
 	}
 	res := resTmp.(model.NullString)
 	fc.Result = res
-	return ec.marshalOString2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐNullString(ctx, field.Selections, res)
+	return ec.marshalOString2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐNullString(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_TorrentFile_extension(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -13850,7 +13863,7 @@ func (ec *executionContext) _TorrentFile_fileType(ctx context.Context, field gra
 	}
 	res := resTmp.(model.NullFileType)
 	fc.Result = res
-	return ec.marshalOFileType2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐNullFileType(ctx, field.Selections, res)
+	return ec.marshalOFileType2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐNullFileType(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_TorrentFile_fileType(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -14026,7 +14039,7 @@ func (ec *executionContext) _TorrentFileTypeAgg_value(ctx context.Context, field
 	}
 	res := resTmp.(model.FileType)
 	fc.Result = res
-	return ec.marshalNFileType2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐFileType(ctx, field.Selections, res)
+	return ec.marshalNFileType2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐFileType(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_TorrentFileTypeAgg_value(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -14287,7 +14300,7 @@ func (ec *executionContext) _TorrentFilesQueryResult_items(ctx context.Context, 
 	}
 	res := resTmp.([]model.TorrentFile)
 	fc.Result = res
-	return ec.marshalNTorrentFile2ᚕgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐTorrentFileᚄ(ctx, field.Selections, res)
+	return ec.marshalNTorrentFile2ᚕgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐTorrentFileᚄ(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_TorrentFilesQueryResult_items(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -14349,7 +14362,7 @@ func (ec *executionContext) _TorrentListSourcesResult_sources(ctx context.Contex
 	}
 	res := resTmp.([]model.TorrentSource)
 	fc.Result = res
-	return ec.marshalNTorrentSource2ᚕgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐTorrentSourceᚄ(ctx, field.Selections, res)
+	return ec.marshalNTorrentSource2ᚕgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐTorrentSourceᚄ(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_TorrentListSourcesResult_sources(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -14575,7 +14588,7 @@ func (ec *executionContext) _TorrentMetricsQueryResult_buckets(ctx context.Conte
 	}
 	res := resTmp.([]torrentmetrics.Bucket)
 	fc.Result = res
-	return ec.marshalNTorrentMetricsBucket2ᚕgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmetricsᚋtorrentmetricsᚐBucketᚄ(ctx, field.Selections, res)
+	return ec.marshalNTorrentMetricsBucket2ᚕgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmetricsᚋtorrentmetricsᚐBucketᚄ(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_TorrentMetricsQueryResult_buckets(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -14889,7 +14902,7 @@ func (ec *executionContext) _TorrentQuery_files(ctx context.Context, field graph
 	}
 	res := resTmp.(query.GenericResult[model.TorrentFile])
 	fc.Result = res
-	return ec.marshalNTorrentFilesQueryResult2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋdatabaseᚋqueryᚐGenericResult(ctx, field.Selections, res)
+	return ec.marshalNTorrentFilesQueryResult2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋdatabaseᚋqueryᚐGenericResult(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_TorrentQuery_files(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -14952,7 +14965,7 @@ func (ec *executionContext) _TorrentQuery_listSources(ctx context.Context, field
 	}
 	res := resTmp.(gen.TorrentListSourcesResult)
 	fc.Result = res
-	return ec.marshalNTorrentListSourcesResult2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐTorrentListSourcesResult(ctx, field.Selections, res)
+	return ec.marshalNTorrentListSourcesResult2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐTorrentListSourcesResult(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_TorrentQuery_listSources(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -15000,7 +15013,7 @@ func (ec *executionContext) _TorrentQuery_suggestTags(ctx context.Context, field
 	}
 	res := resTmp.(search.TorrentSuggestTagsResult)
 	fc.Result = res
-	return ec.marshalNTorrentSuggestTagsResult2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋdatabaseᚋsearchᚐTorrentSuggestTagsResult(ctx, field.Selections, res)
+	return ec.marshalNTorrentSuggestTagsResult2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋdatabaseᚋsearchᚐTorrentSuggestTagsResult(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_TorrentQuery_suggestTags(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -15059,7 +15072,7 @@ func (ec *executionContext) _TorrentQuery_metrics(ctx context.Context, field gra
 	}
 	res := resTmp.(*gen.TorrentMetricsQueryResult)
 	fc.Result = res
-	return ec.marshalNTorrentMetricsQueryResult2ᚖgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐTorrentMetricsQueryResult(ctx, field.Selections, res)
+	return ec.marshalNTorrentMetricsQueryResult2ᚖgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐTorrentMetricsQueryResult(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_TorrentQuery_metrics(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -15467,7 +15480,7 @@ func (ec *executionContext) _TorrentSourceInfo_importId(ctx context.Context, fie
 	}
 	res := resTmp.(model.NullString)
 	fc.Result = res
-	return ec.marshalOString2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐNullString(ctx, field.Selections, res)
+	return ec.marshalOString2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐNullString(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_TorrentSourceInfo_importId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -15508,7 +15521,7 @@ func (ec *executionContext) _TorrentSourceInfo_seeders(ctx context.Context, fiel
 	}
 	res := resTmp.(model.NullUint)
 	fc.Result = res
-	return ec.marshalOInt2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐNullUint(ctx, field.Selections, res)
+	return ec.marshalOInt2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐNullUint(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_TorrentSourceInfo_seeders(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -15549,7 +15562,7 @@ func (ec *executionContext) _TorrentSourceInfo_leechers(ctx context.Context, fie
 	}
 	res := resTmp.(model.NullUint)
 	fc.Result = res
-	return ec.marshalOInt2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐNullUint(ctx, field.Selections, res)
+	return ec.marshalOInt2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐNullUint(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_TorrentSourceInfo_leechers(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -15593,7 +15606,7 @@ func (ec *executionContext) _TorrentSuggestTagsResult_suggestions(ctx context.Co
 	}
 	res := resTmp.([]search.SuggestedTag)
 	fc.Result = res
-	return ec.marshalNSuggestedTag2ᚕgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋdatabaseᚋsearchᚐSuggestedTagᚄ(ctx, field.Selections, res)
+	return ec.marshalNSuggestedTag2ᚕgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋdatabaseᚋsearchᚐSuggestedTagᚄ(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_TorrentSuggestTagsResult_suggestions(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -15816,7 +15829,7 @@ func (ec *executionContext) _VideoResolutionAgg_value(ctx context.Context, field
 	}
 	res := resTmp.(*model.VideoResolution)
 	fc.Result = res
-	return ec.marshalOVideoResolution2ᚖgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐVideoResolution(ctx, field.Selections, res)
+	return ec.marshalOVideoResolution2ᚖgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐVideoResolution(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_VideoResolutionAgg_value(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -15989,7 +16002,7 @@ func (ec *executionContext) _VideoSourceAgg_value(ctx context.Context, field gra
 	}
 	res := resTmp.(*model.VideoSource)
 	fc.Result = res
-	return ec.marshalOVideoSource2ᚖgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐVideoSource(ctx, field.Selections, res)
+	return ec.marshalOVideoSource2ᚖgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐVideoSource(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_VideoSourceAgg_value(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -16253,7 +16266,7 @@ func (ec *executionContext) _WorkersListAllQueryResult_workers(ctx context.Conte
 	}
 	res := resTmp.([]gen.Worker)
 	fc.Result = res
-	return ec.marshalNWorker2ᚕgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐWorkerᚄ(ctx, field.Selections, res)
+	return ec.marshalNWorker2ᚕgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐWorkerᚄ(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_WorkersListAllQueryResult_workers(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -16303,7 +16316,7 @@ func (ec *executionContext) _WorkersQuery_listAll(ctx context.Context, field gra
 	}
 	res := resTmp.(gen.WorkersListAllQueryResult)
 	fc.Result = res
-	return ec.marshalNWorkersListAllQueryResult2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐWorkersListAllQueryResult(ctx, field.Selections, res)
+	return ec.marshalNWorkersListAllQueryResult2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐWorkersListAllQueryResult(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_WorkersQuery_listAll(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -18297,7 +18310,7 @@ func (ec *executionContext) unmarshalInputContentTypeFacetInput(ctx context.Cont
 			it.Aggregate = graphql.OmittableOf(data)
 		case "filter":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("filter"))
-			data, err := ec.unmarshalOContentType2ᚕᚖgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐContentType(ctx, v)
+			data, err := ec.unmarshalOContentType2ᚕᚖgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐContentType(ctx, v)
 			if err != nil {
 				return it, err
 			}
@@ -18392,7 +18405,7 @@ func (ec *executionContext) unmarshalInputGenreFacetInput(ctx context.Context, o
 			it.Aggregate = graphql.OmittableOf(data)
 		case "logic":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("logic"))
-			data, err := ec.unmarshalOFacetLogic2ᚖgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐFacetLogic(ctx, v)
+			data, err := ec.unmarshalOFacetLogic2ᚖgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐFacetLogic(ctx, v)
 			if err != nil {
 				return it, err
 			}
@@ -18433,7 +18446,7 @@ func (ec *executionContext) unmarshalInputLanguageFacetInput(ctx context.Context
 			it.Aggregate = graphql.OmittableOf(data)
 		case "filter":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("filter"))
-			data, err := ec.unmarshalOLanguage2ᚕgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐLanguageᚄ(ctx, v)
+			data, err := ec.unmarshalOLanguage2ᚕgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐLanguageᚄ(ctx, v)
 			if err != nil {
 				return it, err
 			}
@@ -18481,7 +18494,7 @@ func (ec *executionContext) unmarshalInputQueueEnqueueReprocessTorrentsBatchInpu
 			it.ChunkSize = data
 		case "contentTypes":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("contentTypes"))
-			data, err := ec.unmarshalOContentType2ᚕgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐNullContentType(ctx, v)
+			data, err := ec.unmarshalOContentType2ᚕgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐNullContentType(ctx, v)
 			if err != nil {
 				return it, err
 			}
@@ -18586,7 +18599,7 @@ func (ec *executionContext) unmarshalInputQueueJobStatusFacetInput(ctx context.C
 			it.Aggregate = graphql.OmittableOf(data)
 		case "filter":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("filter"))
-			data, err := ec.unmarshalOQueueJobStatus2ᚕgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐQueueJobStatusᚄ(ctx, v)
+			data, err := ec.unmarshalOQueueJobStatus2ᚕgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐQueueJobStatusᚄ(ctx, v)
 			if err != nil {
 				return it, err
 			}
@@ -18613,14 +18626,14 @@ func (ec *executionContext) unmarshalInputQueueJobsFacetsInput(ctx context.Conte
 		switch k {
 		case "status":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("status"))
-			data, err := ec.unmarshalOQueueJobStatusFacetInput2ᚖgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐQueueJobStatusFacetInput(ctx, v)
+			data, err := ec.unmarshalOQueueJobStatusFacetInput2ᚖgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐQueueJobStatusFacetInput(ctx, v)
 			if err != nil {
 				return it, err
 			}
 			it.Status = graphql.OmittableOf(data)
 		case "queue":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("queue"))
-			data, err := ec.unmarshalOQueueJobQueueFacetInput2ᚖgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐQueueJobQueueFacetInput(ctx, v)
+			data, err := ec.unmarshalOQueueJobQueueFacetInput2ᚖgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐQueueJobQueueFacetInput(ctx, v)
 			if err != nil {
 				return it, err
 			}
@@ -18647,7 +18660,7 @@ func (ec *executionContext) unmarshalInputQueueJobsOrderByInput(ctx context.Cont
 		switch k {
 		case "field":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("field"))
-			data, err := ec.unmarshalNQueueJobsOrderByField2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐQueueJobsOrderByField(ctx, v)
+			data, err := ec.unmarshalNQueueJobsOrderByField2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐQueueJobsOrderByField(ctx, v)
 			if err != nil {
 				return it, err
 			}
@@ -18688,56 +18701,56 @@ func (ec *executionContext) unmarshalInputQueueJobsQueryInput(ctx context.Contex
 			it.Queues = data
 		case "statuses":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("statuses"))
-			data, err := ec.unmarshalOQueueJobStatus2ᚕgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐQueueJobStatusᚄ(ctx, v)
+			data, err := ec.unmarshalOQueueJobStatus2ᚕgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐQueueJobStatusᚄ(ctx, v)
 			if err != nil {
 				return it, err
 			}
 			it.Statuses = data
 		case "limit":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("limit"))
-			data, err := ec.unmarshalOInt2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐNullUint(ctx, v)
+			data, err := ec.unmarshalOInt2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐNullUint(ctx, v)
 			if err != nil {
 				return it, err
 			}
 			it.Limit = data
 		case "page":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("page"))
-			data, err := ec.unmarshalOInt2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐNullUint(ctx, v)
+			data, err := ec.unmarshalOInt2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐNullUint(ctx, v)
 			if err != nil {
 				return it, err
 			}
 			it.Page = data
 		case "offset":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("offset"))
-			data, err := ec.unmarshalOInt2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐNullUint(ctx, v)
+			data, err := ec.unmarshalOInt2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐNullUint(ctx, v)
 			if err != nil {
 				return it, err
 			}
 			it.Offset = data
 		case "totalCount":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("totalCount"))
-			data, err := ec.unmarshalOBoolean2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐNullBool(ctx, v)
+			data, err := ec.unmarshalOBoolean2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐNullBool(ctx, v)
 			if err != nil {
 				return it, err
 			}
 			it.TotalCount = data
 		case "hasNextPage":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("hasNextPage"))
-			data, err := ec.unmarshalOBoolean2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐNullBool(ctx, v)
+			data, err := ec.unmarshalOBoolean2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐNullBool(ctx, v)
 			if err != nil {
 				return it, err
 			}
 			it.HasNextPage = data
 		case "facets":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("facets"))
-			data, err := ec.unmarshalOQueueJobsFacetsInput2ᚖgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐQueueJobsFacetsInput(ctx, v)
+			data, err := ec.unmarshalOQueueJobsFacetsInput2ᚖgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐQueueJobsFacetsInput(ctx, v)
 			if err != nil {
 				return it, err
 			}
 			it.Facets = data
 		case "orderBy":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("orderBy"))
-			data, err := ec.unmarshalOQueueJobsOrderByInput2ᚕgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐQueueJobsOrderByInputᚄ(ctx, v)
+			data, err := ec.unmarshalOQueueJobsOrderByInput2ᚕgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐQueueJobsOrderByInputᚄ(ctx, v)
 			if err != nil {
 				return it, err
 			}
@@ -18764,14 +18777,14 @@ func (ec *executionContext) unmarshalInputQueueMetricsQueryInput(ctx context.Con
 		switch k {
 		case "bucketDuration":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("bucketDuration"))
-			data, err := ec.unmarshalNMetricsBucketDuration2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐMetricsBucketDuration(ctx, v)
+			data, err := ec.unmarshalNMetricsBucketDuration2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐMetricsBucketDuration(ctx, v)
 			if err != nil {
 				return it, err
 			}
 			it.BucketDuration = data
 		case "statuses":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("statuses"))
-			data, err := ec.unmarshalOQueueJobStatus2ᚕgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐQueueJobStatusᚄ(ctx, v)
+			data, err := ec.unmarshalOQueueJobStatus2ᚕgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐQueueJobStatusᚄ(ctx, v)
 			if err != nil {
 				return it, err
 			}
@@ -18826,7 +18839,7 @@ func (ec *executionContext) unmarshalInputQueuePurgeJobsInput(ctx context.Contex
 			it.Queues = data
 		case "statuses":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("statuses"))
-			data, err := ec.unmarshalOQueueJobStatus2ᚕgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐQueueJobStatusᚄ(ctx, v)
+			data, err := ec.unmarshalOQueueJobStatus2ᚕgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐQueueJobStatusᚄ(ctx, v)
 			if err != nil {
 				return it, err
 			}
@@ -18922,7 +18935,7 @@ func (ec *executionContext) unmarshalInputReleaseYearFacetInput(ctx context.Cont
 			it.Aggregate = graphql.OmittableOf(data)
 		case "filter":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("filter"))
-			data, err := ec.unmarshalOYear2ᚕᚖgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐYear(ctx, v)
+			data, err := ec.unmarshalOYear2ᚕᚖgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐYear(ctx, v)
 			if err != nil {
 				return it, err
 			}
@@ -18983,67 +18996,108 @@ func (ec *executionContext) unmarshalInputTorrentContentFacetsInput(ctx context.
 		switch k {
 		case "contentType":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("contentType"))
-			data, err := ec.unmarshalOContentTypeFacetInput2ᚖgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐContentTypeFacetInput(ctx, v)
+			data, err := ec.unmarshalOContentTypeFacetInput2ᚖgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐContentTypeFacetInput(ctx, v)
 			if err != nil {
 				return it, err
 			}
 			it.ContentType = graphql.OmittableOf(data)
 		case "torrentSource":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("torrentSource"))
-			data, err := ec.unmarshalOTorrentSourceFacetInput2ᚖgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐTorrentSourceFacetInput(ctx, v)
+			data, err := ec.unmarshalOTorrentSourceFacetInput2ᚖgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐTorrentSourceFacetInput(ctx, v)
 			if err != nil {
 				return it, err
 			}
 			it.TorrentSource = graphql.OmittableOf(data)
 		case "torrentTag":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("torrentTag"))
-			data, err := ec.unmarshalOTorrentTagFacetInput2ᚖgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐTorrentTagFacetInput(ctx, v)
+			data, err := ec.unmarshalOTorrentTagFacetInput2ᚖgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐTorrentTagFacetInput(ctx, v)
 			if err != nil {
 				return it, err
 			}
 			it.TorrentTag = graphql.OmittableOf(data)
 		case "torrentFileType":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("torrentFileType"))
-			data, err := ec.unmarshalOTorrentFileTypeFacetInput2ᚖgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐTorrentFileTypeFacetInput(ctx, v)
+			data, err := ec.unmarshalOTorrentFileTypeFacetInput2ᚖgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐTorrentFileTypeFacetInput(ctx, v)
 			if err != nil {
 				return it, err
 			}
 			it.TorrentFileType = graphql.OmittableOf(data)
 		case "language":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("language"))
-			data, err := ec.unmarshalOLanguageFacetInput2ᚖgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐLanguageFacetInput(ctx, v)
+			data, err := ec.unmarshalOLanguageFacetInput2ᚖgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐLanguageFacetInput(ctx, v)
 			if err != nil {
 				return it, err
 			}
 			it.Language = graphql.OmittableOf(data)
 		case "genre":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("genre"))
-			data, err := ec.unmarshalOGenreFacetInput2ᚖgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐGenreFacetInput(ctx, v)
+			data, err := ec.unmarshalOGenreFacetInput2ᚖgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐGenreFacetInput(ctx, v)
 			if err != nil {
 				return it, err
 			}
 			it.Genre = graphql.OmittableOf(data)
 		case "releaseYear":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("releaseYear"))
-			data, err := ec.unmarshalOReleaseYearFacetInput2ᚖgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐReleaseYearFacetInput(ctx, v)
+			data, err := ec.unmarshalOReleaseYearFacetInput2ᚖgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐReleaseYearFacetInput(ctx, v)
 			if err != nil {
 				return it, err
 			}
 			it.ReleaseYear = graphql.OmittableOf(data)
 		case "videoResolution":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("videoResolution"))
-			data, err := ec.unmarshalOVideoResolutionFacetInput2ᚖgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐVideoResolutionFacetInput(ctx, v)
+			data, err := ec.unmarshalOVideoResolutionFacetInput2ᚖgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐVideoResolutionFacetInput(ctx, v)
 			if err != nil {
 				return it, err
 			}
 			it.VideoResolution = graphql.OmittableOf(data)
 		case "videoSource":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("videoSource"))
-			data, err := ec.unmarshalOVideoSourceFacetInput2ᚖgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐVideoSourceFacetInput(ctx, v)
+			data, err := ec.unmarshalOVideoSourceFacetInput2ᚖgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐVideoSourceFacetInput(ctx, v)
 			if err != nil {
 				return it, err
 			}
 			it.VideoSource = graphql.OmittableOf(data)
+		}
+	}
+
+	return it, nil
+}
+
+func (ec *executionContext) unmarshalInputTorrentContentIdentityInput(ctx context.Context, obj any) (gqlmodel.TorrentContentIdentityInput, error) {
+	var it gqlmodel.TorrentContentIdentityInput
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"type", "source", "id"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "type":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("type"))
+			data, err := ec.unmarshalNContentType2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐContentType(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Type = data
+		case "source":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("source"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Source = data
+		case "id":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("id"))
+			data, err := ec.unmarshalNID2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.ID = data
 		}
 	}
 
@@ -19066,7 +19120,7 @@ func (ec *executionContext) unmarshalInputTorrentContentOrderByInput(ctx context
 		switch k {
 		case "field":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("field"))
-			data, err := ec.unmarshalNTorrentContentOrderByField2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐTorrentContentOrderByField(ctx, v)
+			data, err := ec.unmarshalNTorrentContentOrderByField2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐTorrentContentOrderByField(ctx, v)
 			if err != nil {
 				return it, err
 			}
@@ -19091,7 +19145,7 @@ func (ec *executionContext) unmarshalInputTorrentContentSearchQueryInput(ctx con
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"queryString", "limit", "page", "offset", "totalCount", "hasNextPage", "infoHashes", "facets", "orderBy", "cached", "aggregationBudget", "torrentCreatedAfter", "torrentCreatedBefore", "groupByContent", "releaseAttributes"}
+	fieldsInOrder := [...]string{"queryString", "limit", "page", "offset", "totalCount", "hasNextPage", "infoHashes", "contentIdentity", "facets", "orderBy", "cached", "aggregationBudget", "torrentCreatedAfter", "torrentCreatedBefore", "groupByContent", "releaseAttributes"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -19100,77 +19154,84 @@ func (ec *executionContext) unmarshalInputTorrentContentSearchQueryInput(ctx con
 		switch k {
 		case "queryString":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("queryString"))
-			data, err := ec.unmarshalOString2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐNullString(ctx, v)
+			data, err := ec.unmarshalOString2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐNullString(ctx, v)
 			if err != nil {
 				return it, err
 			}
 			it.QueryString = data
 		case "limit":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("limit"))
-			data, err := ec.unmarshalOInt2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐNullUint(ctx, v)
+			data, err := ec.unmarshalOInt2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐNullUint(ctx, v)
 			if err != nil {
 				return it, err
 			}
 			it.Limit = data
 		case "page":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("page"))
-			data, err := ec.unmarshalOInt2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐNullUint(ctx, v)
+			data, err := ec.unmarshalOInt2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐNullUint(ctx, v)
 			if err != nil {
 				return it, err
 			}
 			it.Page = data
 		case "offset":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("offset"))
-			data, err := ec.unmarshalOInt2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐNullUint(ctx, v)
+			data, err := ec.unmarshalOInt2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐNullUint(ctx, v)
 			if err != nil {
 				return it, err
 			}
 			it.Offset = data
 		case "totalCount":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("totalCount"))
-			data, err := ec.unmarshalOBoolean2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐNullBool(ctx, v)
+			data, err := ec.unmarshalOBoolean2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐNullBool(ctx, v)
 			if err != nil {
 				return it, err
 			}
 			it.TotalCount = data
 		case "hasNextPage":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("hasNextPage"))
-			data, err := ec.unmarshalOBoolean2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐNullBool(ctx, v)
+			data, err := ec.unmarshalOBoolean2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐNullBool(ctx, v)
 			if err != nil {
 				return it, err
 			}
 			it.HasNextPage = data
 		case "infoHashes":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("infoHashes"))
-			data, err := ec.unmarshalOHash202ᚕgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋprotocolᚐIDᚄ(ctx, v)
+			data, err := ec.unmarshalOHash202ᚕgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋprotocolᚐIDᚄ(ctx, v)
 			if err != nil {
 				return it, err
 			}
 			it.InfoHashes = graphql.OmittableOf(data)
+		case "contentIdentity":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("contentIdentity"))
+			data, err := ec.unmarshalOTorrentContentIdentityInput2ᚖgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚐTorrentContentIdentityInput(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.ContentIdentity = data
 		case "facets":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("facets"))
-			data, err := ec.unmarshalOTorrentContentFacetsInput2ᚖgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐTorrentContentFacetsInput(ctx, v)
+			data, err := ec.unmarshalOTorrentContentFacetsInput2ᚖgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐTorrentContentFacetsInput(ctx, v)
 			if err != nil {
 				return it, err
 			}
 			it.Facets = data
 		case "orderBy":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("orderBy"))
-			data, err := ec.unmarshalOTorrentContentOrderByInput2ᚕgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐTorrentContentOrderByInputᚄ(ctx, v)
+			data, err := ec.unmarshalOTorrentContentOrderByInput2ᚕgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐTorrentContentOrderByInputᚄ(ctx, v)
 			if err != nil {
 				return it, err
 			}
 			it.OrderBy = data
 		case "cached":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("cached"))
-			data, err := ec.unmarshalOBoolean2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐNullBool(ctx, v)
+			data, err := ec.unmarshalOBoolean2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐNullBool(ctx, v)
 			if err != nil {
 				return it, err
 			}
 			it.Cached = data
 		case "aggregationBudget":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("aggregationBudget"))
-			data, err := ec.unmarshalOFloat2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐNullFloat64(ctx, v)
+			data, err := ec.unmarshalOFloat2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐNullFloat64(ctx, v)
 			if err != nil {
 				return it, err
 			}
@@ -19191,14 +19252,14 @@ func (ec *executionContext) unmarshalInputTorrentContentSearchQueryInput(ctx con
 			it.TorrentCreatedBefore = graphql.OmittableOf(data)
 		case "groupByContent":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("groupByContent"))
-			data, err := ec.unmarshalOBoolean2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐNullBool(ctx, v)
+			data, err := ec.unmarshalOBoolean2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐNullBool(ctx, v)
 			if err != nil {
 				return it, err
 			}
 			it.GroupByContent = data
 		case "releaseAttributes":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("releaseAttributes"))
-			data, err := ec.unmarshalOReleaseAttributesFilterInput2ᚖgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚐReleaseAttributesFilterInput(ctx, v)
+			data, err := ec.unmarshalOReleaseAttributesFilterInput2ᚖgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚐReleaseAttributesFilterInput(ctx, v)
 			if err != nil {
 				return it, err
 			}
@@ -19232,14 +19293,14 @@ func (ec *executionContext) unmarshalInputTorrentFileTypeFacetInput(ctx context.
 			it.Aggregate = graphql.OmittableOf(data)
 		case "logic":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("logic"))
-			data, err := ec.unmarshalOFacetLogic2ᚖgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐFacetLogic(ctx, v)
+			data, err := ec.unmarshalOFacetLogic2ᚖgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐFacetLogic(ctx, v)
 			if err != nil {
 				return it, err
 			}
 			it.Logic = graphql.OmittableOf(data)
 		case "filter":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("filter"))
-			data, err := ec.unmarshalOFileType2ᚕgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐFileTypeᚄ(ctx, v)
+			data, err := ec.unmarshalOFileType2ᚕgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐFileTypeᚄ(ctx, v)
 			if err != nil {
 				return it, err
 			}
@@ -19266,7 +19327,7 @@ func (ec *executionContext) unmarshalInputTorrentFilesOrderByInput(ctx context.C
 		switch k {
 		case "field":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("field"))
-			data, err := ec.unmarshalNTorrentFilesOrderByField2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐTorrentFilesOrderByField(ctx, v)
+			data, err := ec.unmarshalNTorrentFilesOrderByField2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐTorrentFilesOrderByField(ctx, v)
 			if err != nil {
 				return it, err
 			}
@@ -19300,56 +19361,56 @@ func (ec *executionContext) unmarshalInputTorrentFilesQueryInput(ctx context.Con
 		switch k {
 		case "limit":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("limit"))
-			data, err := ec.unmarshalOInt2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐNullUint(ctx, v)
+			data, err := ec.unmarshalOInt2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐNullUint(ctx, v)
 			if err != nil {
 				return it, err
 			}
 			it.Limit = data
 		case "page":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("page"))
-			data, err := ec.unmarshalOInt2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐNullUint(ctx, v)
+			data, err := ec.unmarshalOInt2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐNullUint(ctx, v)
 			if err != nil {
 				return it, err
 			}
 			it.Page = data
 		case "offset":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("offset"))
-			data, err := ec.unmarshalOInt2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐNullUint(ctx, v)
+			data, err := ec.unmarshalOInt2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐNullUint(ctx, v)
 			if err != nil {
 				return it, err
 			}
 			it.Offset = data
 		case "totalCount":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("totalCount"))
-			data, err := ec.unmarshalOBoolean2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐNullBool(ctx, v)
+			data, err := ec.unmarshalOBoolean2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐNullBool(ctx, v)
 			if err != nil {
 				return it, err
 			}
 			it.TotalCount = data
 		case "hasNextPage":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("hasNextPage"))
-			data, err := ec.unmarshalOBoolean2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐNullBool(ctx, v)
+			data, err := ec.unmarshalOBoolean2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐNullBool(ctx, v)
 			if err != nil {
 				return it, err
 			}
 			it.HasNextPage = data
 		case "infoHashes":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("infoHashes"))
-			data, err := ec.unmarshalOHash202ᚕgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋprotocolᚐIDᚄ(ctx, v)
+			data, err := ec.unmarshalOHash202ᚕgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋprotocolᚐIDᚄ(ctx, v)
 			if err != nil {
 				return it, err
 			}
 			it.InfoHashes = data
 		case "orderBy":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("orderBy"))
-			data, err := ec.unmarshalOTorrentFilesOrderByInput2ᚕgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐTorrentFilesOrderByInputᚄ(ctx, v)
+			data, err := ec.unmarshalOTorrentFilesOrderByInput2ᚕgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐTorrentFilesOrderByInputᚄ(ctx, v)
 			if err != nil {
 				return it, err
 			}
 			it.OrderBy = data
 		case "cached":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("cached"))
-			data, err := ec.unmarshalOBoolean2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐNullBool(ctx, v)
+			data, err := ec.unmarshalOBoolean2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐNullBool(ctx, v)
 			if err != nil {
 				return it, err
 			}
@@ -19376,7 +19437,7 @@ func (ec *executionContext) unmarshalInputTorrentMetricsQueryInput(ctx context.C
 		switch k {
 		case "bucketDuration":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("bucketDuration"))
-			data, err := ec.unmarshalNMetricsBucketDuration2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐMetricsBucketDuration(ctx, v)
+			data, err := ec.unmarshalNMetricsBucketDuration2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐMetricsBucketDuration(ctx, v)
 			if err != nil {
 				return it, err
 			}
@@ -19424,7 +19485,7 @@ func (ec *executionContext) unmarshalInputTorrentReprocessInput(ctx context.Cont
 		switch k {
 		case "infoHashes":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("infoHashes"))
-			data, err := ec.unmarshalNHash202ᚕgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋprotocolᚐIDᚄ(ctx, v)
+			data, err := ec.unmarshalNHash202ᚕgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋprotocolᚐIDᚄ(ctx, v)
 			if err != nil {
 				return it, err
 			}
@@ -19486,7 +19547,7 @@ func (ec *executionContext) unmarshalInputTorrentSourceFacetInput(ctx context.Co
 			it.Aggregate = graphql.OmittableOf(data)
 		case "logic":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("logic"))
-			data, err := ec.unmarshalOFacetLogic2ᚖgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐFacetLogic(ctx, v)
+			data, err := ec.unmarshalOFacetLogic2ᚖgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐFacetLogic(ctx, v)
 			if err != nil {
 				return it, err
 			}
@@ -19527,7 +19588,7 @@ func (ec *executionContext) unmarshalInputTorrentTagFacetInput(ctx context.Conte
 			it.Aggregate = graphql.OmittableOf(data)
 		case "logic":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("logic"))
-			data, err := ec.unmarshalOFacetLogic2ᚖgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐFacetLogic(ctx, v)
+			data, err := ec.unmarshalOFacetLogic2ᚖgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐFacetLogic(ctx, v)
 			if err != nil {
 				return it, err
 			}
@@ -19568,7 +19629,7 @@ func (ec *executionContext) unmarshalInputVideoResolutionFacetInput(ctx context.
 			it.Aggregate = graphql.OmittableOf(data)
 		case "filter":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("filter"))
-			data, err := ec.unmarshalOVideoResolution2ᚕᚖgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐVideoResolution(ctx, v)
+			data, err := ec.unmarshalOVideoResolution2ᚕᚖgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐVideoResolution(ctx, v)
 			if err != nil {
 				return it, err
 			}
@@ -19602,7 +19663,7 @@ func (ec *executionContext) unmarshalInputVideoSourceFacetInput(ctx context.Cont
 			it.Aggregate = graphql.OmittableOf(data)
 		case "filter":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("filter"))
-			data, err := ec.unmarshalOVideoSource2ᚕᚖgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐVideoSource(ctx, v)
+			data, err := ec.unmarshalOVideoSource2ᚕᚖgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐVideoSource(ctx, v)
 			if err != nil {
 				return it, err
 			}
@@ -23694,11 +23755,11 @@ func (ec *executionContext) marshalNBoolean2bool(ctx context.Context, sel ast.Se
 	return res
 }
 
-func (ec *executionContext) marshalNContentAttribute2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐContentAttribute(ctx context.Context, sel ast.SelectionSet, v model.ContentAttribute) graphql.Marshaler {
+func (ec *executionContext) marshalNContentAttribute2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐContentAttribute(ctx context.Context, sel ast.SelectionSet, v model.ContentAttribute) graphql.Marshaler {
 	return ec._ContentAttribute(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNContentAttribute2ᚕgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐContentAttributeᚄ(ctx context.Context, sel ast.SelectionSet, v []model.ContentAttribute) graphql.Marshaler {
+func (ec *executionContext) marshalNContentAttribute2ᚕgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐContentAttributeᚄ(ctx context.Context, sel ast.SelectionSet, v []model.ContentAttribute) graphql.Marshaler {
 	ret := make(graphql.Array, len(v))
 	var wg sync.WaitGroup
 	isLen1 := len(v) == 1
@@ -23722,7 +23783,7 @@ func (ec *executionContext) marshalNContentAttribute2ᚕgithubᚗcomᚋspencerno
 			if !isLen1 {
 				defer wg.Done()
 			}
-			ret[i] = ec.marshalNContentAttribute2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐContentAttribute(ctx, sel, v[i])
+			ret[i] = ec.marshalNContentAttribute2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐContentAttribute(ctx, sel, v[i])
 		}
 		if isLen1 {
 			f(i)
@@ -23742,11 +23803,11 @@ func (ec *executionContext) marshalNContentAttribute2ᚕgithubᚗcomᚋspencerno
 	return ret
 }
 
-func (ec *executionContext) marshalNContentCollection2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐContentCollection(ctx context.Context, sel ast.SelectionSet, v model.ContentCollection) graphql.Marshaler {
+func (ec *executionContext) marshalNContentCollection2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐContentCollection(ctx context.Context, sel ast.SelectionSet, v model.ContentCollection) graphql.Marshaler {
 	return ec._ContentCollection(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNContentCollection2ᚕgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐContentCollectionᚄ(ctx context.Context, sel ast.SelectionSet, v []model.ContentCollection) graphql.Marshaler {
+func (ec *executionContext) marshalNContentCollection2ᚕgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐContentCollectionᚄ(ctx context.Context, sel ast.SelectionSet, v []model.ContentCollection) graphql.Marshaler {
 	ret := make(graphql.Array, len(v))
 	var wg sync.WaitGroup
 	isLen1 := len(v) == 1
@@ -23770,7 +23831,7 @@ func (ec *executionContext) marshalNContentCollection2ᚕgithubᚗcomᚋspencern
 			if !isLen1 {
 				defer wg.Done()
 			}
-			ret[i] = ec.marshalNContentCollection2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐContentCollection(ctx, sel, v[i])
+			ret[i] = ec.marshalNContentCollection2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐContentCollection(ctx, sel, v[i])
 		}
 		if isLen1 {
 			f(i)
@@ -23790,13 +23851,13 @@ func (ec *executionContext) marshalNContentCollection2ᚕgithubᚗcomᚋspencern
 	return ret
 }
 
-func (ec *executionContext) unmarshalNContentType2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐContentType(ctx context.Context, v any) (model.ContentType, error) {
+func (ec *executionContext) unmarshalNContentType2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐContentType(ctx context.Context, v any) (model.ContentType, error) {
 	tmp, err := graphql.UnmarshalString(v)
 	res := model.ContentType(tmp)
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalNContentType2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐContentType(ctx context.Context, sel ast.SelectionSet, v model.ContentType) graphql.Marshaler {
+func (ec *executionContext) marshalNContentType2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐContentType(ctx context.Context, sel ast.SelectionSet, v model.ContentType) graphql.Marshaler {
 	res := graphql.MarshalString(string(v))
 	if res == graphql.Null {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
@@ -23806,7 +23867,7 @@ func (ec *executionContext) marshalNContentType2githubᚗcomᚋspencernortonᚋd
 	return res
 }
 
-func (ec *executionContext) marshalNContentTypeAgg2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐContentTypeAgg(ctx context.Context, sel ast.SelectionSet, v gen.ContentTypeAgg) graphql.Marshaler {
+func (ec *executionContext) marshalNContentTypeAgg2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐContentTypeAgg(ctx context.Context, sel ast.SelectionSet, v gen.ContentTypeAgg) graphql.Marshaler {
 	return ec._ContentTypeAgg(ctx, sel, &v)
 }
 
@@ -23825,11 +23886,11 @@ func (ec *executionContext) marshalNDateTime2timeᚐTime(ctx context.Context, se
 	return res
 }
 
-func (ec *executionContext) marshalNEvidenceIndexerCount2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐEvidenceIndexerCount(ctx context.Context, sel ast.SelectionSet, v gen.EvidenceIndexerCount) graphql.Marshaler {
+func (ec *executionContext) marshalNEvidenceIndexerCount2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐEvidenceIndexerCount(ctx context.Context, sel ast.SelectionSet, v gen.EvidenceIndexerCount) graphql.Marshaler {
 	return ec._EvidenceIndexerCount(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNEvidenceIndexerCount2ᚕgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐEvidenceIndexerCountᚄ(ctx context.Context, sel ast.SelectionSet, v []gen.EvidenceIndexerCount) graphql.Marshaler {
+func (ec *executionContext) marshalNEvidenceIndexerCount2ᚕgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐEvidenceIndexerCountᚄ(ctx context.Context, sel ast.SelectionSet, v []gen.EvidenceIndexerCount) graphql.Marshaler {
 	ret := make(graphql.Array, len(v))
 	var wg sync.WaitGroup
 	isLen1 := len(v) == 1
@@ -23853,7 +23914,7 @@ func (ec *executionContext) marshalNEvidenceIndexerCount2ᚕgithubᚗcomᚋspenc
 			if !isLen1 {
 				defer wg.Done()
 			}
-			ret[i] = ec.marshalNEvidenceIndexerCount2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐEvidenceIndexerCount(ctx, sel, v[i])
+			ret[i] = ec.marshalNEvidenceIndexerCount2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐEvidenceIndexerCount(ctx, sel, v[i])
 		}
 		if isLen1 {
 			f(i)
@@ -23873,11 +23934,11 @@ func (ec *executionContext) marshalNEvidenceIndexerCount2ᚕgithubᚗcomᚋspenc
 	return ret
 }
 
-func (ec *executionContext) marshalNEvidenceIndexerStatsDay2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐEvidenceIndexerStatsDay(ctx context.Context, sel ast.SelectionSet, v gen.EvidenceIndexerStatsDay) graphql.Marshaler {
+func (ec *executionContext) marshalNEvidenceIndexerStatsDay2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐEvidenceIndexerStatsDay(ctx context.Context, sel ast.SelectionSet, v gen.EvidenceIndexerStatsDay) graphql.Marshaler {
 	return ec._EvidenceIndexerStatsDay(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNEvidenceIndexerStatsDay2ᚕgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐEvidenceIndexerStatsDayᚄ(ctx context.Context, sel ast.SelectionSet, v []gen.EvidenceIndexerStatsDay) graphql.Marshaler {
+func (ec *executionContext) marshalNEvidenceIndexerStatsDay2ᚕgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐEvidenceIndexerStatsDayᚄ(ctx context.Context, sel ast.SelectionSet, v []gen.EvidenceIndexerStatsDay) graphql.Marshaler {
 	ret := make(graphql.Array, len(v))
 	var wg sync.WaitGroup
 	isLen1 := len(v) == 1
@@ -23901,7 +23962,7 @@ func (ec *executionContext) marshalNEvidenceIndexerStatsDay2ᚕgithubᚗcomᚋsp
 			if !isLen1 {
 				defer wg.Done()
 			}
-			ret[i] = ec.marshalNEvidenceIndexerStatsDay2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐEvidenceIndexerStatsDay(ctx, sel, v[i])
+			ret[i] = ec.marshalNEvidenceIndexerStatsDay2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐEvidenceIndexerStatsDay(ctx, sel, v[i])
 		}
 		if isLen1 {
 			f(i)
@@ -23921,20 +23982,20 @@ func (ec *executionContext) marshalNEvidenceIndexerStatsDay2ᚕgithubᚗcomᚋsp
 	return ret
 }
 
-func (ec *executionContext) unmarshalNEvidenceIndexerStatsInput2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐEvidenceIndexerStatsInput(ctx context.Context, v any) (gen.EvidenceIndexerStatsInput, error) {
+func (ec *executionContext) unmarshalNEvidenceIndexerStatsInput2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐEvidenceIndexerStatsInput(ctx context.Context, v any) (gen.EvidenceIndexerStatsInput, error) {
 	res, err := ec.unmarshalInputEvidenceIndexerStatsInput(ctx, v)
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalNEvidenceIndexerStatsResult2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐEvidenceIndexerStatsResult(ctx context.Context, sel ast.SelectionSet, v gen.EvidenceIndexerStatsResult) graphql.Marshaler {
+func (ec *executionContext) marshalNEvidenceIndexerStatsResult2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐEvidenceIndexerStatsResult(ctx context.Context, sel ast.SelectionSet, v gen.EvidenceIndexerStatsResult) graphql.Marshaler {
 	return ec._EvidenceIndexerStatsResult(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNEvidenceItem2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐEvidenceItem(ctx context.Context, sel ast.SelectionSet, v gen.EvidenceItem) graphql.Marshaler {
+func (ec *executionContext) marshalNEvidenceItem2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐEvidenceItem(ctx context.Context, sel ast.SelectionSet, v gen.EvidenceItem) graphql.Marshaler {
 	return ec._EvidenceItem(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNEvidenceItem2ᚕgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐEvidenceItemᚄ(ctx context.Context, sel ast.SelectionSet, v []gen.EvidenceItem) graphql.Marshaler {
+func (ec *executionContext) marshalNEvidenceItem2ᚕgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐEvidenceItemᚄ(ctx context.Context, sel ast.SelectionSet, v []gen.EvidenceItem) graphql.Marshaler {
 	ret := make(graphql.Array, len(v))
 	var wg sync.WaitGroup
 	isLen1 := len(v) == 1
@@ -23958,7 +24019,7 @@ func (ec *executionContext) marshalNEvidenceItem2ᚕgithubᚗcomᚋspencernorton
 			if !isLen1 {
 				defer wg.Done()
 			}
-			ret[i] = ec.marshalNEvidenceItem2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐEvidenceItem(ctx, sel, v[i])
+			ret[i] = ec.marshalNEvidenceItem2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐEvidenceItem(ctx, sel, v[i])
 		}
 		if isLen1 {
 			f(i)
@@ -23978,24 +24039,24 @@ func (ec *executionContext) marshalNEvidenceItem2ᚕgithubᚗcomᚋspencernorton
 	return ret
 }
 
-func (ec *executionContext) unmarshalNEvidenceListInput2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐEvidenceListInput(ctx context.Context, v any) (gen.EvidenceListInput, error) {
+func (ec *executionContext) unmarshalNEvidenceListInput2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐEvidenceListInput(ctx context.Context, v any) (gen.EvidenceListInput, error) {
 	res, err := ec.unmarshalInputEvidenceListInput(ctx, v)
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalNEvidenceListResult2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐEvidenceListResult(ctx context.Context, sel ast.SelectionSet, v gen.EvidenceListResult) graphql.Marshaler {
+func (ec *executionContext) marshalNEvidenceListResult2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐEvidenceListResult(ctx context.Context, sel ast.SelectionSet, v gen.EvidenceListResult) graphql.Marshaler {
 	return ec._EvidenceListResult(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNEvidenceQuery2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚐEvidenceQuery(ctx context.Context, sel ast.SelectionSet, v gqlmodel.EvidenceQuery) graphql.Marshaler {
+func (ec *executionContext) marshalNEvidenceQuery2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚐEvidenceQuery(ctx context.Context, sel ast.SelectionSet, v gqlmodel.EvidenceQuery) graphql.Marshaler {
 	return ec._EvidenceQuery(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNExternalLink2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐExternalLink(ctx context.Context, sel ast.SelectionSet, v model.ExternalLink) graphql.Marshaler {
+func (ec *executionContext) marshalNExternalLink2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐExternalLink(ctx context.Context, sel ast.SelectionSet, v model.ExternalLink) graphql.Marshaler {
 	return ec._ExternalLink(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNExternalLink2ᚕgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐExternalLinkᚄ(ctx context.Context, sel ast.SelectionSet, v []model.ExternalLink) graphql.Marshaler {
+func (ec *executionContext) marshalNExternalLink2ᚕgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐExternalLinkᚄ(ctx context.Context, sel ast.SelectionSet, v []model.ExternalLink) graphql.Marshaler {
 	ret := make(graphql.Array, len(v))
 	var wg sync.WaitGroup
 	isLen1 := len(v) == 1
@@ -24019,7 +24080,7 @@ func (ec *executionContext) marshalNExternalLink2ᚕgithubᚗcomᚋspencernorton
 			if !isLen1 {
 				defer wg.Done()
 			}
-			ret[i] = ec.marshalNExternalLink2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐExternalLink(ctx, sel, v[i])
+			ret[i] = ec.marshalNExternalLink2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐExternalLink(ctx, sel, v[i])
 		}
 		if isLen1 {
 			f(i)
@@ -24039,13 +24100,13 @@ func (ec *executionContext) marshalNExternalLink2ᚕgithubᚗcomᚋspencernorton
 	return ret
 }
 
-func (ec *executionContext) unmarshalNFileType2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐFileType(ctx context.Context, v any) (model.FileType, error) {
+func (ec *executionContext) unmarshalNFileType2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐFileType(ctx context.Context, v any) (model.FileType, error) {
 	tmp, err := graphql.UnmarshalString(v)
 	res := model.FileType(tmp)
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalNFileType2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐFileType(ctx context.Context, sel ast.SelectionSet, v model.FileType) graphql.Marshaler {
+func (ec *executionContext) marshalNFileType2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐFileType(ctx context.Context, sel ast.SelectionSet, v model.FileType) graphql.Marshaler {
 	res := graphql.MarshalString(string(v))
 	if res == graphql.Null {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
@@ -24055,13 +24116,13 @@ func (ec *executionContext) marshalNFileType2githubᚗcomᚋspencernortonᚋdhwa
 	return res
 }
 
-func (ec *executionContext) unmarshalNFilesStatus2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐFilesStatus(ctx context.Context, v any) (model.FilesStatus, error) {
+func (ec *executionContext) unmarshalNFilesStatus2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐFilesStatus(ctx context.Context, v any) (model.FilesStatus, error) {
 	tmp, err := graphql.UnmarshalString(v)
 	res := model.FilesStatus(tmp)
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalNFilesStatus2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐFilesStatus(ctx context.Context, sel ast.SelectionSet, v model.FilesStatus) graphql.Marshaler {
+func (ec *executionContext) marshalNFilesStatus2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐFilesStatus(ctx context.Context, sel ast.SelectionSet, v model.FilesStatus) graphql.Marshaler {
 	res := graphql.MarshalString(string(v))
 	if res == graphql.Null {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
@@ -24086,21 +24147,21 @@ func (ec *executionContext) marshalNFloat2float64(ctx context.Context, sel ast.S
 	return res
 }
 
-func (ec *executionContext) marshalNGenreAgg2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐGenreAgg(ctx context.Context, sel ast.SelectionSet, v gen.GenreAgg) graphql.Marshaler {
+func (ec *executionContext) marshalNGenreAgg2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐGenreAgg(ctx context.Context, sel ast.SelectionSet, v gen.GenreAgg) graphql.Marshaler {
 	return ec._GenreAgg(ctx, sel, &v)
 }
 
-func (ec *executionContext) unmarshalNHash202githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋprotocolᚐID(ctx context.Context, v any) (protocol.ID, error) {
+func (ec *executionContext) unmarshalNHash202githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋprotocolᚐID(ctx context.Context, v any) (protocol.ID, error) {
 	var res protocol.ID
 	err := res.UnmarshalGQL(v)
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalNHash202githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋprotocolᚐID(ctx context.Context, sel ast.SelectionSet, v protocol.ID) graphql.Marshaler {
+func (ec *executionContext) marshalNHash202githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋprotocolᚐID(ctx context.Context, sel ast.SelectionSet, v protocol.ID) graphql.Marshaler {
 	return v
 }
 
-func (ec *executionContext) unmarshalNHash202ᚕgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋprotocolᚐIDᚄ(ctx context.Context, v any) ([]protocol.ID, error) {
+func (ec *executionContext) unmarshalNHash202ᚕgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋprotocolᚐIDᚄ(ctx context.Context, v any) ([]protocol.ID, error) {
 	var vSlice []any
 	if v != nil {
 		vSlice = graphql.CoerceList(v)
@@ -24109,7 +24170,7 @@ func (ec *executionContext) unmarshalNHash202ᚕgithubᚗcomᚋspencernortonᚋd
 	res := make([]protocol.ID, len(vSlice))
 	for i := range vSlice {
 		ctx := graphql.WithPathContext(ctx, graphql.NewPathWithIndex(i))
-		res[i], err = ec.unmarshalNHash202githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋprotocolᚐID(ctx, vSlice[i])
+		res[i], err = ec.unmarshalNHash202githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋprotocolᚐID(ctx, vSlice[i])
 		if err != nil {
 			return nil, err
 		}
@@ -24117,10 +24178,10 @@ func (ec *executionContext) unmarshalNHash202ᚕgithubᚗcomᚋspencernortonᚋd
 	return res, nil
 }
 
-func (ec *executionContext) marshalNHash202ᚕgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋprotocolᚐIDᚄ(ctx context.Context, sel ast.SelectionSet, v []protocol.ID) graphql.Marshaler {
+func (ec *executionContext) marshalNHash202ᚕgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋprotocolᚐIDᚄ(ctx context.Context, sel ast.SelectionSet, v []protocol.ID) graphql.Marshaler {
 	ret := make(graphql.Array, len(v))
 	for i := range v {
-		ret[i] = ec.marshalNHash202githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋprotocolᚐID(ctx, sel, v[i])
+		ret[i] = ec.marshalNHash202githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋprotocolᚐID(ctx, sel, v[i])
 	}
 
 	for _, e := range ret {
@@ -24132,11 +24193,11 @@ func (ec *executionContext) marshalNHash202ᚕgithubᚗcomᚋspencernortonᚋdhw
 	return ret
 }
 
-func (ec *executionContext) marshalNHealthCheck2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐHealthCheck(ctx context.Context, sel ast.SelectionSet, v gen.HealthCheck) graphql.Marshaler {
+func (ec *executionContext) marshalNHealthCheck2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐHealthCheck(ctx context.Context, sel ast.SelectionSet, v gen.HealthCheck) graphql.Marshaler {
 	return ec._HealthCheck(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNHealthCheck2ᚕgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐHealthCheckᚄ(ctx context.Context, sel ast.SelectionSet, v []gen.HealthCheck) graphql.Marshaler {
+func (ec *executionContext) marshalNHealthCheck2ᚕgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐHealthCheckᚄ(ctx context.Context, sel ast.SelectionSet, v []gen.HealthCheck) graphql.Marshaler {
 	ret := make(graphql.Array, len(v))
 	var wg sync.WaitGroup
 	isLen1 := len(v) == 1
@@ -24160,7 +24221,7 @@ func (ec *executionContext) marshalNHealthCheck2ᚕgithubᚗcomᚋspencernorton�
 			if !isLen1 {
 				defer wg.Done()
 			}
-			ret[i] = ec.marshalNHealthCheck2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐHealthCheck(ctx, sel, v[i])
+			ret[i] = ec.marshalNHealthCheck2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐHealthCheck(ctx, sel, v[i])
 		}
 		if isLen1 {
 			f(i)
@@ -24180,17 +24241,17 @@ func (ec *executionContext) marshalNHealthCheck2ᚕgithubᚗcomᚋspencernorton�
 	return ret
 }
 
-func (ec *executionContext) marshalNHealthQuery2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐHealthQuery(ctx context.Context, sel ast.SelectionSet, v gen.HealthQuery) graphql.Marshaler {
+func (ec *executionContext) marshalNHealthQuery2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐHealthQuery(ctx context.Context, sel ast.SelectionSet, v gen.HealthQuery) graphql.Marshaler {
 	return ec._HealthQuery(ctx, sel, &v)
 }
 
-func (ec *executionContext) unmarshalNHealthStatus2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐHealthStatus(ctx context.Context, v any) (gen.HealthStatus, error) {
+func (ec *executionContext) unmarshalNHealthStatus2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐHealthStatus(ctx context.Context, v any) (gen.HealthStatus, error) {
 	var res gen.HealthStatus
 	err := res.UnmarshalGQL(v)
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalNHealthStatus2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐHealthStatus(ctx context.Context, sel ast.SelectionSet, v gen.HealthStatus) graphql.Marshaler {
+func (ec *executionContext) marshalNHealthStatus2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐHealthStatus(ctx context.Context, sel ast.SelectionSet, v gen.HealthStatus) graphql.Marshaler {
 	return v
 }
 
@@ -24239,13 +24300,13 @@ func (ec *executionContext) marshalNInt2uint(ctx context.Context, sel ast.Select
 	return res
 }
 
-func (ec *executionContext) unmarshalNLanguage2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐLanguage(ctx context.Context, v any) (model.Language, error) {
+func (ec *executionContext) unmarshalNLanguage2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐLanguage(ctx context.Context, v any) (model.Language, error) {
 	tmp, err := graphql.UnmarshalString(v)
 	res := model.Language(tmp)
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalNLanguage2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐLanguage(ctx context.Context, sel ast.SelectionSet, v model.Language) graphql.Marshaler {
+func (ec *executionContext) marshalNLanguage2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐLanguage(ctx context.Context, sel ast.SelectionSet, v model.Language) graphql.Marshaler {
 	res := graphql.MarshalString(string(v))
 	if res == graphql.Null {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
@@ -24255,33 +24316,33 @@ func (ec *executionContext) marshalNLanguage2githubᚗcomᚋspencernortonᚋdhwa
 	return res
 }
 
-func (ec *executionContext) marshalNLanguageAgg2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐLanguageAgg(ctx context.Context, sel ast.SelectionSet, v gen.LanguageAgg) graphql.Marshaler {
+func (ec *executionContext) marshalNLanguageAgg2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐLanguageAgg(ctx context.Context, sel ast.SelectionSet, v gen.LanguageAgg) graphql.Marshaler {
 	return ec._LanguageAgg(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNLanguageInfo2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐLanguage(ctx context.Context, sel ast.SelectionSet, v model.Language) graphql.Marshaler {
+func (ec *executionContext) marshalNLanguageInfo2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐLanguage(ctx context.Context, sel ast.SelectionSet, v model.Language) graphql.Marshaler {
 	return ec._LanguageInfo(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNMetadataSource2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐMetadataSource(ctx context.Context, sel ast.SelectionSet, v model.MetadataSource) graphql.Marshaler {
+func (ec *executionContext) marshalNMetadataSource2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐMetadataSource(ctx context.Context, sel ast.SelectionSet, v model.MetadataSource) graphql.Marshaler {
 	return ec._MetadataSource(ctx, sel, &v)
 }
 
-func (ec *executionContext) unmarshalNMetricsBucketDuration2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐMetricsBucketDuration(ctx context.Context, v any) (gen.MetricsBucketDuration, error) {
+func (ec *executionContext) unmarshalNMetricsBucketDuration2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐMetricsBucketDuration(ctx context.Context, v any) (gen.MetricsBucketDuration, error) {
 	var res gen.MetricsBucketDuration
 	err := res.UnmarshalGQL(v)
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalNMetricsBucketDuration2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐMetricsBucketDuration(ctx context.Context, sel ast.SelectionSet, v gen.MetricsBucketDuration) graphql.Marshaler {
+func (ec *executionContext) marshalNMetricsBucketDuration2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐMetricsBucketDuration(ctx context.Context, sel ast.SelectionSet, v gen.MetricsBucketDuration) graphql.Marshaler {
 	return v
 }
 
-func (ec *executionContext) marshalNQueueJob2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐQueueJob(ctx context.Context, sel ast.SelectionSet, v model.QueueJob) graphql.Marshaler {
+func (ec *executionContext) marshalNQueueJob2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐQueueJob(ctx context.Context, sel ast.SelectionSet, v model.QueueJob) graphql.Marshaler {
 	return ec._QueueJob(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNQueueJob2ᚕgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐQueueJobᚄ(ctx context.Context, sel ast.SelectionSet, v []model.QueueJob) graphql.Marshaler {
+func (ec *executionContext) marshalNQueueJob2ᚕgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐQueueJobᚄ(ctx context.Context, sel ast.SelectionSet, v []model.QueueJob) graphql.Marshaler {
 	ret := make(graphql.Array, len(v))
 	var wg sync.WaitGroup
 	isLen1 := len(v) == 1
@@ -24305,7 +24366,7 @@ func (ec *executionContext) marshalNQueueJob2ᚕgithubᚗcomᚋspencernortonᚋd
 			if !isLen1 {
 				defer wg.Done()
 			}
-			ret[i] = ec.marshalNQueueJob2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐQueueJob(ctx, sel, v[i])
+			ret[i] = ec.marshalNQueueJob2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐQueueJob(ctx, sel, v[i])
 		}
 		if isLen1 {
 			f(i)
@@ -24325,17 +24386,17 @@ func (ec *executionContext) marshalNQueueJob2ᚕgithubᚗcomᚋspencernortonᚋd
 	return ret
 }
 
-func (ec *executionContext) marshalNQueueJobQueueAgg2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐQueueJobQueueAgg(ctx context.Context, sel ast.SelectionSet, v gen.QueueJobQueueAgg) graphql.Marshaler {
+func (ec *executionContext) marshalNQueueJobQueueAgg2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐQueueJobQueueAgg(ctx context.Context, sel ast.SelectionSet, v gen.QueueJobQueueAgg) graphql.Marshaler {
 	return ec._QueueJobQueueAgg(ctx, sel, &v)
 }
 
-func (ec *executionContext) unmarshalNQueueJobStatus2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐQueueJobStatus(ctx context.Context, v any) (model.QueueJobStatus, error) {
+func (ec *executionContext) unmarshalNQueueJobStatus2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐQueueJobStatus(ctx context.Context, v any) (model.QueueJobStatus, error) {
 	tmp, err := graphql.UnmarshalString(v)
 	res := model.QueueJobStatus(tmp)
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalNQueueJobStatus2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐQueueJobStatus(ctx context.Context, sel ast.SelectionSet, v model.QueueJobStatus) graphql.Marshaler {
+func (ec *executionContext) marshalNQueueJobStatus2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐQueueJobStatus(ctx context.Context, sel ast.SelectionSet, v model.QueueJobStatus) graphql.Marshaler {
 	res := graphql.MarshalString(string(v))
 	if res == graphql.Null {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
@@ -24345,43 +24406,43 @@ func (ec *executionContext) marshalNQueueJobStatus2githubᚗcomᚋspencernorton�
 	return res
 }
 
-func (ec *executionContext) marshalNQueueJobStatusAgg2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐQueueJobStatusAgg(ctx context.Context, sel ast.SelectionSet, v gen.QueueJobStatusAgg) graphql.Marshaler {
+func (ec *executionContext) marshalNQueueJobStatusAgg2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐQueueJobStatusAgg(ctx context.Context, sel ast.SelectionSet, v gen.QueueJobStatusAgg) graphql.Marshaler {
 	return ec._QueueJobStatusAgg(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNQueueJobsAggregations2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐQueueJobsAggregations(ctx context.Context, sel ast.SelectionSet, v gen.QueueJobsAggregations) graphql.Marshaler {
+func (ec *executionContext) marshalNQueueJobsAggregations2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐQueueJobsAggregations(ctx context.Context, sel ast.SelectionSet, v gen.QueueJobsAggregations) graphql.Marshaler {
 	return ec._QueueJobsAggregations(ctx, sel, &v)
 }
 
-func (ec *executionContext) unmarshalNQueueJobsOrderByField2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐQueueJobsOrderByField(ctx context.Context, v any) (gen.QueueJobsOrderByField, error) {
+func (ec *executionContext) unmarshalNQueueJobsOrderByField2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐQueueJobsOrderByField(ctx context.Context, v any) (gen.QueueJobsOrderByField, error) {
 	var res gen.QueueJobsOrderByField
 	err := res.UnmarshalGQL(v)
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalNQueueJobsOrderByField2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐQueueJobsOrderByField(ctx context.Context, sel ast.SelectionSet, v gen.QueueJobsOrderByField) graphql.Marshaler {
+func (ec *executionContext) marshalNQueueJobsOrderByField2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐQueueJobsOrderByField(ctx context.Context, sel ast.SelectionSet, v gen.QueueJobsOrderByField) graphql.Marshaler {
 	return v
 }
 
-func (ec *executionContext) unmarshalNQueueJobsOrderByInput2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐQueueJobsOrderByInput(ctx context.Context, v any) (gen.QueueJobsOrderByInput, error) {
+func (ec *executionContext) unmarshalNQueueJobsOrderByInput2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐQueueJobsOrderByInput(ctx context.Context, v any) (gen.QueueJobsOrderByInput, error) {
 	res, err := ec.unmarshalInputQueueJobsOrderByInput(ctx, v)
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) unmarshalNQueueJobsQueryInput2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚐQueueJobsQueryInput(ctx context.Context, v any) (gqlmodel.QueueJobsQueryInput, error) {
+func (ec *executionContext) unmarshalNQueueJobsQueryInput2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚐQueueJobsQueryInput(ctx context.Context, v any) (gqlmodel.QueueJobsQueryInput, error) {
 	res, err := ec.unmarshalInputQueueJobsQueryInput(ctx, v)
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalNQueueJobsQueryResult2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚐQueueJobsQueryResult(ctx context.Context, sel ast.SelectionSet, v gqlmodel.QueueJobsQueryResult) graphql.Marshaler {
+func (ec *executionContext) marshalNQueueJobsQueryResult2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚐQueueJobsQueryResult(ctx context.Context, sel ast.SelectionSet, v gqlmodel.QueueJobsQueryResult) graphql.Marshaler {
 	return ec._QueueJobsQueryResult(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNQueueMetricsBucket2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmetricsᚋqueuemetricsᚐBucket(ctx context.Context, sel ast.SelectionSet, v queuemetrics.Bucket) graphql.Marshaler {
+func (ec *executionContext) marshalNQueueMetricsBucket2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmetricsᚋqueuemetricsᚐBucket(ctx context.Context, sel ast.SelectionSet, v queuemetrics.Bucket) graphql.Marshaler {
 	return ec._QueueMetricsBucket(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNQueueMetricsBucket2ᚕgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmetricsᚋqueuemetricsᚐBucketᚄ(ctx context.Context, sel ast.SelectionSet, v []queuemetrics.Bucket) graphql.Marshaler {
+func (ec *executionContext) marshalNQueueMetricsBucket2ᚕgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmetricsᚋqueuemetricsᚐBucketᚄ(ctx context.Context, sel ast.SelectionSet, v []queuemetrics.Bucket) graphql.Marshaler {
 	ret := make(graphql.Array, len(v))
 	var wg sync.WaitGroup
 	isLen1 := len(v) == 1
@@ -24405,7 +24466,7 @@ func (ec *executionContext) marshalNQueueMetricsBucket2ᚕgithubᚗcomᚋspencer
 			if !isLen1 {
 				defer wg.Done()
 			}
-			ret[i] = ec.marshalNQueueMetricsBucket2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmetricsᚋqueuemetricsᚐBucket(ctx, sel, v[i])
+			ret[i] = ec.marshalNQueueMetricsBucket2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmetricsᚋqueuemetricsᚐBucket(ctx, sel, v[i])
 		}
 		if isLen1 {
 			f(i)
@@ -24425,12 +24486,12 @@ func (ec *executionContext) marshalNQueueMetricsBucket2ᚕgithubᚗcomᚋspencer
 	return ret
 }
 
-func (ec *executionContext) unmarshalNQueueMetricsQueryInput2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐQueueMetricsQueryInput(ctx context.Context, v any) (gen.QueueMetricsQueryInput, error) {
+func (ec *executionContext) unmarshalNQueueMetricsQueryInput2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐQueueMetricsQueryInput(ctx context.Context, v any) (gen.QueueMetricsQueryInput, error) {
 	res, err := ec.unmarshalInputQueueMetricsQueryInput(ctx, v)
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalNQueueMetricsQueryResult2ᚖgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐQueueMetricsQueryResult(ctx context.Context, sel ast.SelectionSet, v *gen.QueueMetricsQueryResult) graphql.Marshaler {
+func (ec *executionContext) marshalNQueueMetricsQueryResult2ᚖgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐQueueMetricsQueryResult(ctx context.Context, sel ast.SelectionSet, v *gen.QueueMetricsQueryResult) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
 			ec.Errorf(ctx, "the requested element is null which the schema does not allow")
@@ -24440,28 +24501,28 @@ func (ec *executionContext) marshalNQueueMetricsQueryResult2ᚖgithubᚗcomᚋsp
 	return ec._QueueMetricsQueryResult(ctx, sel, v)
 }
 
-func (ec *executionContext) marshalNQueueMutation2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚐQueueMutation(ctx context.Context, sel ast.SelectionSet, v gqlmodel.QueueMutation) graphql.Marshaler {
+func (ec *executionContext) marshalNQueueMutation2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚐQueueMutation(ctx context.Context, sel ast.SelectionSet, v gqlmodel.QueueMutation) graphql.Marshaler {
 	return ec._QueueMutation(ctx, sel, &v)
 }
 
-func (ec *executionContext) unmarshalNQueuePurgeJobsInput2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋqueueᚋmanagerᚐPurgeJobsRequest(ctx context.Context, v any) (manager.PurgeJobsRequest, error) {
+func (ec *executionContext) unmarshalNQueuePurgeJobsInput2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋqueueᚋmanagerᚐPurgeJobsRequest(ctx context.Context, v any) (manager.PurgeJobsRequest, error) {
 	res, err := ec.unmarshalInputQueuePurgeJobsInput(ctx, v)
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalNQueueQuery2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚐQueueQuery(ctx context.Context, sel ast.SelectionSet, v gqlmodel.QueueQuery) graphql.Marshaler {
+func (ec *executionContext) marshalNQueueQuery2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚐQueueQuery(ctx context.Context, sel ast.SelectionSet, v gqlmodel.QueueQuery) graphql.Marshaler {
 	return ec._QueueQuery(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNReleaseYearAgg2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐReleaseYearAgg(ctx context.Context, sel ast.SelectionSet, v gen.ReleaseYearAgg) graphql.Marshaler {
+func (ec *executionContext) marshalNReleaseYearAgg2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐReleaseYearAgg(ctx context.Context, sel ast.SelectionSet, v gen.ReleaseYearAgg) graphql.Marshaler {
 	return ec._ReleaseYearAgg(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNSeason2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐSeason(ctx context.Context, sel ast.SelectionSet, v model.Season) graphql.Marshaler {
+func (ec *executionContext) marshalNSeason2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐSeason(ctx context.Context, sel ast.SelectionSet, v model.Season) graphql.Marshaler {
 	return ec._Season(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNSeason2ᚕgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐSeasonᚄ(ctx context.Context, sel ast.SelectionSet, v []model.Season) graphql.Marshaler {
+func (ec *executionContext) marshalNSeason2ᚕgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐSeasonᚄ(ctx context.Context, sel ast.SelectionSet, v []model.Season) graphql.Marshaler {
 	ret := make(graphql.Array, len(v))
 	var wg sync.WaitGroup
 	isLen1 := len(v) == 1
@@ -24485,7 +24546,7 @@ func (ec *executionContext) marshalNSeason2ᚕgithubᚗcomᚋspencernortonᚋdhw
 			if !isLen1 {
 				defer wg.Done()
 			}
-			ret[i] = ec.marshalNSeason2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐSeason(ctx, sel, v[i])
+			ret[i] = ec.marshalNSeason2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐSeason(ctx, sel, v[i])
 		}
 		if isLen1 {
 			f(i)
@@ -24552,11 +24613,11 @@ func (ec *executionContext) marshalNString2ᚕstringᚄ(ctx context.Context, sel
 	return ret
 }
 
-func (ec *executionContext) marshalNSuggestedTag2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋdatabaseᚋsearchᚐSuggestedTag(ctx context.Context, sel ast.SelectionSet, v search.SuggestedTag) graphql.Marshaler {
+func (ec *executionContext) marshalNSuggestedTag2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋdatabaseᚋsearchᚐSuggestedTag(ctx context.Context, sel ast.SelectionSet, v search.SuggestedTag) graphql.Marshaler {
 	return ec._SuggestedTag(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNSuggestedTag2ᚕgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋdatabaseᚋsearchᚐSuggestedTagᚄ(ctx context.Context, sel ast.SelectionSet, v []search.SuggestedTag) graphql.Marshaler {
+func (ec *executionContext) marshalNSuggestedTag2ᚕgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋdatabaseᚋsearchᚐSuggestedTagᚄ(ctx context.Context, sel ast.SelectionSet, v []search.SuggestedTag) graphql.Marshaler {
 	ret := make(graphql.Array, len(v))
 	var wg sync.WaitGroup
 	isLen1 := len(v) == 1
@@ -24580,7 +24641,7 @@ func (ec *executionContext) marshalNSuggestedTag2ᚕgithubᚗcomᚋspencernorton
 			if !isLen1 {
 				defer wg.Done()
 			}
-			ret[i] = ec.marshalNSuggestedTag2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋdatabaseᚋsearchᚐSuggestedTag(ctx, sel, v[i])
+			ret[i] = ec.marshalNSuggestedTag2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋdatabaseᚋsearchᚐSuggestedTag(ctx, sel, v[i])
 		}
 		if isLen1 {
 			f(i)
@@ -24600,15 +24661,15 @@ func (ec *executionContext) marshalNSuggestedTag2ᚕgithubᚗcomᚋspencernorton
 	return ret
 }
 
-func (ec *executionContext) marshalNTorrent2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐTorrent(ctx context.Context, sel ast.SelectionSet, v model.Torrent) graphql.Marshaler {
+func (ec *executionContext) marshalNTorrent2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐTorrent(ctx context.Context, sel ast.SelectionSet, v model.Torrent) graphql.Marshaler {
 	return ec._Torrent(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNTorrentContent2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚐTorrentContent(ctx context.Context, sel ast.SelectionSet, v gqlmodel.TorrentContent) graphql.Marshaler {
+func (ec *executionContext) marshalNTorrentContent2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚐTorrentContent(ctx context.Context, sel ast.SelectionSet, v gqlmodel.TorrentContent) graphql.Marshaler {
 	return ec._TorrentContent(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNTorrentContent2ᚕgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚐTorrentContentᚄ(ctx context.Context, sel ast.SelectionSet, v []gqlmodel.TorrentContent) graphql.Marshaler {
+func (ec *executionContext) marshalNTorrentContent2ᚕgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚐTorrentContentᚄ(ctx context.Context, sel ast.SelectionSet, v []gqlmodel.TorrentContent) graphql.Marshaler {
 	ret := make(graphql.Array, len(v))
 	var wg sync.WaitGroup
 	isLen1 := len(v) == 1
@@ -24632,7 +24693,7 @@ func (ec *executionContext) marshalNTorrentContent2ᚕgithubᚗcomᚋspencernort
 			if !isLen1 {
 				defer wg.Done()
 			}
-			ret[i] = ec.marshalNTorrentContent2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚐTorrentContent(ctx, sel, v[i])
+			ret[i] = ec.marshalNTorrentContent2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚐTorrentContent(ctx, sel, v[i])
 		}
 		if isLen1 {
 			f(i)
@@ -24652,43 +24713,43 @@ func (ec *executionContext) marshalNTorrentContent2ᚕgithubᚗcomᚋspencernort
 	return ret
 }
 
-func (ec *executionContext) marshalNTorrentContentAggregations2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐTorrentContentAggregations(ctx context.Context, sel ast.SelectionSet, v gen.TorrentContentAggregations) graphql.Marshaler {
+func (ec *executionContext) marshalNTorrentContentAggregations2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐTorrentContentAggregations(ctx context.Context, sel ast.SelectionSet, v gen.TorrentContentAggregations) graphql.Marshaler {
 	return ec._TorrentContentAggregations(ctx, sel, &v)
 }
 
-func (ec *executionContext) unmarshalNTorrentContentOrderByField2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐTorrentContentOrderByField(ctx context.Context, v any) (gen.TorrentContentOrderByField, error) {
+func (ec *executionContext) unmarshalNTorrentContentOrderByField2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐTorrentContentOrderByField(ctx context.Context, v any) (gen.TorrentContentOrderByField, error) {
 	var res gen.TorrentContentOrderByField
 	err := res.UnmarshalGQL(v)
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalNTorrentContentOrderByField2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐTorrentContentOrderByField(ctx context.Context, sel ast.SelectionSet, v gen.TorrentContentOrderByField) graphql.Marshaler {
+func (ec *executionContext) marshalNTorrentContentOrderByField2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐTorrentContentOrderByField(ctx context.Context, sel ast.SelectionSet, v gen.TorrentContentOrderByField) graphql.Marshaler {
 	return v
 }
 
-func (ec *executionContext) unmarshalNTorrentContentOrderByInput2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐTorrentContentOrderByInput(ctx context.Context, v any) (gen.TorrentContentOrderByInput, error) {
+func (ec *executionContext) unmarshalNTorrentContentOrderByInput2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐTorrentContentOrderByInput(ctx context.Context, v any) (gen.TorrentContentOrderByInput, error) {
 	res, err := ec.unmarshalInputTorrentContentOrderByInput(ctx, v)
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalNTorrentContentQuery2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚐTorrentContentQuery(ctx context.Context, sel ast.SelectionSet, v gqlmodel.TorrentContentQuery) graphql.Marshaler {
+func (ec *executionContext) marshalNTorrentContentQuery2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚐTorrentContentQuery(ctx context.Context, sel ast.SelectionSet, v gqlmodel.TorrentContentQuery) graphql.Marshaler {
 	return ec._TorrentContentQuery(ctx, sel, &v)
 }
 
-func (ec *executionContext) unmarshalNTorrentContentSearchQueryInput2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚐTorrentContentSearchQueryInput(ctx context.Context, v any) (gqlmodel.TorrentContentSearchQueryInput, error) {
+func (ec *executionContext) unmarshalNTorrentContentSearchQueryInput2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚐTorrentContentSearchQueryInput(ctx context.Context, v any) (gqlmodel.TorrentContentSearchQueryInput, error) {
 	res, err := ec.unmarshalInputTorrentContentSearchQueryInput(ctx, v)
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalNTorrentContentSearchResult2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚐTorrentContentSearchResult(ctx context.Context, sel ast.SelectionSet, v gqlmodel.TorrentContentSearchResult) graphql.Marshaler {
+func (ec *executionContext) marshalNTorrentContentSearchResult2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚐTorrentContentSearchResult(ctx context.Context, sel ast.SelectionSet, v gqlmodel.TorrentContentSearchResult) graphql.Marshaler {
 	return ec._TorrentContentSearchResult(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNTorrentFile2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐTorrentFile(ctx context.Context, sel ast.SelectionSet, v model.TorrentFile) graphql.Marshaler {
+func (ec *executionContext) marshalNTorrentFile2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐTorrentFile(ctx context.Context, sel ast.SelectionSet, v model.TorrentFile) graphql.Marshaler {
 	return ec._TorrentFile(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNTorrentFile2ᚕgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐTorrentFileᚄ(ctx context.Context, sel ast.SelectionSet, v []model.TorrentFile) graphql.Marshaler {
+func (ec *executionContext) marshalNTorrentFile2ᚕgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐTorrentFileᚄ(ctx context.Context, sel ast.SelectionSet, v []model.TorrentFile) graphql.Marshaler {
 	ret := make(graphql.Array, len(v))
 	var wg sync.WaitGroup
 	isLen1 := len(v) == 1
@@ -24712,7 +24773,7 @@ func (ec *executionContext) marshalNTorrentFile2ᚕgithubᚗcomᚋspencernorton�
 			if !isLen1 {
 				defer wg.Done()
 			}
-			ret[i] = ec.marshalNTorrentFile2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐTorrentFile(ctx, sel, v[i])
+			ret[i] = ec.marshalNTorrentFile2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐTorrentFile(ctx, sel, v[i])
 		}
 		if isLen1 {
 			f(i)
@@ -24732,43 +24793,43 @@ func (ec *executionContext) marshalNTorrentFile2ᚕgithubᚗcomᚋspencernorton�
 	return ret
 }
 
-func (ec *executionContext) marshalNTorrentFileTypeAgg2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐTorrentFileTypeAgg(ctx context.Context, sel ast.SelectionSet, v gen.TorrentFileTypeAgg) graphql.Marshaler {
+func (ec *executionContext) marshalNTorrentFileTypeAgg2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐTorrentFileTypeAgg(ctx context.Context, sel ast.SelectionSet, v gen.TorrentFileTypeAgg) graphql.Marshaler {
 	return ec._TorrentFileTypeAgg(ctx, sel, &v)
 }
 
-func (ec *executionContext) unmarshalNTorrentFilesOrderByField2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐTorrentFilesOrderByField(ctx context.Context, v any) (gen.TorrentFilesOrderByField, error) {
+func (ec *executionContext) unmarshalNTorrentFilesOrderByField2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐTorrentFilesOrderByField(ctx context.Context, v any) (gen.TorrentFilesOrderByField, error) {
 	var res gen.TorrentFilesOrderByField
 	err := res.UnmarshalGQL(v)
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalNTorrentFilesOrderByField2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐTorrentFilesOrderByField(ctx context.Context, sel ast.SelectionSet, v gen.TorrentFilesOrderByField) graphql.Marshaler {
+func (ec *executionContext) marshalNTorrentFilesOrderByField2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐTorrentFilesOrderByField(ctx context.Context, sel ast.SelectionSet, v gen.TorrentFilesOrderByField) graphql.Marshaler {
 	return v
 }
 
-func (ec *executionContext) unmarshalNTorrentFilesOrderByInput2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐTorrentFilesOrderByInput(ctx context.Context, v any) (gen.TorrentFilesOrderByInput, error) {
+func (ec *executionContext) unmarshalNTorrentFilesOrderByInput2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐTorrentFilesOrderByInput(ctx context.Context, v any) (gen.TorrentFilesOrderByInput, error) {
 	res, err := ec.unmarshalInputTorrentFilesOrderByInput(ctx, v)
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) unmarshalNTorrentFilesQueryInput2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚐTorrentFilesQueryInput(ctx context.Context, v any) (gqlmodel.TorrentFilesQueryInput, error) {
+func (ec *executionContext) unmarshalNTorrentFilesQueryInput2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚐTorrentFilesQueryInput(ctx context.Context, v any) (gqlmodel.TorrentFilesQueryInput, error) {
 	res, err := ec.unmarshalInputTorrentFilesQueryInput(ctx, v)
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalNTorrentFilesQueryResult2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋdatabaseᚋqueryᚐGenericResult(ctx context.Context, sel ast.SelectionSet, v query.GenericResult[model.TorrentFile]) graphql.Marshaler {
+func (ec *executionContext) marshalNTorrentFilesQueryResult2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋdatabaseᚋqueryᚐGenericResult(ctx context.Context, sel ast.SelectionSet, v query.GenericResult[model.TorrentFile]) graphql.Marshaler {
 	return ec._TorrentFilesQueryResult(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNTorrentListSourcesResult2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐTorrentListSourcesResult(ctx context.Context, sel ast.SelectionSet, v gen.TorrentListSourcesResult) graphql.Marshaler {
+func (ec *executionContext) marshalNTorrentListSourcesResult2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐTorrentListSourcesResult(ctx context.Context, sel ast.SelectionSet, v gen.TorrentListSourcesResult) graphql.Marshaler {
 	return ec._TorrentListSourcesResult(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNTorrentMetricsBucket2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmetricsᚋtorrentmetricsᚐBucket(ctx context.Context, sel ast.SelectionSet, v torrentmetrics.Bucket) graphql.Marshaler {
+func (ec *executionContext) marshalNTorrentMetricsBucket2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmetricsᚋtorrentmetricsᚐBucket(ctx context.Context, sel ast.SelectionSet, v torrentmetrics.Bucket) graphql.Marshaler {
 	return ec._TorrentMetricsBucket(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNTorrentMetricsBucket2ᚕgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmetricsᚋtorrentmetricsᚐBucketᚄ(ctx context.Context, sel ast.SelectionSet, v []torrentmetrics.Bucket) graphql.Marshaler {
+func (ec *executionContext) marshalNTorrentMetricsBucket2ᚕgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmetricsᚋtorrentmetricsᚐBucketᚄ(ctx context.Context, sel ast.SelectionSet, v []torrentmetrics.Bucket) graphql.Marshaler {
 	ret := make(graphql.Array, len(v))
 	var wg sync.WaitGroup
 	isLen1 := len(v) == 1
@@ -24792,7 +24853,7 @@ func (ec *executionContext) marshalNTorrentMetricsBucket2ᚕgithubᚗcomᚋspenc
 			if !isLen1 {
 				defer wg.Done()
 			}
-			ret[i] = ec.marshalNTorrentMetricsBucket2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmetricsᚋtorrentmetricsᚐBucket(ctx, sel, v[i])
+			ret[i] = ec.marshalNTorrentMetricsBucket2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmetricsᚋtorrentmetricsᚐBucket(ctx, sel, v[i])
 		}
 		if isLen1 {
 			f(i)
@@ -24812,12 +24873,12 @@ func (ec *executionContext) marshalNTorrentMetricsBucket2ᚕgithubᚗcomᚋspenc
 	return ret
 }
 
-func (ec *executionContext) unmarshalNTorrentMetricsQueryInput2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐTorrentMetricsQueryInput(ctx context.Context, v any) (gen.TorrentMetricsQueryInput, error) {
+func (ec *executionContext) unmarshalNTorrentMetricsQueryInput2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐTorrentMetricsQueryInput(ctx context.Context, v any) (gen.TorrentMetricsQueryInput, error) {
 	res, err := ec.unmarshalInputTorrentMetricsQueryInput(ctx, v)
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalNTorrentMetricsQueryResult2ᚖgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐTorrentMetricsQueryResult(ctx context.Context, sel ast.SelectionSet, v *gen.TorrentMetricsQueryResult) graphql.Marshaler {
+func (ec *executionContext) marshalNTorrentMetricsQueryResult2ᚖgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐTorrentMetricsQueryResult(ctx context.Context, sel ast.SelectionSet, v *gen.TorrentMetricsQueryResult) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
 			ec.Errorf(ctx, "the requested element is null which the schema does not allow")
@@ -24827,24 +24888,24 @@ func (ec *executionContext) marshalNTorrentMetricsQueryResult2ᚖgithubᚗcomᚋ
 	return ec._TorrentMetricsQueryResult(ctx, sel, v)
 }
 
-func (ec *executionContext) marshalNTorrentMutation2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚐTorrentMutation(ctx context.Context, sel ast.SelectionSet, v gqlmodel.TorrentMutation) graphql.Marshaler {
+func (ec *executionContext) marshalNTorrentMutation2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚐTorrentMutation(ctx context.Context, sel ast.SelectionSet, v gqlmodel.TorrentMutation) graphql.Marshaler {
 	return ec._TorrentMutation(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNTorrentQuery2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚐTorrentQuery(ctx context.Context, sel ast.SelectionSet, v gqlmodel.TorrentQuery) graphql.Marshaler {
+func (ec *executionContext) marshalNTorrentQuery2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚐTorrentQuery(ctx context.Context, sel ast.SelectionSet, v gqlmodel.TorrentQuery) graphql.Marshaler {
 	return ec._TorrentQuery(ctx, sel, &v)
 }
 
-func (ec *executionContext) unmarshalNTorrentReprocessInput2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐTorrentReprocessInput(ctx context.Context, v any) (gen.TorrentReprocessInput, error) {
+func (ec *executionContext) unmarshalNTorrentReprocessInput2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐTorrentReprocessInput(ctx context.Context, v any) (gen.TorrentReprocessInput, error) {
 	res, err := ec.unmarshalInputTorrentReprocessInput(ctx, v)
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalNTorrentSource2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐTorrentSource(ctx context.Context, sel ast.SelectionSet, v model.TorrentSource) graphql.Marshaler {
+func (ec *executionContext) marshalNTorrentSource2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐTorrentSource(ctx context.Context, sel ast.SelectionSet, v model.TorrentSource) graphql.Marshaler {
 	return ec._TorrentSource(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNTorrentSource2ᚕgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐTorrentSourceᚄ(ctx context.Context, sel ast.SelectionSet, v []model.TorrentSource) graphql.Marshaler {
+func (ec *executionContext) marshalNTorrentSource2ᚕgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐTorrentSourceᚄ(ctx context.Context, sel ast.SelectionSet, v []model.TorrentSource) graphql.Marshaler {
 	ret := make(graphql.Array, len(v))
 	var wg sync.WaitGroup
 	isLen1 := len(v) == 1
@@ -24868,7 +24929,7 @@ func (ec *executionContext) marshalNTorrentSource2ᚕgithubᚗcomᚋspencernorto
 			if !isLen1 {
 				defer wg.Done()
 			}
-			ret[i] = ec.marshalNTorrentSource2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐTorrentSource(ctx, sel, v[i])
+			ret[i] = ec.marshalNTorrentSource2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐTorrentSource(ctx, sel, v[i])
 		}
 		if isLen1 {
 			f(i)
@@ -24888,15 +24949,15 @@ func (ec *executionContext) marshalNTorrentSource2ᚕgithubᚗcomᚋspencernorto
 	return ret
 }
 
-func (ec *executionContext) marshalNTorrentSourceAgg2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐTorrentSourceAgg(ctx context.Context, sel ast.SelectionSet, v gen.TorrentSourceAgg) graphql.Marshaler {
+func (ec *executionContext) marshalNTorrentSourceAgg2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐTorrentSourceAgg(ctx context.Context, sel ast.SelectionSet, v gen.TorrentSourceAgg) graphql.Marshaler {
 	return ec._TorrentSourceAgg(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNTorrentSourceInfo2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚐTorrentSourceInfo(ctx context.Context, sel ast.SelectionSet, v gqlmodel.TorrentSourceInfo) graphql.Marshaler {
+func (ec *executionContext) marshalNTorrentSourceInfo2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚐTorrentSourceInfo(ctx context.Context, sel ast.SelectionSet, v gqlmodel.TorrentSourceInfo) graphql.Marshaler {
 	return ec._TorrentSourceInfo(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNTorrentSourceInfo2ᚕgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚐTorrentSourceInfoᚄ(ctx context.Context, sel ast.SelectionSet, v []gqlmodel.TorrentSourceInfo) graphql.Marshaler {
+func (ec *executionContext) marshalNTorrentSourceInfo2ᚕgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚐTorrentSourceInfoᚄ(ctx context.Context, sel ast.SelectionSet, v []gqlmodel.TorrentSourceInfo) graphql.Marshaler {
 	ret := make(graphql.Array, len(v))
 	var wg sync.WaitGroup
 	isLen1 := len(v) == 1
@@ -24920,7 +24981,7 @@ func (ec *executionContext) marshalNTorrentSourceInfo2ᚕgithubᚗcomᚋspencern
 			if !isLen1 {
 				defer wg.Done()
 			}
-			ret[i] = ec.marshalNTorrentSourceInfo2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚐTorrentSourceInfo(ctx, sel, v[i])
+			ret[i] = ec.marshalNTorrentSourceInfo2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚐTorrentSourceInfo(ctx, sel, v[i])
 		}
 		if isLen1 {
 			f(i)
@@ -24940,27 +25001,27 @@ func (ec *executionContext) marshalNTorrentSourceInfo2ᚕgithubᚗcomᚋspencern
 	return ret
 }
 
-func (ec *executionContext) marshalNTorrentSuggestTagsResult2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋdatabaseᚋsearchᚐTorrentSuggestTagsResult(ctx context.Context, sel ast.SelectionSet, v search.TorrentSuggestTagsResult) graphql.Marshaler {
+func (ec *executionContext) marshalNTorrentSuggestTagsResult2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋdatabaseᚋsearchᚐTorrentSuggestTagsResult(ctx context.Context, sel ast.SelectionSet, v search.TorrentSuggestTagsResult) graphql.Marshaler {
 	return ec._TorrentSuggestTagsResult(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNTorrentTagAgg2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐTorrentTagAgg(ctx context.Context, sel ast.SelectionSet, v gen.TorrentTagAgg) graphql.Marshaler {
+func (ec *executionContext) marshalNTorrentTagAgg2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐTorrentTagAgg(ctx context.Context, sel ast.SelectionSet, v gen.TorrentTagAgg) graphql.Marshaler {
 	return ec._TorrentTagAgg(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNVideoResolutionAgg2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐVideoResolutionAgg(ctx context.Context, sel ast.SelectionSet, v gen.VideoResolutionAgg) graphql.Marshaler {
+func (ec *executionContext) marshalNVideoResolutionAgg2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐVideoResolutionAgg(ctx context.Context, sel ast.SelectionSet, v gen.VideoResolutionAgg) graphql.Marshaler {
 	return ec._VideoResolutionAgg(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNVideoSourceAgg2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐVideoSourceAgg(ctx context.Context, sel ast.SelectionSet, v gen.VideoSourceAgg) graphql.Marshaler {
+func (ec *executionContext) marshalNVideoSourceAgg2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐVideoSourceAgg(ctx context.Context, sel ast.SelectionSet, v gen.VideoSourceAgg) graphql.Marshaler {
 	return ec._VideoSourceAgg(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNWorker2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐWorker(ctx context.Context, sel ast.SelectionSet, v gen.Worker) graphql.Marshaler {
+func (ec *executionContext) marshalNWorker2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐWorker(ctx context.Context, sel ast.SelectionSet, v gen.Worker) graphql.Marshaler {
 	return ec._Worker(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNWorker2ᚕgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐWorkerᚄ(ctx context.Context, sel ast.SelectionSet, v []gen.Worker) graphql.Marshaler {
+func (ec *executionContext) marshalNWorker2ᚕgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐWorkerᚄ(ctx context.Context, sel ast.SelectionSet, v []gen.Worker) graphql.Marshaler {
 	ret := make(graphql.Array, len(v))
 	var wg sync.WaitGroup
 	isLen1 := len(v) == 1
@@ -24984,7 +25045,7 @@ func (ec *executionContext) marshalNWorker2ᚕgithubᚗcomᚋspencernortonᚋdhw
 			if !isLen1 {
 				defer wg.Done()
 			}
-			ret[i] = ec.marshalNWorker2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐWorker(ctx, sel, v[i])
+			ret[i] = ec.marshalNWorker2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐWorker(ctx, sel, v[i])
 		}
 		if isLen1 {
 			f(i)
@@ -25004,11 +25065,11 @@ func (ec *executionContext) marshalNWorker2ᚕgithubᚗcomᚋspencernortonᚋdhw
 	return ret
 }
 
-func (ec *executionContext) marshalNWorkersListAllQueryResult2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐWorkersListAllQueryResult(ctx context.Context, sel ast.SelectionSet, v gen.WorkersListAllQueryResult) graphql.Marshaler {
+func (ec *executionContext) marshalNWorkersListAllQueryResult2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐWorkersListAllQueryResult(ctx context.Context, sel ast.SelectionSet, v gen.WorkersListAllQueryResult) graphql.Marshaler {
 	return ec._WorkersListAllQueryResult(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNWorkersQuery2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐWorkersQuery(ctx context.Context, sel ast.SelectionSet, v gen.WorkersQuery) graphql.Marshaler {
+func (ec *executionContext) marshalNWorkersQuery2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐWorkersQuery(ctx context.Context, sel ast.SelectionSet, v gen.WorkersQuery) graphql.Marshaler {
 	return ec._WorkersQuery(ctx, sel, &v)
 }
 
@@ -25275,13 +25336,13 @@ func (ec *executionContext) marshalOBoolean2bool(ctx context.Context, sel ast.Se
 	return res
 }
 
-func (ec *executionContext) unmarshalOBoolean2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐNullBool(ctx context.Context, v any) (model.NullBool, error) {
+func (ec *executionContext) unmarshalOBoolean2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐNullBool(ctx context.Context, v any) (model.NullBool, error) {
 	var res model.NullBool
 	err := res.UnmarshalGQL(v)
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalOBoolean2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐNullBool(ctx context.Context, sel ast.SelectionSet, v model.NullBool) graphql.Marshaler {
+func (ec *executionContext) marshalOBoolean2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐNullBool(ctx context.Context, sel ast.SelectionSet, v model.NullBool) graphql.Marshaler {
 	return v
 }
 
@@ -25301,24 +25362,24 @@ func (ec *executionContext) marshalOBoolean2ᚖbool(ctx context.Context, sel ast
 	return res
 }
 
-func (ec *executionContext) marshalOContent2ᚖgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐContent(ctx context.Context, sel ast.SelectionSet, v *model.Content) graphql.Marshaler {
+func (ec *executionContext) marshalOContent2ᚖgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐContent(ctx context.Context, sel ast.SelectionSet, v *model.Content) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}
 	return ec._Content(ctx, sel, v)
 }
 
-func (ec *executionContext) unmarshalOContentType2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐNullContentType(ctx context.Context, v any) (model.NullContentType, error) {
+func (ec *executionContext) unmarshalOContentType2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐNullContentType(ctx context.Context, v any) (model.NullContentType, error) {
 	var res model.NullContentType
 	err := res.UnmarshalGQL(v)
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalOContentType2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐNullContentType(ctx context.Context, sel ast.SelectionSet, v model.NullContentType) graphql.Marshaler {
+func (ec *executionContext) marshalOContentType2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐNullContentType(ctx context.Context, sel ast.SelectionSet, v model.NullContentType) graphql.Marshaler {
 	return v
 }
 
-func (ec *executionContext) unmarshalOContentType2ᚕgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐNullContentType(ctx context.Context, v any) ([]model.NullContentType, error) {
+func (ec *executionContext) unmarshalOContentType2ᚕgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐNullContentType(ctx context.Context, v any) ([]model.NullContentType, error) {
 	if v == nil {
 		return nil, nil
 	}
@@ -25330,7 +25391,7 @@ func (ec *executionContext) unmarshalOContentType2ᚕgithubᚗcomᚋspencernorto
 	res := make([]model.NullContentType, len(vSlice))
 	for i := range vSlice {
 		ctx := graphql.WithPathContext(ctx, graphql.NewPathWithIndex(i))
-		res[i], err = ec.unmarshalOContentType2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐNullContentType(ctx, vSlice[i])
+		res[i], err = ec.unmarshalOContentType2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐNullContentType(ctx, vSlice[i])
 		if err != nil {
 			return nil, err
 		}
@@ -25338,7 +25399,7 @@ func (ec *executionContext) unmarshalOContentType2ᚕgithubᚗcomᚋspencernorto
 	return res, nil
 }
 
-func (ec *executionContext) marshalOContentType2ᚕgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐNullContentType(ctx context.Context, sel ast.SelectionSet, v []model.NullContentType) graphql.Marshaler {
+func (ec *executionContext) marshalOContentType2ᚕgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐNullContentType(ctx context.Context, sel ast.SelectionSet, v []model.NullContentType) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}
@@ -25365,7 +25426,7 @@ func (ec *executionContext) marshalOContentType2ᚕgithubᚗcomᚋspencernorton�
 			if !isLen1 {
 				defer wg.Done()
 			}
-			ret[i] = ec.marshalOContentType2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐNullContentType(ctx, sel, v[i])
+			ret[i] = ec.marshalOContentType2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐNullContentType(ctx, sel, v[i])
 		}
 		if isLen1 {
 			f(i)
@@ -25379,7 +25440,7 @@ func (ec *executionContext) marshalOContentType2ᚕgithubᚗcomᚋspencernorton�
 	return ret
 }
 
-func (ec *executionContext) unmarshalOContentType2ᚕᚖgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐContentType(ctx context.Context, v any) ([]*model.ContentType, error) {
+func (ec *executionContext) unmarshalOContentType2ᚕᚖgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐContentType(ctx context.Context, v any) ([]*model.ContentType, error) {
 	if v == nil {
 		return nil, nil
 	}
@@ -25391,7 +25452,7 @@ func (ec *executionContext) unmarshalOContentType2ᚕᚖgithubᚗcomᚋspencerno
 	res := make([]*model.ContentType, len(vSlice))
 	for i := range vSlice {
 		ctx := graphql.WithPathContext(ctx, graphql.NewPathWithIndex(i))
-		res[i], err = ec.unmarshalOContentType2ᚖgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐContentType(ctx, vSlice[i])
+		res[i], err = ec.unmarshalOContentType2ᚖgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐContentType(ctx, vSlice[i])
 		if err != nil {
 			return nil, err
 		}
@@ -25399,7 +25460,7 @@ func (ec *executionContext) unmarshalOContentType2ᚕᚖgithubᚗcomᚋspencerno
 	return res, nil
 }
 
-func (ec *executionContext) marshalOContentType2ᚕᚖgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐContentType(ctx context.Context, sel ast.SelectionSet, v []*model.ContentType) graphql.Marshaler {
+func (ec *executionContext) marshalOContentType2ᚕᚖgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐContentType(ctx context.Context, sel ast.SelectionSet, v []*model.ContentType) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}
@@ -25426,7 +25487,7 @@ func (ec *executionContext) marshalOContentType2ᚕᚖgithubᚗcomᚋspencernort
 			if !isLen1 {
 				defer wg.Done()
 			}
-			ret[i] = ec.marshalOContentType2ᚖgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐContentType(ctx, sel, v[i])
+			ret[i] = ec.marshalOContentType2ᚖgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐContentType(ctx, sel, v[i])
 		}
 		if isLen1 {
 			f(i)
@@ -25440,7 +25501,7 @@ func (ec *executionContext) marshalOContentType2ᚕᚖgithubᚗcomᚋspencernort
 	return ret
 }
 
-func (ec *executionContext) unmarshalOContentType2ᚖgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐContentType(ctx context.Context, v any) (*model.ContentType, error) {
+func (ec *executionContext) unmarshalOContentType2ᚖgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐContentType(ctx context.Context, v any) (*model.ContentType, error) {
 	if v == nil {
 		return nil, nil
 	}
@@ -25449,7 +25510,7 @@ func (ec *executionContext) unmarshalOContentType2ᚖgithubᚗcomᚋspencernorto
 	return &res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalOContentType2ᚖgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐContentType(ctx context.Context, sel ast.SelectionSet, v *model.ContentType) graphql.Marshaler {
+func (ec *executionContext) marshalOContentType2ᚖgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐContentType(ctx context.Context, sel ast.SelectionSet, v *model.ContentType) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}
@@ -25457,7 +25518,7 @@ func (ec *executionContext) marshalOContentType2ᚖgithubᚗcomᚋspencernorton�
 	return res
 }
 
-func (ec *executionContext) marshalOContentTypeAgg2ᚕgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐContentTypeAggᚄ(ctx context.Context, sel ast.SelectionSet, v []gen.ContentTypeAgg) graphql.Marshaler {
+func (ec *executionContext) marshalOContentTypeAgg2ᚕgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐContentTypeAggᚄ(ctx context.Context, sel ast.SelectionSet, v []gen.ContentTypeAgg) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}
@@ -25484,7 +25545,7 @@ func (ec *executionContext) marshalOContentTypeAgg2ᚕgithubᚗcomᚋspencernort
 			if !isLen1 {
 				defer wg.Done()
 			}
-			ret[i] = ec.marshalNContentTypeAgg2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐContentTypeAgg(ctx, sel, v[i])
+			ret[i] = ec.marshalNContentTypeAgg2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐContentTypeAgg(ctx, sel, v[i])
 		}
 		if isLen1 {
 			f(i)
@@ -25504,7 +25565,7 @@ func (ec *executionContext) marshalOContentTypeAgg2ᚕgithubᚗcomᚋspencernort
 	return ret
 }
 
-func (ec *executionContext) unmarshalOContentTypeFacetInput2ᚖgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐContentTypeFacetInput(ctx context.Context, v any) (*gen.ContentTypeFacetInput, error) {
+func (ec *executionContext) unmarshalOContentTypeFacetInput2ᚖgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐContentTypeFacetInput(ctx context.Context, v any) (*gen.ContentTypeFacetInput, error) {
 	if v == nil {
 		return nil, nil
 	}
@@ -25512,13 +25573,13 @@ func (ec *executionContext) unmarshalOContentTypeFacetInput2ᚖgithubᚗcomᚋsp
 	return &res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) unmarshalODate2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐDate(ctx context.Context, v any) (model.Date, error) {
+func (ec *executionContext) unmarshalODate2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐDate(ctx context.Context, v any) (model.Date, error) {
 	var res model.Date
 	err := res.UnmarshalGQL(v)
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalODate2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐDate(ctx context.Context, sel ast.SelectionSet, v model.Date) graphql.Marshaler {
+func (ec *executionContext) marshalODate2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐDate(ctx context.Context, sel ast.SelectionSet, v model.Date) graphql.Marshaler {
 	return v
 }
 
@@ -25564,24 +25625,24 @@ func (ec *executionContext) marshalODuration2ᚖtimeᚐDuration(ctx context.Cont
 	return res
 }
 
-func (ec *executionContext) unmarshalOEnglishAudio2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐNullEnglishAudio(ctx context.Context, v any) (model.NullEnglishAudio, error) {
+func (ec *executionContext) unmarshalOEnglishAudio2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐNullEnglishAudio(ctx context.Context, v any) (model.NullEnglishAudio, error) {
 	var res model.NullEnglishAudio
 	err := res.UnmarshalGQL(v)
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalOEnglishAudio2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐNullEnglishAudio(ctx context.Context, sel ast.SelectionSet, v model.NullEnglishAudio) graphql.Marshaler {
+func (ec *executionContext) marshalOEnglishAudio2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐNullEnglishAudio(ctx context.Context, sel ast.SelectionSet, v model.NullEnglishAudio) graphql.Marshaler {
 	return v
 }
 
-func (ec *executionContext) marshalOEpisodes2ᚖgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚐEpisodes(ctx context.Context, sel ast.SelectionSet, v *gqlmodel.Episodes) graphql.Marshaler {
+func (ec *executionContext) marshalOEpisodes2ᚖgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚐEpisodes(ctx context.Context, sel ast.SelectionSet, v *gqlmodel.Episodes) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}
 	return ec._Episodes(ctx, sel, v)
 }
 
-func (ec *executionContext) unmarshalOFacetLogic2ᚖgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐFacetLogic(ctx context.Context, v any) (*model.FacetLogic, error) {
+func (ec *executionContext) unmarshalOFacetLogic2ᚖgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐFacetLogic(ctx context.Context, v any) (*model.FacetLogic, error) {
 	if v == nil {
 		return nil, nil
 	}
@@ -25590,7 +25651,7 @@ func (ec *executionContext) unmarshalOFacetLogic2ᚖgithubᚗcomᚋspencernorton
 	return &res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalOFacetLogic2ᚖgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐFacetLogic(ctx context.Context, sel ast.SelectionSet, v *model.FacetLogic) graphql.Marshaler {
+func (ec *executionContext) marshalOFacetLogic2ᚖgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐFacetLogic(ctx context.Context, sel ast.SelectionSet, v *model.FacetLogic) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}
@@ -25598,17 +25659,17 @@ func (ec *executionContext) marshalOFacetLogic2ᚖgithubᚗcomᚋspencernorton�
 	return res
 }
 
-func (ec *executionContext) unmarshalOFileType2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐNullFileType(ctx context.Context, v any) (model.NullFileType, error) {
+func (ec *executionContext) unmarshalOFileType2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐNullFileType(ctx context.Context, v any) (model.NullFileType, error) {
 	var res model.NullFileType
 	err := res.UnmarshalGQL(v)
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalOFileType2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐNullFileType(ctx context.Context, sel ast.SelectionSet, v model.NullFileType) graphql.Marshaler {
+func (ec *executionContext) marshalOFileType2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐNullFileType(ctx context.Context, sel ast.SelectionSet, v model.NullFileType) graphql.Marshaler {
 	return v
 }
 
-func (ec *executionContext) unmarshalOFileType2ᚕgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐFileTypeᚄ(ctx context.Context, v any) ([]model.FileType, error) {
+func (ec *executionContext) unmarshalOFileType2ᚕgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐFileTypeᚄ(ctx context.Context, v any) ([]model.FileType, error) {
 	if v == nil {
 		return nil, nil
 	}
@@ -25620,7 +25681,7 @@ func (ec *executionContext) unmarshalOFileType2ᚕgithubᚗcomᚋspencernorton�
 	res := make([]model.FileType, len(vSlice))
 	for i := range vSlice {
 		ctx := graphql.WithPathContext(ctx, graphql.NewPathWithIndex(i))
-		res[i], err = ec.unmarshalNFileType2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐFileType(ctx, vSlice[i])
+		res[i], err = ec.unmarshalNFileType2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐFileType(ctx, vSlice[i])
 		if err != nil {
 			return nil, err
 		}
@@ -25628,7 +25689,7 @@ func (ec *executionContext) unmarshalOFileType2ᚕgithubᚗcomᚋspencernorton�
 	return res, nil
 }
 
-func (ec *executionContext) marshalOFileType2ᚕgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐFileTypeᚄ(ctx context.Context, sel ast.SelectionSet, v []model.FileType) graphql.Marshaler {
+func (ec *executionContext) marshalOFileType2ᚕgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐFileTypeᚄ(ctx context.Context, sel ast.SelectionSet, v []model.FileType) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}
@@ -25655,7 +25716,7 @@ func (ec *executionContext) marshalOFileType2ᚕgithubᚗcomᚋspencernortonᚋd
 			if !isLen1 {
 				defer wg.Done()
 			}
-			ret[i] = ec.marshalNFileType2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐFileType(ctx, sel, v[i])
+			ret[i] = ec.marshalNFileType2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐFileType(ctx, sel, v[i])
 		}
 		if isLen1 {
 			f(i)
@@ -25675,27 +25736,27 @@ func (ec *executionContext) marshalOFileType2ᚕgithubᚗcomᚋspencernortonᚋd
 	return ret
 }
 
-func (ec *executionContext) unmarshalOFloat2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐNullFloat32(ctx context.Context, v any) (model.NullFloat32, error) {
+func (ec *executionContext) unmarshalOFloat2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐNullFloat32(ctx context.Context, v any) (model.NullFloat32, error) {
 	var res model.NullFloat32
 	err := res.UnmarshalGQL(v)
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalOFloat2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐNullFloat32(ctx context.Context, sel ast.SelectionSet, v model.NullFloat32) graphql.Marshaler {
+func (ec *executionContext) marshalOFloat2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐNullFloat32(ctx context.Context, sel ast.SelectionSet, v model.NullFloat32) graphql.Marshaler {
 	return v
 }
 
-func (ec *executionContext) unmarshalOFloat2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐNullFloat64(ctx context.Context, v any) (model.NullFloat64, error) {
+func (ec *executionContext) unmarshalOFloat2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐNullFloat64(ctx context.Context, v any) (model.NullFloat64, error) {
 	var res model.NullFloat64
 	err := res.UnmarshalGQL(v)
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalOFloat2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐNullFloat64(ctx context.Context, sel ast.SelectionSet, v model.NullFloat64) graphql.Marshaler {
+func (ec *executionContext) marshalOFloat2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐNullFloat64(ctx context.Context, sel ast.SelectionSet, v model.NullFloat64) graphql.Marshaler {
 	return v
 }
 
-func (ec *executionContext) marshalOGenreAgg2ᚕgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐGenreAggᚄ(ctx context.Context, sel ast.SelectionSet, v []gen.GenreAgg) graphql.Marshaler {
+func (ec *executionContext) marshalOGenreAgg2ᚕgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐGenreAggᚄ(ctx context.Context, sel ast.SelectionSet, v []gen.GenreAgg) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}
@@ -25722,7 +25783,7 @@ func (ec *executionContext) marshalOGenreAgg2ᚕgithubᚗcomᚋspencernortonᚋd
 			if !isLen1 {
 				defer wg.Done()
 			}
-			ret[i] = ec.marshalNGenreAgg2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐGenreAgg(ctx, sel, v[i])
+			ret[i] = ec.marshalNGenreAgg2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐGenreAgg(ctx, sel, v[i])
 		}
 		if isLen1 {
 			f(i)
@@ -25742,7 +25803,7 @@ func (ec *executionContext) marshalOGenreAgg2ᚕgithubᚗcomᚋspencernortonᚋd
 	return ret
 }
 
-func (ec *executionContext) unmarshalOGenreFacetInput2ᚖgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐGenreFacetInput(ctx context.Context, v any) (*gen.GenreFacetInput, error) {
+func (ec *executionContext) unmarshalOGenreFacetInput2ᚖgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐGenreFacetInput(ctx context.Context, v any) (*gen.GenreFacetInput, error) {
 	if v == nil {
 		return nil, nil
 	}
@@ -25750,7 +25811,7 @@ func (ec *executionContext) unmarshalOGenreFacetInput2ᚖgithubᚗcomᚋspencern
 	return &res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) unmarshalOHash202ᚕgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋprotocolᚐIDᚄ(ctx context.Context, v any) ([]protocol.ID, error) {
+func (ec *executionContext) unmarshalOHash202ᚕgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋprotocolᚐIDᚄ(ctx context.Context, v any) ([]protocol.ID, error) {
 	if v == nil {
 		return nil, nil
 	}
@@ -25762,7 +25823,7 @@ func (ec *executionContext) unmarshalOHash202ᚕgithubᚗcomᚋspencernortonᚋd
 	res := make([]protocol.ID, len(vSlice))
 	for i := range vSlice {
 		ctx := graphql.WithPathContext(ctx, graphql.NewPathWithIndex(i))
-		res[i], err = ec.unmarshalNHash202githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋprotocolᚐID(ctx, vSlice[i])
+		res[i], err = ec.unmarshalNHash202githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋprotocolᚐID(ctx, vSlice[i])
 		if err != nil {
 			return nil, err
 		}
@@ -25770,13 +25831,13 @@ func (ec *executionContext) unmarshalOHash202ᚕgithubᚗcomᚋspencernortonᚋd
 	return res, nil
 }
 
-func (ec *executionContext) marshalOHash202ᚕgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋprotocolᚐIDᚄ(ctx context.Context, sel ast.SelectionSet, v []protocol.ID) graphql.Marshaler {
+func (ec *executionContext) marshalOHash202ᚕgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋprotocolᚐIDᚄ(ctx context.Context, sel ast.SelectionSet, v []protocol.ID) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}
 	ret := make(graphql.Array, len(v))
 	for i := range v {
-		ret[i] = ec.marshalNHash202githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋprotocolᚐID(ctx, sel, v[i])
+		ret[i] = ec.marshalNHash202githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋprotocolᚐID(ctx, sel, v[i])
 	}
 
 	for _, e := range ret {
@@ -25788,7 +25849,7 @@ func (ec *executionContext) marshalOHash202ᚕgithubᚗcomᚋspencernortonᚋdhw
 	return ret
 }
 
-func (ec *executionContext) unmarshalOHash202ᚖgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋprotocolᚐID(ctx context.Context, v any) (*protocol.ID, error) {
+func (ec *executionContext) unmarshalOHash202ᚖgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋprotocolᚐID(ctx context.Context, v any) (*protocol.ID, error) {
 	if v == nil {
 		return nil, nil
 	}
@@ -25797,30 +25858,30 @@ func (ec *executionContext) unmarshalOHash202ᚖgithubᚗcomᚋspencernortonᚋd
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalOHash202ᚖgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋprotocolᚐID(ctx context.Context, sel ast.SelectionSet, v *protocol.ID) graphql.Marshaler {
+func (ec *executionContext) marshalOHash202ᚖgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋprotocolᚐID(ctx context.Context, sel ast.SelectionSet, v *protocol.ID) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}
 	return v
 }
 
-func (ec *executionContext) unmarshalOInt2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐNullUint(ctx context.Context, v any) (model.NullUint, error) {
+func (ec *executionContext) unmarshalOInt2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐNullUint(ctx context.Context, v any) (model.NullUint, error) {
 	var res model.NullUint
 	err := res.UnmarshalGQL(v)
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalOInt2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐNullUint(ctx context.Context, sel ast.SelectionSet, v model.NullUint) graphql.Marshaler {
+func (ec *executionContext) marshalOInt2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐNullUint(ctx context.Context, sel ast.SelectionSet, v model.NullUint) graphql.Marshaler {
 	return v
 }
 
-func (ec *executionContext) unmarshalOInt2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐNullUint16(ctx context.Context, v any) (model.NullUint16, error) {
+func (ec *executionContext) unmarshalOInt2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐNullUint16(ctx context.Context, v any) (model.NullUint16, error) {
 	var res model.NullUint16
 	err := res.UnmarshalGQL(v)
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalOInt2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐNullUint16(ctx context.Context, sel ast.SelectionSet, v model.NullUint16) graphql.Marshaler {
+func (ec *executionContext) marshalOInt2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐNullUint16(ctx context.Context, sel ast.SelectionSet, v model.NullUint16) graphql.Marshaler {
 	return v
 }
 
@@ -25872,7 +25933,7 @@ func (ec *executionContext) marshalOInt2ᚕintᚄ(ctx context.Context, sel ast.S
 	return ret
 }
 
-func (ec *executionContext) unmarshalOLanguage2ᚕgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐLanguageᚄ(ctx context.Context, v any) ([]model.Language, error) {
+func (ec *executionContext) unmarshalOLanguage2ᚕgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐLanguageᚄ(ctx context.Context, v any) ([]model.Language, error) {
 	if v == nil {
 		return nil, nil
 	}
@@ -25884,7 +25945,7 @@ func (ec *executionContext) unmarshalOLanguage2ᚕgithubᚗcomᚋspencernorton�
 	res := make([]model.Language, len(vSlice))
 	for i := range vSlice {
 		ctx := graphql.WithPathContext(ctx, graphql.NewPathWithIndex(i))
-		res[i], err = ec.unmarshalNLanguage2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐLanguage(ctx, vSlice[i])
+		res[i], err = ec.unmarshalNLanguage2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐLanguage(ctx, vSlice[i])
 		if err != nil {
 			return nil, err
 		}
@@ -25892,7 +25953,7 @@ func (ec *executionContext) unmarshalOLanguage2ᚕgithubᚗcomᚋspencernorton�
 	return res, nil
 }
 
-func (ec *executionContext) marshalOLanguage2ᚕgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐLanguageᚄ(ctx context.Context, sel ast.SelectionSet, v []model.Language) graphql.Marshaler {
+func (ec *executionContext) marshalOLanguage2ᚕgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐLanguageᚄ(ctx context.Context, sel ast.SelectionSet, v []model.Language) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}
@@ -25919,7 +25980,7 @@ func (ec *executionContext) marshalOLanguage2ᚕgithubᚗcomᚋspencernortonᚋd
 			if !isLen1 {
 				defer wg.Done()
 			}
-			ret[i] = ec.marshalNLanguage2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐLanguage(ctx, sel, v[i])
+			ret[i] = ec.marshalNLanguage2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐLanguage(ctx, sel, v[i])
 		}
 		if isLen1 {
 			f(i)
@@ -25939,7 +26000,7 @@ func (ec *executionContext) marshalOLanguage2ᚕgithubᚗcomᚋspencernortonᚋd
 	return ret
 }
 
-func (ec *executionContext) marshalOLanguageAgg2ᚕgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐLanguageAggᚄ(ctx context.Context, sel ast.SelectionSet, v []gen.LanguageAgg) graphql.Marshaler {
+func (ec *executionContext) marshalOLanguageAgg2ᚕgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐLanguageAggᚄ(ctx context.Context, sel ast.SelectionSet, v []gen.LanguageAgg) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}
@@ -25966,7 +26027,7 @@ func (ec *executionContext) marshalOLanguageAgg2ᚕgithubᚗcomᚋspencernorton�
 			if !isLen1 {
 				defer wg.Done()
 			}
-			ret[i] = ec.marshalNLanguageAgg2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐLanguageAgg(ctx, sel, v[i])
+			ret[i] = ec.marshalNLanguageAgg2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐLanguageAgg(ctx, sel, v[i])
 		}
 		if isLen1 {
 			f(i)
@@ -25986,7 +26047,7 @@ func (ec *executionContext) marshalOLanguageAgg2ᚕgithubᚗcomᚋspencernorton�
 	return ret
 }
 
-func (ec *executionContext) unmarshalOLanguageFacetInput2ᚖgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐLanguageFacetInput(ctx context.Context, v any) (*gen.LanguageFacetInput, error) {
+func (ec *executionContext) unmarshalOLanguageFacetInput2ᚖgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐLanguageFacetInput(ctx context.Context, v any) (*gen.LanguageFacetInput, error) {
 	if v == nil {
 		return nil, nil
 	}
@@ -25994,7 +26055,7 @@ func (ec *executionContext) unmarshalOLanguageFacetInput2ᚖgithubᚗcomᚋspenc
 	return &res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalOLanguageInfo2ᚕgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐLanguageᚄ(ctx context.Context, sel ast.SelectionSet, v []model.Language) graphql.Marshaler {
+func (ec *executionContext) marshalOLanguageInfo2ᚕgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐLanguageᚄ(ctx context.Context, sel ast.SelectionSet, v []model.Language) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}
@@ -26021,7 +26082,7 @@ func (ec *executionContext) marshalOLanguageInfo2ᚕgithubᚗcomᚋspencernorton
 			if !isLen1 {
 				defer wg.Done()
 			}
-			ret[i] = ec.marshalNLanguageInfo2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐLanguage(ctx, sel, v[i])
+			ret[i] = ec.marshalNLanguageInfo2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐLanguage(ctx, sel, v[i])
 		}
 		if isLen1 {
 			f(i)
@@ -26041,19 +26102,19 @@ func (ec *executionContext) marshalOLanguageInfo2ᚕgithubᚗcomᚋspencernorton
 	return ret
 }
 
-func (ec *executionContext) marshalOLanguageInfo2ᚖgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐLanguage(ctx context.Context, sel ast.SelectionSet, v *model.Language) graphql.Marshaler {
+func (ec *executionContext) marshalOLanguageInfo2ᚖgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐLanguage(ctx context.Context, sel ast.SelectionSet, v *model.Language) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}
 	return ec._LanguageInfo(ctx, sel, v)
 }
 
-func (ec *executionContext) unmarshalOQueueEnqueueReprocessTorrentsBatchInput2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋqueueᚋmanagerᚐEnqueueReprocessTorrentsBatchRequest(ctx context.Context, v any) (manager.EnqueueReprocessTorrentsBatchRequest, error) {
+func (ec *executionContext) unmarshalOQueueEnqueueReprocessTorrentsBatchInput2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋqueueᚋmanagerᚐEnqueueReprocessTorrentsBatchRequest(ctx context.Context, v any) (manager.EnqueueReprocessTorrentsBatchRequest, error) {
 	res, err := ec.unmarshalInputQueueEnqueueReprocessTorrentsBatchInput(ctx, v)
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) unmarshalOQueueEnqueueReprocessTorrentsBatchInput2ᚖgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋqueueᚋmanagerᚐEnqueueReprocessTorrentsBatchRequest(ctx context.Context, v any) (*manager.EnqueueReprocessTorrentsBatchRequest, error) {
+func (ec *executionContext) unmarshalOQueueEnqueueReprocessTorrentsBatchInput2ᚖgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋqueueᚋmanagerᚐEnqueueReprocessTorrentsBatchRequest(ctx context.Context, v any) (*manager.EnqueueReprocessTorrentsBatchRequest, error) {
 	if v == nil {
 		return nil, nil
 	}
@@ -26061,7 +26122,7 @@ func (ec *executionContext) unmarshalOQueueEnqueueReprocessTorrentsBatchInput2�
 	return &res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalOQueueJobQueueAgg2ᚕgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐQueueJobQueueAggᚄ(ctx context.Context, sel ast.SelectionSet, v []gen.QueueJobQueueAgg) graphql.Marshaler {
+func (ec *executionContext) marshalOQueueJobQueueAgg2ᚕgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐQueueJobQueueAggᚄ(ctx context.Context, sel ast.SelectionSet, v []gen.QueueJobQueueAgg) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}
@@ -26088,7 +26149,7 @@ func (ec *executionContext) marshalOQueueJobQueueAgg2ᚕgithubᚗcomᚋspencerno
 			if !isLen1 {
 				defer wg.Done()
 			}
-			ret[i] = ec.marshalNQueueJobQueueAgg2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐQueueJobQueueAgg(ctx, sel, v[i])
+			ret[i] = ec.marshalNQueueJobQueueAgg2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐQueueJobQueueAgg(ctx, sel, v[i])
 		}
 		if isLen1 {
 			f(i)
@@ -26108,7 +26169,7 @@ func (ec *executionContext) marshalOQueueJobQueueAgg2ᚕgithubᚗcomᚋspencerno
 	return ret
 }
 
-func (ec *executionContext) unmarshalOQueueJobQueueFacetInput2ᚖgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐQueueJobQueueFacetInput(ctx context.Context, v any) (*gen.QueueJobQueueFacetInput, error) {
+func (ec *executionContext) unmarshalOQueueJobQueueFacetInput2ᚖgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐQueueJobQueueFacetInput(ctx context.Context, v any) (*gen.QueueJobQueueFacetInput, error) {
 	if v == nil {
 		return nil, nil
 	}
@@ -26116,7 +26177,7 @@ func (ec *executionContext) unmarshalOQueueJobQueueFacetInput2ᚖgithubᚗcomᚋ
 	return &res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) unmarshalOQueueJobStatus2ᚕgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐQueueJobStatusᚄ(ctx context.Context, v any) ([]model.QueueJobStatus, error) {
+func (ec *executionContext) unmarshalOQueueJobStatus2ᚕgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐQueueJobStatusᚄ(ctx context.Context, v any) ([]model.QueueJobStatus, error) {
 	if v == nil {
 		return nil, nil
 	}
@@ -26128,7 +26189,7 @@ func (ec *executionContext) unmarshalOQueueJobStatus2ᚕgithubᚗcomᚋspencerno
 	res := make([]model.QueueJobStatus, len(vSlice))
 	for i := range vSlice {
 		ctx := graphql.WithPathContext(ctx, graphql.NewPathWithIndex(i))
-		res[i], err = ec.unmarshalNQueueJobStatus2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐQueueJobStatus(ctx, vSlice[i])
+		res[i], err = ec.unmarshalNQueueJobStatus2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐQueueJobStatus(ctx, vSlice[i])
 		if err != nil {
 			return nil, err
 		}
@@ -26136,7 +26197,7 @@ func (ec *executionContext) unmarshalOQueueJobStatus2ᚕgithubᚗcomᚋspencerno
 	return res, nil
 }
 
-func (ec *executionContext) marshalOQueueJobStatus2ᚕgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐQueueJobStatusᚄ(ctx context.Context, sel ast.SelectionSet, v []model.QueueJobStatus) graphql.Marshaler {
+func (ec *executionContext) marshalOQueueJobStatus2ᚕgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐQueueJobStatusᚄ(ctx context.Context, sel ast.SelectionSet, v []model.QueueJobStatus) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}
@@ -26163,7 +26224,7 @@ func (ec *executionContext) marshalOQueueJobStatus2ᚕgithubᚗcomᚋspencernort
 			if !isLen1 {
 				defer wg.Done()
 			}
-			ret[i] = ec.marshalNQueueJobStatus2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐQueueJobStatus(ctx, sel, v[i])
+			ret[i] = ec.marshalNQueueJobStatus2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐQueueJobStatus(ctx, sel, v[i])
 		}
 		if isLen1 {
 			f(i)
@@ -26183,7 +26244,7 @@ func (ec *executionContext) marshalOQueueJobStatus2ᚕgithubᚗcomᚋspencernort
 	return ret
 }
 
-func (ec *executionContext) marshalOQueueJobStatusAgg2ᚕgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐQueueJobStatusAggᚄ(ctx context.Context, sel ast.SelectionSet, v []gen.QueueJobStatusAgg) graphql.Marshaler {
+func (ec *executionContext) marshalOQueueJobStatusAgg2ᚕgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐQueueJobStatusAggᚄ(ctx context.Context, sel ast.SelectionSet, v []gen.QueueJobStatusAgg) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}
@@ -26210,7 +26271,7 @@ func (ec *executionContext) marshalOQueueJobStatusAgg2ᚕgithubᚗcomᚋspencern
 			if !isLen1 {
 				defer wg.Done()
 			}
-			ret[i] = ec.marshalNQueueJobStatusAgg2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐQueueJobStatusAgg(ctx, sel, v[i])
+			ret[i] = ec.marshalNQueueJobStatusAgg2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐQueueJobStatusAgg(ctx, sel, v[i])
 		}
 		if isLen1 {
 			f(i)
@@ -26230,7 +26291,7 @@ func (ec *executionContext) marshalOQueueJobStatusAgg2ᚕgithubᚗcomᚋspencern
 	return ret
 }
 
-func (ec *executionContext) unmarshalOQueueJobStatusFacetInput2ᚖgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐQueueJobStatusFacetInput(ctx context.Context, v any) (*gen.QueueJobStatusFacetInput, error) {
+func (ec *executionContext) unmarshalOQueueJobStatusFacetInput2ᚖgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐQueueJobStatusFacetInput(ctx context.Context, v any) (*gen.QueueJobStatusFacetInput, error) {
 	if v == nil {
 		return nil, nil
 	}
@@ -26238,7 +26299,7 @@ func (ec *executionContext) unmarshalOQueueJobStatusFacetInput2ᚖgithubᚗcom�
 	return &res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) unmarshalOQueueJobsFacetsInput2ᚖgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐQueueJobsFacetsInput(ctx context.Context, v any) (*gen.QueueJobsFacetsInput, error) {
+func (ec *executionContext) unmarshalOQueueJobsFacetsInput2ᚖgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐQueueJobsFacetsInput(ctx context.Context, v any) (*gen.QueueJobsFacetsInput, error) {
 	if v == nil {
 		return nil, nil
 	}
@@ -26246,7 +26307,7 @@ func (ec *executionContext) unmarshalOQueueJobsFacetsInput2ᚖgithubᚗcomᚋspe
 	return &res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) unmarshalOQueueJobsOrderByInput2ᚕgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐQueueJobsOrderByInputᚄ(ctx context.Context, v any) ([]gen.QueueJobsOrderByInput, error) {
+func (ec *executionContext) unmarshalOQueueJobsOrderByInput2ᚕgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐQueueJobsOrderByInputᚄ(ctx context.Context, v any) ([]gen.QueueJobsOrderByInput, error) {
 	if v == nil {
 		return nil, nil
 	}
@@ -26258,7 +26319,7 @@ func (ec *executionContext) unmarshalOQueueJobsOrderByInput2ᚕgithubᚗcomᚋsp
 	res := make([]gen.QueueJobsOrderByInput, len(vSlice))
 	for i := range vSlice {
 		ctx := graphql.WithPathContext(ctx, graphql.NewPathWithIndex(i))
-		res[i], err = ec.unmarshalNQueueJobsOrderByInput2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐQueueJobsOrderByInput(ctx, vSlice[i])
+		res[i], err = ec.unmarshalNQueueJobsOrderByInput2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐQueueJobsOrderByInput(ctx, vSlice[i])
 		if err != nil {
 			return nil, err
 		}
@@ -26266,14 +26327,14 @@ func (ec *executionContext) unmarshalOQueueJobsOrderByInput2ᚕgithubᚗcomᚋsp
 	return res, nil
 }
 
-func (ec *executionContext) marshalOReleaseAttributes2ᚖgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐReleaseAttributes(ctx context.Context, sel ast.SelectionSet, v *model.ReleaseAttributes) graphql.Marshaler {
+func (ec *executionContext) marshalOReleaseAttributes2ᚖgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐReleaseAttributes(ctx context.Context, sel ast.SelectionSet, v *model.ReleaseAttributes) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}
 	return ec._ReleaseAttributes(ctx, sel, v)
 }
 
-func (ec *executionContext) unmarshalOReleaseAttributesFilterInput2ᚖgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚐReleaseAttributesFilterInput(ctx context.Context, v any) (*gqlmodel.ReleaseAttributesFilterInput, error) {
+func (ec *executionContext) unmarshalOReleaseAttributesFilterInput2ᚖgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚐReleaseAttributesFilterInput(ctx context.Context, v any) (*gqlmodel.ReleaseAttributesFilterInput, error) {
 	if v == nil {
 		return nil, nil
 	}
@@ -26281,7 +26342,7 @@ func (ec *executionContext) unmarshalOReleaseAttributesFilterInput2ᚖgithubᚗc
 	return &res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalOReleaseYearAgg2ᚕgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐReleaseYearAggᚄ(ctx context.Context, sel ast.SelectionSet, v []gen.ReleaseYearAgg) graphql.Marshaler {
+func (ec *executionContext) marshalOReleaseYearAgg2ᚕgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐReleaseYearAggᚄ(ctx context.Context, sel ast.SelectionSet, v []gen.ReleaseYearAgg) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}
@@ -26308,7 +26369,7 @@ func (ec *executionContext) marshalOReleaseYearAgg2ᚕgithubᚗcomᚋspencernort
 			if !isLen1 {
 				defer wg.Done()
 			}
-			ret[i] = ec.marshalNReleaseYearAgg2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐReleaseYearAgg(ctx, sel, v[i])
+			ret[i] = ec.marshalNReleaseYearAgg2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐReleaseYearAgg(ctx, sel, v[i])
 		}
 		if isLen1 {
 			f(i)
@@ -26328,7 +26389,7 @@ func (ec *executionContext) marshalOReleaseYearAgg2ᚕgithubᚗcomᚋspencernort
 	return ret
 }
 
-func (ec *executionContext) unmarshalOReleaseYearFacetInput2ᚖgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐReleaseYearFacetInput(ctx context.Context, v any) (*gen.ReleaseYearFacetInput, error) {
+func (ec *executionContext) unmarshalOReleaseYearFacetInput2ᚖgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐReleaseYearFacetInput(ctx context.Context, v any) (*gen.ReleaseYearFacetInput, error) {
 	if v == nil {
 		return nil, nil
 	}
@@ -26336,13 +26397,13 @@ func (ec *executionContext) unmarshalOReleaseYearFacetInput2ᚖgithubᚗcomᚋsp
 	return &res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) unmarshalOString2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐNullString(ctx context.Context, v any) (model.NullString, error) {
+func (ec *executionContext) unmarshalOString2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐNullString(ctx context.Context, v any) (model.NullString, error) {
 	var res model.NullString
 	err := res.UnmarshalGQL(v)
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalOString2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐNullString(ctx context.Context, sel ast.SelectionSet, v model.NullString) graphql.Marshaler {
+func (ec *executionContext) marshalOString2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐNullString(ctx context.Context, sel ast.SelectionSet, v model.NullString) graphql.Marshaler {
 	return v
 }
 
@@ -26410,7 +26471,7 @@ func (ec *executionContext) marshalOString2ᚖstring(ctx context.Context, sel as
 	return res
 }
 
-func (ec *executionContext) unmarshalOSuggestTagsQueryInput2ᚖgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐSuggestTagsQueryInput(ctx context.Context, v any) (*gen.SuggestTagsQueryInput, error) {
+func (ec *executionContext) unmarshalOSuggestTagsQueryInput2ᚖgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐSuggestTagsQueryInput(ctx context.Context, v any) (*gen.SuggestTagsQueryInput, error) {
 	if v == nil {
 		return nil, nil
 	}
@@ -26418,7 +26479,7 @@ func (ec *executionContext) unmarshalOSuggestTagsQueryInput2ᚖgithubᚗcomᚋsp
 	return &res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) unmarshalOTorrentContentFacetsInput2ᚖgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐTorrentContentFacetsInput(ctx context.Context, v any) (*gen.TorrentContentFacetsInput, error) {
+func (ec *executionContext) unmarshalOTorrentContentFacetsInput2ᚖgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐTorrentContentFacetsInput(ctx context.Context, v any) (*gen.TorrentContentFacetsInput, error) {
 	if v == nil {
 		return nil, nil
 	}
@@ -26426,7 +26487,15 @@ func (ec *executionContext) unmarshalOTorrentContentFacetsInput2ᚖgithubᚗcom�
 	return &res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) unmarshalOTorrentContentOrderByInput2ᚕgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐTorrentContentOrderByInputᚄ(ctx context.Context, v any) ([]gen.TorrentContentOrderByInput, error) {
+func (ec *executionContext) unmarshalOTorrentContentIdentityInput2ᚖgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚐTorrentContentIdentityInput(ctx context.Context, v any) (*gqlmodel.TorrentContentIdentityInput, error) {
+	if v == nil {
+		return nil, nil
+	}
+	res, err := ec.unmarshalInputTorrentContentIdentityInput(ctx, v)
+	return &res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) unmarshalOTorrentContentOrderByInput2ᚕgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐTorrentContentOrderByInputᚄ(ctx context.Context, v any) ([]gen.TorrentContentOrderByInput, error) {
 	if v == nil {
 		return nil, nil
 	}
@@ -26438,7 +26507,7 @@ func (ec *executionContext) unmarshalOTorrentContentOrderByInput2ᚕgithubᚗcom
 	res := make([]gen.TorrentContentOrderByInput, len(vSlice))
 	for i := range vSlice {
 		ctx := graphql.WithPathContext(ctx, graphql.NewPathWithIndex(i))
-		res[i], err = ec.unmarshalNTorrentContentOrderByInput2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐTorrentContentOrderByInput(ctx, vSlice[i])
+		res[i], err = ec.unmarshalNTorrentContentOrderByInput2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐTorrentContentOrderByInput(ctx, vSlice[i])
 		if err != nil {
 			return nil, err
 		}
@@ -26446,7 +26515,7 @@ func (ec *executionContext) unmarshalOTorrentContentOrderByInput2ᚕgithubᚗcom
 	return res, nil
 }
 
-func (ec *executionContext) marshalOTorrentFile2ᚕgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐTorrentFileᚄ(ctx context.Context, sel ast.SelectionSet, v []model.TorrentFile) graphql.Marshaler {
+func (ec *executionContext) marshalOTorrentFile2ᚕgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐTorrentFileᚄ(ctx context.Context, sel ast.SelectionSet, v []model.TorrentFile) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}
@@ -26473,7 +26542,7 @@ func (ec *executionContext) marshalOTorrentFile2ᚕgithubᚗcomᚋspencernorton�
 			if !isLen1 {
 				defer wg.Done()
 			}
-			ret[i] = ec.marshalNTorrentFile2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐTorrentFile(ctx, sel, v[i])
+			ret[i] = ec.marshalNTorrentFile2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐTorrentFile(ctx, sel, v[i])
 		}
 		if isLen1 {
 			f(i)
@@ -26493,7 +26562,7 @@ func (ec *executionContext) marshalOTorrentFile2ᚕgithubᚗcomᚋspencernorton�
 	return ret
 }
 
-func (ec *executionContext) marshalOTorrentFileTypeAgg2ᚕgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐTorrentFileTypeAggᚄ(ctx context.Context, sel ast.SelectionSet, v []gen.TorrentFileTypeAgg) graphql.Marshaler {
+func (ec *executionContext) marshalOTorrentFileTypeAgg2ᚕgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐTorrentFileTypeAggᚄ(ctx context.Context, sel ast.SelectionSet, v []gen.TorrentFileTypeAgg) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}
@@ -26520,7 +26589,7 @@ func (ec *executionContext) marshalOTorrentFileTypeAgg2ᚕgithubᚗcomᚋspencer
 			if !isLen1 {
 				defer wg.Done()
 			}
-			ret[i] = ec.marshalNTorrentFileTypeAgg2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐTorrentFileTypeAgg(ctx, sel, v[i])
+			ret[i] = ec.marshalNTorrentFileTypeAgg2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐTorrentFileTypeAgg(ctx, sel, v[i])
 		}
 		if isLen1 {
 			f(i)
@@ -26540,7 +26609,7 @@ func (ec *executionContext) marshalOTorrentFileTypeAgg2ᚕgithubᚗcomᚋspencer
 	return ret
 }
 
-func (ec *executionContext) unmarshalOTorrentFileTypeFacetInput2ᚖgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐTorrentFileTypeFacetInput(ctx context.Context, v any) (*gen.TorrentFileTypeFacetInput, error) {
+func (ec *executionContext) unmarshalOTorrentFileTypeFacetInput2ᚖgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐTorrentFileTypeFacetInput(ctx context.Context, v any) (*gen.TorrentFileTypeFacetInput, error) {
 	if v == nil {
 		return nil, nil
 	}
@@ -26548,7 +26617,7 @@ func (ec *executionContext) unmarshalOTorrentFileTypeFacetInput2ᚖgithubᚗcom�
 	return &res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) unmarshalOTorrentFilesOrderByInput2ᚕgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐTorrentFilesOrderByInputᚄ(ctx context.Context, v any) ([]gen.TorrentFilesOrderByInput, error) {
+func (ec *executionContext) unmarshalOTorrentFilesOrderByInput2ᚕgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐTorrentFilesOrderByInputᚄ(ctx context.Context, v any) ([]gen.TorrentFilesOrderByInput, error) {
 	if v == nil {
 		return nil, nil
 	}
@@ -26560,7 +26629,7 @@ func (ec *executionContext) unmarshalOTorrentFilesOrderByInput2ᚕgithubᚗcom�
 	res := make([]gen.TorrentFilesOrderByInput, len(vSlice))
 	for i := range vSlice {
 		ctx := graphql.WithPathContext(ctx, graphql.NewPathWithIndex(i))
-		res[i], err = ec.unmarshalNTorrentFilesOrderByInput2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐTorrentFilesOrderByInput(ctx, vSlice[i])
+		res[i], err = ec.unmarshalNTorrentFilesOrderByInput2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐTorrentFilesOrderByInput(ctx, vSlice[i])
 		if err != nil {
 			return nil, err
 		}
@@ -26568,7 +26637,7 @@ func (ec *executionContext) unmarshalOTorrentFilesOrderByInput2ᚕgithubᚗcom�
 	return res, nil
 }
 
-func (ec *executionContext) marshalOTorrentSourceAgg2ᚕgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐTorrentSourceAggᚄ(ctx context.Context, sel ast.SelectionSet, v []gen.TorrentSourceAgg) graphql.Marshaler {
+func (ec *executionContext) marshalOTorrentSourceAgg2ᚕgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐTorrentSourceAggᚄ(ctx context.Context, sel ast.SelectionSet, v []gen.TorrentSourceAgg) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}
@@ -26595,7 +26664,7 @@ func (ec *executionContext) marshalOTorrentSourceAgg2ᚕgithubᚗcomᚋspencerno
 			if !isLen1 {
 				defer wg.Done()
 			}
-			ret[i] = ec.marshalNTorrentSourceAgg2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐTorrentSourceAgg(ctx, sel, v[i])
+			ret[i] = ec.marshalNTorrentSourceAgg2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐTorrentSourceAgg(ctx, sel, v[i])
 		}
 		if isLen1 {
 			f(i)
@@ -26615,7 +26684,7 @@ func (ec *executionContext) marshalOTorrentSourceAgg2ᚕgithubᚗcomᚋspencerno
 	return ret
 }
 
-func (ec *executionContext) unmarshalOTorrentSourceFacetInput2ᚖgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐTorrentSourceFacetInput(ctx context.Context, v any) (*gen.TorrentSourceFacetInput, error) {
+func (ec *executionContext) unmarshalOTorrentSourceFacetInput2ᚖgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐTorrentSourceFacetInput(ctx context.Context, v any) (*gen.TorrentSourceFacetInput, error) {
 	if v == nil {
 		return nil, nil
 	}
@@ -26623,7 +26692,7 @@ func (ec *executionContext) unmarshalOTorrentSourceFacetInput2ᚖgithubᚗcomᚋ
 	return &res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalOTorrentTagAgg2ᚕgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐTorrentTagAggᚄ(ctx context.Context, sel ast.SelectionSet, v []gen.TorrentTagAgg) graphql.Marshaler {
+func (ec *executionContext) marshalOTorrentTagAgg2ᚕgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐTorrentTagAggᚄ(ctx context.Context, sel ast.SelectionSet, v []gen.TorrentTagAgg) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}
@@ -26650,7 +26719,7 @@ func (ec *executionContext) marshalOTorrentTagAgg2ᚕgithubᚗcomᚋspencernorto
 			if !isLen1 {
 				defer wg.Done()
 			}
-			ret[i] = ec.marshalNTorrentTagAgg2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐTorrentTagAgg(ctx, sel, v[i])
+			ret[i] = ec.marshalNTorrentTagAgg2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐTorrentTagAgg(ctx, sel, v[i])
 		}
 		if isLen1 {
 			f(i)
@@ -26670,7 +26739,7 @@ func (ec *executionContext) marshalOTorrentTagAgg2ᚕgithubᚗcomᚋspencernorto
 	return ret
 }
 
-func (ec *executionContext) unmarshalOTorrentTagFacetInput2ᚖgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐTorrentTagFacetInput(ctx context.Context, v any) (*gen.TorrentTagFacetInput, error) {
+func (ec *executionContext) unmarshalOTorrentTagFacetInput2ᚖgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐTorrentTagFacetInput(ctx context.Context, v any) (*gen.TorrentTagFacetInput, error) {
 	if v == nil {
 		return nil, nil
 	}
@@ -26678,47 +26747,47 @@ func (ec *executionContext) unmarshalOTorrentTagFacetInput2ᚖgithubᚗcomᚋspe
 	return &res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) unmarshalOVideo3D2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐNullVideo3D(ctx context.Context, v any) (model.NullVideo3D, error) {
+func (ec *executionContext) unmarshalOVideo3D2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐNullVideo3D(ctx context.Context, v any) (model.NullVideo3D, error) {
 	var res model.NullVideo3D
 	err := res.UnmarshalGQL(v)
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalOVideo3D2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐNullVideo3D(ctx context.Context, sel ast.SelectionSet, v model.NullVideo3D) graphql.Marshaler {
+func (ec *executionContext) marshalOVideo3D2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐNullVideo3D(ctx context.Context, sel ast.SelectionSet, v model.NullVideo3D) graphql.Marshaler {
 	return v
 }
 
-func (ec *executionContext) unmarshalOVideoCodec2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐNullVideoCodec(ctx context.Context, v any) (model.NullVideoCodec, error) {
+func (ec *executionContext) unmarshalOVideoCodec2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐNullVideoCodec(ctx context.Context, v any) (model.NullVideoCodec, error) {
 	var res model.NullVideoCodec
 	err := res.UnmarshalGQL(v)
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalOVideoCodec2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐNullVideoCodec(ctx context.Context, sel ast.SelectionSet, v model.NullVideoCodec) graphql.Marshaler {
+func (ec *executionContext) marshalOVideoCodec2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐNullVideoCodec(ctx context.Context, sel ast.SelectionSet, v model.NullVideoCodec) graphql.Marshaler {
 	return v
 }
 
-func (ec *executionContext) unmarshalOVideoModifier2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐNullVideoModifier(ctx context.Context, v any) (model.NullVideoModifier, error) {
+func (ec *executionContext) unmarshalOVideoModifier2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐNullVideoModifier(ctx context.Context, v any) (model.NullVideoModifier, error) {
 	var res model.NullVideoModifier
 	err := res.UnmarshalGQL(v)
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalOVideoModifier2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐNullVideoModifier(ctx context.Context, sel ast.SelectionSet, v model.NullVideoModifier) graphql.Marshaler {
+func (ec *executionContext) marshalOVideoModifier2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐNullVideoModifier(ctx context.Context, sel ast.SelectionSet, v model.NullVideoModifier) graphql.Marshaler {
 	return v
 }
 
-func (ec *executionContext) unmarshalOVideoResolution2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐNullVideoResolution(ctx context.Context, v any) (model.NullVideoResolution, error) {
+func (ec *executionContext) unmarshalOVideoResolution2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐNullVideoResolution(ctx context.Context, v any) (model.NullVideoResolution, error) {
 	var res model.NullVideoResolution
 	err := res.UnmarshalGQL(v)
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalOVideoResolution2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐNullVideoResolution(ctx context.Context, sel ast.SelectionSet, v model.NullVideoResolution) graphql.Marshaler {
+func (ec *executionContext) marshalOVideoResolution2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐNullVideoResolution(ctx context.Context, sel ast.SelectionSet, v model.NullVideoResolution) graphql.Marshaler {
 	return v
 }
 
-func (ec *executionContext) unmarshalOVideoResolution2ᚕᚖgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐVideoResolution(ctx context.Context, v any) ([]*model.VideoResolution, error) {
+func (ec *executionContext) unmarshalOVideoResolution2ᚕᚖgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐVideoResolution(ctx context.Context, v any) ([]*model.VideoResolution, error) {
 	if v == nil {
 		return nil, nil
 	}
@@ -26730,7 +26799,7 @@ func (ec *executionContext) unmarshalOVideoResolution2ᚕᚖgithubᚗcomᚋspenc
 	res := make([]*model.VideoResolution, len(vSlice))
 	for i := range vSlice {
 		ctx := graphql.WithPathContext(ctx, graphql.NewPathWithIndex(i))
-		res[i], err = ec.unmarshalOVideoResolution2ᚖgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐVideoResolution(ctx, vSlice[i])
+		res[i], err = ec.unmarshalOVideoResolution2ᚖgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐVideoResolution(ctx, vSlice[i])
 		if err != nil {
 			return nil, err
 		}
@@ -26738,7 +26807,7 @@ func (ec *executionContext) unmarshalOVideoResolution2ᚕᚖgithubᚗcomᚋspenc
 	return res, nil
 }
 
-func (ec *executionContext) marshalOVideoResolution2ᚕᚖgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐVideoResolution(ctx context.Context, sel ast.SelectionSet, v []*model.VideoResolution) graphql.Marshaler {
+func (ec *executionContext) marshalOVideoResolution2ᚕᚖgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐVideoResolution(ctx context.Context, sel ast.SelectionSet, v []*model.VideoResolution) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}
@@ -26765,7 +26834,7 @@ func (ec *executionContext) marshalOVideoResolution2ᚕᚖgithubᚗcomᚋspencer
 			if !isLen1 {
 				defer wg.Done()
 			}
-			ret[i] = ec.marshalOVideoResolution2ᚖgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐVideoResolution(ctx, sel, v[i])
+			ret[i] = ec.marshalOVideoResolution2ᚖgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐVideoResolution(ctx, sel, v[i])
 		}
 		if isLen1 {
 			f(i)
@@ -26779,7 +26848,7 @@ func (ec *executionContext) marshalOVideoResolution2ᚕᚖgithubᚗcomᚋspencer
 	return ret
 }
 
-func (ec *executionContext) unmarshalOVideoResolution2ᚖgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐVideoResolution(ctx context.Context, v any) (*model.VideoResolution, error) {
+func (ec *executionContext) unmarshalOVideoResolution2ᚖgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐVideoResolution(ctx context.Context, v any) (*model.VideoResolution, error) {
 	if v == nil {
 		return nil, nil
 	}
@@ -26788,7 +26857,7 @@ func (ec *executionContext) unmarshalOVideoResolution2ᚖgithubᚗcomᚋspencern
 	return &res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalOVideoResolution2ᚖgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐVideoResolution(ctx context.Context, sel ast.SelectionSet, v *model.VideoResolution) graphql.Marshaler {
+func (ec *executionContext) marshalOVideoResolution2ᚖgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐVideoResolution(ctx context.Context, sel ast.SelectionSet, v *model.VideoResolution) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}
@@ -26796,7 +26865,7 @@ func (ec *executionContext) marshalOVideoResolution2ᚖgithubᚗcomᚋspencernor
 	return res
 }
 
-func (ec *executionContext) marshalOVideoResolutionAgg2ᚕgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐVideoResolutionAggᚄ(ctx context.Context, sel ast.SelectionSet, v []gen.VideoResolutionAgg) graphql.Marshaler {
+func (ec *executionContext) marshalOVideoResolutionAgg2ᚕgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐVideoResolutionAggᚄ(ctx context.Context, sel ast.SelectionSet, v []gen.VideoResolutionAgg) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}
@@ -26823,7 +26892,7 @@ func (ec *executionContext) marshalOVideoResolutionAgg2ᚕgithubᚗcomᚋspencer
 			if !isLen1 {
 				defer wg.Done()
 			}
-			ret[i] = ec.marshalNVideoResolutionAgg2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐVideoResolutionAgg(ctx, sel, v[i])
+			ret[i] = ec.marshalNVideoResolutionAgg2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐVideoResolutionAgg(ctx, sel, v[i])
 		}
 		if isLen1 {
 			f(i)
@@ -26843,7 +26912,7 @@ func (ec *executionContext) marshalOVideoResolutionAgg2ᚕgithubᚗcomᚋspencer
 	return ret
 }
 
-func (ec *executionContext) unmarshalOVideoResolutionFacetInput2ᚖgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐVideoResolutionFacetInput(ctx context.Context, v any) (*gen.VideoResolutionFacetInput, error) {
+func (ec *executionContext) unmarshalOVideoResolutionFacetInput2ᚖgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐVideoResolutionFacetInput(ctx context.Context, v any) (*gen.VideoResolutionFacetInput, error) {
 	if v == nil {
 		return nil, nil
 	}
@@ -26851,17 +26920,17 @@ func (ec *executionContext) unmarshalOVideoResolutionFacetInput2ᚖgithubᚗcom�
 	return &res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) unmarshalOVideoSource2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐNullVideoSource(ctx context.Context, v any) (model.NullVideoSource, error) {
+func (ec *executionContext) unmarshalOVideoSource2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐNullVideoSource(ctx context.Context, v any) (model.NullVideoSource, error) {
 	var res model.NullVideoSource
 	err := res.UnmarshalGQL(v)
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalOVideoSource2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐNullVideoSource(ctx context.Context, sel ast.SelectionSet, v model.NullVideoSource) graphql.Marshaler {
+func (ec *executionContext) marshalOVideoSource2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐNullVideoSource(ctx context.Context, sel ast.SelectionSet, v model.NullVideoSource) graphql.Marshaler {
 	return v
 }
 
-func (ec *executionContext) unmarshalOVideoSource2ᚕᚖgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐVideoSource(ctx context.Context, v any) ([]*model.VideoSource, error) {
+func (ec *executionContext) unmarshalOVideoSource2ᚕᚖgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐVideoSource(ctx context.Context, v any) ([]*model.VideoSource, error) {
 	if v == nil {
 		return nil, nil
 	}
@@ -26873,7 +26942,7 @@ func (ec *executionContext) unmarshalOVideoSource2ᚕᚖgithubᚗcomᚋspencerno
 	res := make([]*model.VideoSource, len(vSlice))
 	for i := range vSlice {
 		ctx := graphql.WithPathContext(ctx, graphql.NewPathWithIndex(i))
-		res[i], err = ec.unmarshalOVideoSource2ᚖgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐVideoSource(ctx, vSlice[i])
+		res[i], err = ec.unmarshalOVideoSource2ᚖgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐVideoSource(ctx, vSlice[i])
 		if err != nil {
 			return nil, err
 		}
@@ -26881,7 +26950,7 @@ func (ec *executionContext) unmarshalOVideoSource2ᚕᚖgithubᚗcomᚋspencerno
 	return res, nil
 }
 
-func (ec *executionContext) marshalOVideoSource2ᚕᚖgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐVideoSource(ctx context.Context, sel ast.SelectionSet, v []*model.VideoSource) graphql.Marshaler {
+func (ec *executionContext) marshalOVideoSource2ᚕᚖgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐVideoSource(ctx context.Context, sel ast.SelectionSet, v []*model.VideoSource) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}
@@ -26908,7 +26977,7 @@ func (ec *executionContext) marshalOVideoSource2ᚕᚖgithubᚗcomᚋspencernort
 			if !isLen1 {
 				defer wg.Done()
 			}
-			ret[i] = ec.marshalOVideoSource2ᚖgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐVideoSource(ctx, sel, v[i])
+			ret[i] = ec.marshalOVideoSource2ᚖgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐVideoSource(ctx, sel, v[i])
 		}
 		if isLen1 {
 			f(i)
@@ -26922,7 +26991,7 @@ func (ec *executionContext) marshalOVideoSource2ᚕᚖgithubᚗcomᚋspencernort
 	return ret
 }
 
-func (ec *executionContext) unmarshalOVideoSource2ᚖgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐVideoSource(ctx context.Context, v any) (*model.VideoSource, error) {
+func (ec *executionContext) unmarshalOVideoSource2ᚖgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐVideoSource(ctx context.Context, v any) (*model.VideoSource, error) {
 	if v == nil {
 		return nil, nil
 	}
@@ -26931,7 +27000,7 @@ func (ec *executionContext) unmarshalOVideoSource2ᚖgithubᚗcomᚋspencernorto
 	return &res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalOVideoSource2ᚖgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐVideoSource(ctx context.Context, sel ast.SelectionSet, v *model.VideoSource) graphql.Marshaler {
+func (ec *executionContext) marshalOVideoSource2ᚖgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐVideoSource(ctx context.Context, sel ast.SelectionSet, v *model.VideoSource) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}
@@ -26939,7 +27008,7 @@ func (ec *executionContext) marshalOVideoSource2ᚖgithubᚗcomᚋspencernorton�
 	return res
 }
 
-func (ec *executionContext) marshalOVideoSourceAgg2ᚕgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐVideoSourceAggᚄ(ctx context.Context, sel ast.SelectionSet, v []gen.VideoSourceAgg) graphql.Marshaler {
+func (ec *executionContext) marshalOVideoSourceAgg2ᚕgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐVideoSourceAggᚄ(ctx context.Context, sel ast.SelectionSet, v []gen.VideoSourceAgg) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}
@@ -26966,7 +27035,7 @@ func (ec *executionContext) marshalOVideoSourceAgg2ᚕgithubᚗcomᚋspencernort
 			if !isLen1 {
 				defer wg.Done()
 			}
-			ret[i] = ec.marshalNVideoSourceAgg2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐVideoSourceAgg(ctx, sel, v[i])
+			ret[i] = ec.marshalNVideoSourceAgg2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐVideoSourceAgg(ctx, sel, v[i])
 		}
 		if isLen1 {
 			f(i)
@@ -26986,7 +27055,7 @@ func (ec *executionContext) marshalOVideoSourceAgg2ᚕgithubᚗcomᚋspencernort
 	return ret
 }
 
-func (ec *executionContext) unmarshalOVideoSourceFacetInput2ᚖgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐVideoSourceFacetInput(ctx context.Context, v any) (*gen.VideoSourceFacetInput, error) {
+func (ec *executionContext) unmarshalOVideoSourceFacetInput2ᚖgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋgqlᚋgqlmodelᚋgenᚐVideoSourceFacetInput(ctx context.Context, v any) (*gen.VideoSourceFacetInput, error) {
 	if v == nil {
 		return nil, nil
 	}
@@ -27010,17 +27079,17 @@ func (ec *executionContext) marshalOVoid2ᚖstring(ctx context.Context, sel ast.
 	return res
 }
 
-func (ec *executionContext) unmarshalOYear2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐYear(ctx context.Context, v any) (model.Year, error) {
+func (ec *executionContext) unmarshalOYear2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐYear(ctx context.Context, v any) (model.Year, error) {
 	var res model.Year
 	err := res.UnmarshalGQL(v)
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalOYear2githubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐYear(ctx context.Context, sel ast.SelectionSet, v model.Year) graphql.Marshaler {
+func (ec *executionContext) marshalOYear2githubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐYear(ctx context.Context, sel ast.SelectionSet, v model.Year) graphql.Marshaler {
 	return v
 }
 
-func (ec *executionContext) unmarshalOYear2ᚕᚖgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐYear(ctx context.Context, v any) ([]*model.Year, error) {
+func (ec *executionContext) unmarshalOYear2ᚕᚖgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐYear(ctx context.Context, v any) ([]*model.Year, error) {
 	if v == nil {
 		return nil, nil
 	}
@@ -27032,7 +27101,7 @@ func (ec *executionContext) unmarshalOYear2ᚕᚖgithubᚗcomᚋspencernortonᚋ
 	res := make([]*model.Year, len(vSlice))
 	for i := range vSlice {
 		ctx := graphql.WithPathContext(ctx, graphql.NewPathWithIndex(i))
-		res[i], err = ec.unmarshalOYear2ᚖgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐYear(ctx, vSlice[i])
+		res[i], err = ec.unmarshalOYear2ᚖgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐYear(ctx, vSlice[i])
 		if err != nil {
 			return nil, err
 		}
@@ -27040,19 +27109,19 @@ func (ec *executionContext) unmarshalOYear2ᚕᚖgithubᚗcomᚋspencernortonᚋ
 	return res, nil
 }
 
-func (ec *executionContext) marshalOYear2ᚕᚖgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐYear(ctx context.Context, sel ast.SelectionSet, v []*model.Year) graphql.Marshaler {
+func (ec *executionContext) marshalOYear2ᚕᚖgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐYear(ctx context.Context, sel ast.SelectionSet, v []*model.Year) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}
 	ret := make(graphql.Array, len(v))
 	for i := range v {
-		ret[i] = ec.marshalOYear2ᚖgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐYear(ctx, sel, v[i])
+		ret[i] = ec.marshalOYear2ᚖgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐYear(ctx, sel, v[i])
 	}
 
 	return ret
 }
 
-func (ec *executionContext) unmarshalOYear2ᚖgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐYear(ctx context.Context, v any) (*model.Year, error) {
+func (ec *executionContext) unmarshalOYear2ᚖgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐYear(ctx context.Context, v any) (*model.Year, error) {
 	if v == nil {
 		return nil, nil
 	}
@@ -27061,7 +27130,7 @@ func (ec *executionContext) unmarshalOYear2ᚖgithubᚗcomᚋspencernortonᚋdhw
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalOYear2ᚖgithubᚗcomᚋspencernortonᚋdhwaypointᚋinternalᚋmodelᚐYear(ctx context.Context, sel ast.SelectionSet, v *model.Year) graphql.Marshaler {
+func (ec *executionContext) marshalOYear2ᚖgithubᚗcomᚋspencernortonᚋDHᚑWaypointᚋinternalᚋmodelᚐYear(ctx context.Context, sel ast.SelectionSet, v *model.Year) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
 	}

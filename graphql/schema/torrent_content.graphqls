@@ -9,6 +9,12 @@ input TorrentContentSearchQueryInput {
   """
   hasNextPage: Boolean
   infoHashes: [Hash20!]
+  """
+  Match one canonical title before ordering and pagination. All three fields
+  form the identity; the same ID in another source or media type is distinct.
+  This can replace queryString when the caller already knows the title.
+  """
+  contentIdentity: TorrentContentIdentityInput
   facets: TorrentContentFacetsInput
   orderBy: [TorrentContentOrderByInput!]
   cached: Boolean
@@ -42,6 +48,12 @@ input TorrentContentSearchQueryInput {
   """
   groupByContent: Boolean
   releaseAttributes: ReleaseAttributesFilterInput
+}
+
+input TorrentContentIdentityInput {
+  type: ContentType!
+  source: String!
+  id: ID!
 }
 
 input ReleaseAttributesFilterInput {

@@ -2,6 +2,8 @@ package gqlmodel
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/99designs/gqlgen/graphql"
@@ -124,10 +126,18 @@ type TorrentContentSearchQueryInput struct {
 	Facets               *gen.TorrentContentFacetsInput
 	OrderBy              []gen.TorrentContentOrderByInput
 	InfoHashes           graphql.Omittable[[]protocol.ID]
+	ContentIdentity      *TorrentContentIdentityInput
 	TorrentCreatedAfter  graphql.Omittable[*time.Time]
 	TorrentCreatedBefore graphql.Omittable[*time.Time]
 	GroupByContent       model.NullBool
 	ReleaseAttributes    *ReleaseAttributesFilterInput
+}
+
+// TorrentContentIdentityInput identifies a canonical title, including its namespace.
+type TorrentContentIdentityInput struct {
+	Type   model.ContentType
+	Source string
+	ID     string
 }
 
 type TorrentContentSearchResult struct {
@@ -149,6 +159,15 @@ func (t TorrentContentQuery) Search(
 		search.HydrateTorrentContentTorrent(),
 	}
 	options = append(options, input.Option())
+	if identity := input.ContentIdentity; identity != nil {
+		if strings.TrimSpace(identity.Source) == "" || strings.TrimSpace(identity.ID) == "" ||
+			len(identity.Source) > 128 || len(identity.ID) > 1024 {
+			return TorrentContentSearchResult{}, fmt.Errorf("invalid content identity")
+		}
+		options = append(options, q.Where(search.TorrentContentIdentityCriteria(model.ContentRef{
+			Type: identity.Type, Source: identity.Source, ID: identity.ID,
+		})))
+	}
 	hasQueryString := input.QueryString.Valid
 	if input.ReleaseAttributes != nil {
 		for field, value := range input.ReleaseAttributes.values() {

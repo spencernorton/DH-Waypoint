@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 5.7.0 — 2026-10-24
+
+- GraphQL torrent search accepts `contentIdentity: {type, source, id}` to
+  retrieve a known title's releases through its indexed canonical identity.
+  Filtering runs before sorting and pagination and retains ordinary serving
+  policy, counts and facets. Existing text and hash searches are unchanged.
+
 ## 5.6.1 — 2026-10-22
 
 - A classifier delete decided while catalogue recovery is disabled is now
