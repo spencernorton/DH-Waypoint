@@ -38,10 +38,19 @@ BEGIN
  IF EXISTS(SELECT 1 FROM torrents WHERE info_hash_v2 IS NOT NULL) THEN
   RAISE EXCEPTION 'v2 identities prevent downgrade; restore a matching backup';
  END IF;
- FOREACH tbl IN ARRAY ARRAY['label_evidence','torrent_canonical_labels','torrent_tracker_seeds','torrent_liveness'] LOOP
+ FOREACH tbl IN ARRAY ARRAY['label_evidence','torrent_canonical_labels','torrent_tracker_seeds','torrent_liveness',
+  'torrent_grab_attempts','junkpurge_judgments','junkpurge_quarantine'] LOOP
   EXECUTE format('SELECT EXISTS(SELECT 1 FROM %I WHERE octet_length(info_hash)=32)',tbl) INTO present;
   IF present THEN RAISE EXCEPTION 'v2 evidence in % prevents downgrade; restore a matching backup',tbl; END IF;
  END LOOP;
+ -- A removed hybrid still carries its full alias in retained evidence even
+ -- though the canonical key is SHA-1 and its raw catalogue row is absent.
+ IF EXISTS(SELECT 1 FROM catalogue_recovery_snapshots WHERE snapshot @? '$.**.info_hash_v2 ? (@ != null)')
+ OR EXISTS(SELECT 1 FROM junkpurge_quarantine WHERE torrent_snapshot @? '$.**.info_hash_v2 ? (@ != null)')
+ OR EXISTS(SELECT 1 FROM processor_jobs WHERE source @? '$.**.info_hash_v2 ? (@ != null)')
+ OR EXISTS(SELECT 1 FROM processor_reprocess_requests WHERE before_snapshot @? '$.**.info_hash_v2 ? (@ != null)') THEN
+  RAISE EXCEPTION 'v2 evidence in retained snapshots prevents downgrade; restore a matching backup';
+ END IF;
  FOREACH tbl IN ARRAY ARRAY[
   'processor_jobs','processor_applications','processor_exclusions','processor_core_receipts',
   'processor_feedback_events','processor_reprocess_requests',

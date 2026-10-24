@@ -7,7 +7,9 @@ import (
 	"net/http/httptest"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/spencernorton/DH-Waypoint/internal/cataloguerecovery"
 	"github.com/spencernorton/DH-Waypoint/internal/protocol"
 	v1 "github.com/spencernorton/DH-Waypoint/processorapi/v1"
 	v2 "github.com/spencernorton/DH-Waypoint/processorapi/v2"
@@ -136,4 +138,26 @@ func TestPostgresIdentityMigrationPreservesV1AndGuardsDowngrade(t *testing.T) {
 	require.NoError(t, err)
 	_, err = provider.Down(testContext)
 	require.ErrorContains(t, err, "v2 evidence")
+}
+
+func TestPostgresRemovedHybridRetainsAliasAndPreventsUnsafeDowngrade(t *testing.T) {
+	_, pool, m := fixture(t)
+	h := seedTorrent(t, pool, 95, "movie")
+	v2hash := protocol.InfoHashV2(sha256.Sum256([]byte("synthetic removed hybrid")))
+	_, err := pool.Exec(testContext, `UPDATE torrents SET info_hash_v2=$2 WHERE info_hash=$1`, h, v2hash.Bytes())
+	require.NoError(t, err)
+	recovery, err := cataloguerecovery.NewStore(pool, cataloguerecovery.Config{Enabled: true, Retention: 24 * time.Hour, MaxPayloadBytes: 64 << 20, MaxSnapshotBytes: 8 << 20, MaxSnapshots: 128, MaxStorageBytes: 128 << 20, MaxRowsPerSnapshot: 1024})
+	require.NoError(t, err)
+	snapshot, err := recovery.Remove(testContext, h, "blocking", "synthetic", time.Now())
+	require.NoError(t, err)
+	_, err = m.Down(testContext)
+	require.NoError(t, err)
+	_, err = m.Down(testContext)
+	require.ErrorContains(t, err, "v2 evidence in retained snapshots")
+	restored, err := recovery.Restore(testContext, snapshot.ID, time.Now())
+	require.NoError(t, err)
+	require.True(t, restored)
+	var alias []byte
+	require.NoError(t, pool.QueryRow(testContext, `SELECT info_hash_v2 FROM torrents WHERE info_hash=$1`, h).Scan(&alias))
+	require.Equal(t, v2hash.Bytes(), alias)
 }

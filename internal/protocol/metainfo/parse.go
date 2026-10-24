@@ -35,6 +35,15 @@ func ParseMetaInfoBytes(infoHash protocol.ID, metaInfoBytes []byte) (Info, error
 	if unmarshalErr := bencode.Unmarshal(metaInfoBytes, &info); unmarshalErr != nil {
 		return Info{}, fmt.Errorf("error unmarshaling info bytes: %w", unmarshalErr)
 	}
+	if info.MetaVersion != 0 {
+		// Legacy torrent creation/private-tracker callers require a genuine
+		// v1 identity. Hashing pure-v2 bytes with SHA-1 does not create one.
+		validated, err := ParseInfoBytes(protocol.InfoHashV1(infoHash), metaInfoBytes)
+		if err != nil {
+			return Info{}, err
+		}
+		return validated.Info, nil
+	}
 
 	if validateErr := validateInfo(info); validateErr != nil {
 		return Info{}, validateErr

@@ -64,6 +64,11 @@ func TestParseIdentityV1V2AndHybrid(t *testing.T) {
 			if kind == "v2" {
 				_, err := ParseInfoBytes(v1, raw)
 				require.ErrorIs(t, err, ErrWrongInfoHash)
+				_, err = ParseMetaInfoBytes(v1.WireID(), raw)
+				require.ErrorIs(t, err, ErrWrongInfoHash, "legacy callers must not invent a pure-v2 SHA-1 identity")
+			} else {
+				_, err := ParseMetaInfoBytes(v1.WireID(), raw)
+				require.NoError(t, err)
 			}
 			wrong := expected
 			wrong[19] ^= 1
