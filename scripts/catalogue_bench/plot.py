@@ -56,7 +56,7 @@ legend=[Line2D([0],[0],color=colors[v],marker='o',lw=2,label=v.capitalize()) for
 fig.legend(handles=legend,loc='upper right',bbox_to_anchor=(.99,.99),ncol=len(legend),frameon=False)
 fig.suptitle('Catalogue retrieval: measured p50 → p95',x=.02,y=.99,ha='left',fontsize=18,fontweight='bold')
 fig.text(.02,.045,'Dots start at p50 and end at p95. Triangles mark query errors at the 5-second budget.\n'
-         'Synthetic SQL workload · PostgreSQL 16.15 · 6-CPU / 16-GiB cap · 30 warm samples per case · no HTTP latency claim.',
+         'Synthetic SQL workload · PostgreSQL 16.15 · 6-CPU / 16-GiB cap · 30 scheduled warm observations · no HTTP latency claim.',
          fontsize=9,color='#b7c5d8',va='bottom')
 fig.tight_layout(rect=(.01,.12,.995,.92),w_pad=2)
 args.out.parent.mkdir(parents=True,exist_ok=True)

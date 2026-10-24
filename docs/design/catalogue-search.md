@@ -86,7 +86,9 @@ unprocessed source rows.
 
 REST v2 instead implements literal case-insensitive substrings with escaped
 `ILIKE`, a minimum three-character query and canonical-hash cursors. Migration
-00071 supplies its `GIN(name gin_trgm_ops)` index. Token-based TSV results are
+00071 supplies its `GIN(name gin_trgm_ops)` index, using PostgreSQL's
+[trigram support for ILIKE](https://www.postgresql.org/docs/16/pgtrgm.html#PGTRGM-INDEX).
+Token-based TSV results are
 an alternative SQL workload, not a measurement of that API. Qualify substring
 queries and trigram construction separately before promoting API expectations.
 
