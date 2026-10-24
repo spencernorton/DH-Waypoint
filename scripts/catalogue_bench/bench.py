@@ -348,11 +348,32 @@ def verify_page(conn,args,name,result):
                 raise RuntimeError('wrong literal substring candidate')
             if name=='raw_substring_rare' and family!=123456:
                 raise RuntimeError('wrong rare literal substring candidate')
+    if name in ['identity_rare','external_correlated','external_identifier','external_keyset',
+                'text_rare','raw_text_rare','raw_substring_rare']:
+        # Invert the fixture's modular identity assignment. This independently
+        # checks completeness and ordering, including an incorrectly empty page.
+        rows=conn.execute('SELECT max(n) FROM torrents').fetchone()[0]
+        first=((123456-1000)*pow(48271,-1,1000003))%1000003
+        expected=[]
+        for n in range(first or 1000003,rows+1,1000003):
+            trusted=(n//20)%10<7
+            if n%20==0 or n%199==0 or n%211==0:
+                continue
+            if name in ['identity_rare','external_correlated','external_identifier','external_keyset'] and not trusted:
+                continue
+            h=bytes.fromhex(hashlib.md5(('synthetic-'+str(n)).encode()).hexdigest()+
+                            hashlib.md5(('tail-'+str(n)).encode()).hexdigest()[:8])
+            expected.append((n%100000,h))
+        expected_hashes=([h for _,h in sorted(expected,key=lambda r:r[1])] if name.startswith('raw_')
+                         else [h for _,h in sorted(expected,reverse=True)])
+        if hashes!=expected_hashes[:101 if name=='raw_substring_rare' else 100]:
+            raise RuntimeError('rare identity/text page differs from independent complete oracle: '+name)
     emit(args.out,{"kind":"page_correctness","case":name,"checked":len(result),"failures":0})
 
 
 def correctness(conn,args,queries):
-    pairs=[("identity_hot","identity_join"),("external_correlated","external_identifier"),("season_current","season_indexable"),
+    pairs=[("identity_hot","identity_join"),("external_correlated","external_identifier"),
+           ("external_identifier","external_keyset"),("season_current","season_indexable"),
            ("episode_current","episode_indexable"),("text_hot","enriched_with_fallback")]
     # Both directions and complete sets, independent of LIMIT/page representative.
     for left,right in pairs:
