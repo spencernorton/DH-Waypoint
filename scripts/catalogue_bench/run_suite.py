@@ -25,6 +25,7 @@ p.add_argument("--samples",type=int,default=30)
 p.add_argument("--cold-samples",type=int,default=10)
 p.add_argument("--skip-seed",action="store_true")
 p.add_argument("--variants",default="baseline,candidate")
+p.add_argument("--disk-path",default=".")
 args=p.parse_args()
 out=Path(args.out).resolve()
 out.mkdir(parents=True,exist_ok=True)
@@ -32,7 +33,7 @@ root=Path(__file__).resolve().parent
 metadata=json.loads(subprocess.check_output(["docker","inspect",args.container]))[0]
 if metadata["Config"].get("Labels",{}).get("purpose")!="disposable-synthetic-benchmark":
     raise SystemExit("refusing unlabeled database")
-if metadata["HostConfig"]["Memory"]>20*2**30 or not 0<metadata["HostConfig"]["NanoCpus"]<=8*10**9:
+if not 0<metadata["HostConfig"]["Memory"]<=20*2**30 or not 0<metadata["HostConfig"]["NanoCpus"]<=8*10**9:
     raise SystemExit("benchmark container must be capped at <=8 CPUs and <=20 GiB RAM")
 bench.emit(out/"suite.jsonl",{"kind":"manifest","format":2,"image":metadata["Image"],
  "memory_limit_bytes":metadata["HostConfig"]["Memory"],"nano_cpus":metadata["HostConfig"]["NanoCpus"],
@@ -52,7 +53,7 @@ def stage(name,command):
 
 
 def run(name,command,*extra):
-    stage(name,[sys.executable,str(root/"bench.py"),command,"--out",str(out/(name+".jsonl")),*extra])
+    stage(name,[sys.executable,str(root/"bench.py"),command,"--out",str(out/(name+".jsonl")),"--disk-path",args.disk_path,*extra])
 
 
 def start_database():

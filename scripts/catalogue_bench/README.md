@@ -70,6 +70,9 @@ one hot identity; the long tail spans about one million other identities.
 These are declared synthetic assumptions, not measurements of a live catalogue.
 
 The same physical corpus supports raw-name FTS and accepted-identity retrieval.
+Raw-name queries read `torrents.tsv`, including a regression with the content
+projection temporarily absent. The baseline retains its historical B-tree;
+the candidate adds GIN. Content search retains its existing GIN separately.
 Seventy percent have accepted canonical mappings. Ten percent have stale
 source revisions, ten percent have uncertain proposals, and ten percent have
 no proposal. Plugin ID, confidence, verification and source revision live in
@@ -130,7 +133,7 @@ documented high-water mark for repeatable export semantics.
 
 The baseline models the relevant existing B-tree/GIN indexes. It does not install
 all historical migrations or count every production index and history table.
-The candidate tests ordered page indexes, an external-ID index and an episode
+The candidate tests raw-name GIN, ordered page indexes, an external-ID index and an episode
 GIN index. Candidate inclusion is an experiment, not a recommendation to retain
 every tested index. The decision and measured tradeoffs belong in the results.
 PostgreSQL index variants are compared on the same authority and corpus; this
