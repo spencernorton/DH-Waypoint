@@ -135,7 +135,11 @@ func (h *handler) handle(c *gin.Context) {
 		RawPayload:     json.RawMessage(body),
 	}
 
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
+	// The insert can queue briefly behind background workers' SHARE locks on
+	// label_evidence. *arr clients never retry a failed webhook, so a timeout
+	// loses the observation; allow far more than a lock wait, well under the
+	// clients' own request timeout.
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
 	defer cancel()
 
 	if err := h.store.Insert(ctx, ev); err != nil {

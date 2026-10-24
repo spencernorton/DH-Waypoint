@@ -43,6 +43,10 @@ type Runner struct {
 	metrics  *Metrics
 	liveness LivenessRecorder
 	logger   *zap.SugaredLogger
+	// persistChunk caps the hashes committed per write transaction. Each one
+	// holds the admission SHARE lock on label_evidence, which stalls every
+	// evidence writer until it commits.
+	persistChunk int
 }
 
 // NewRunner builds a Runner. metrics may be nil (metric updates are guarded);
@@ -55,12 +59,13 @@ func NewRunner(cfg Config, pool lazy.Lazy[*pgxpool.Pool], metrics *Metrics, live
 		return store.withAdmission(ctx, hashes, false, func(_ pgx.Tx, allowed [][]byte) error { return use(allowed) })
 	}
 	return &Runner{
-		cfg:      cfg,
-		store:    store,
-		scraper:  scraper,
-		metrics:  metrics,
-		liveness: livenessRec,
-		logger:   logger,
+		cfg:          cfg,
+		store:        store,
+		scraper:      scraper,
+		metrics:      metrics,
+		liveness:     livenessRec,
+		logger:       logger,
+		persistChunk: 250,
 	}
 }
 
@@ -116,52 +121,58 @@ func (r *Runner) RunBatch(ctx context.Context, write bool) (Stats, error) {
 		return st, nil
 	}
 
-	// Recheck and commit the seed ledger, source projection, derived counts and
-	// existing liveness observations together. A late denial or any error leaves
-	// no partial new facts. No transition here promotes anything to dead.
-	err = r.store.withAdmission(ctx, admitted, true, func(tx pgx.Tx, allowed [][]byte) error {
-		st.Denied += len(admitted) - len(allowed)
-		var e error
-		st.SourcesUpserted, st.SourcesCleared, e = persist(ctx, tx, allowed, outcomes)
-		if e != nil {
-			return e
-		}
-		ct, e := tx.Exec(ctx, denormSyncSQL, allowed)
-		if e != nil {
-			return e
-		}
-		st.DenormSynced = int(ct.RowsAffected())
-		if r.liveness != nil {
-			positives, zeros := partitionLivenessEvidence(allowed, outcomes)
-			now := time.Now()
-			revived, e := r.liveness.MarkAliveBatchTx(ctx, tx, positives, now, liveness.AliveSourceTrackerScrape)
+	// Recheck and commit each chunk's seed ledger, source projection, derived
+	// counts and existing liveness observations together. A late denial or any
+	// error leaves no partial new facts for a chunk; earlier chunks stay
+	// committed. No transition here promotes anything to dead.
+	now := time.Now()
+	for start := 0; start < len(admitted); start += r.persistChunk {
+		chunk := admitted[start:min(start+r.persistChunk, len(admitted))]
+		var c Stats
+		err = r.store.withAdmission(ctx, chunk, true, func(tx pgx.Tx, allowed [][]byte) error {
+			c.Denied = len(chunk) - len(allowed)
+			var e error
+			c.SourcesUpserted, c.SourcesCleared, e = persist(ctx, tx, allowed, outcomes)
 			if e != nil {
 				return e
 			}
-			st.LivenessRevived = int(revived)
-			suspects, e := r.liveness.RecordSuspectBatchTx(ctx, tx, zeros, now)
+			ct, e := tx.Exec(ctx, denormSyncSQL, allowed)
 			if e != nil {
 				return e
 			}
-			st.LivenessSuspect = int(suspects)
+			c.DenormSynced = int(ct.RowsAffected())
+			if r.liveness != nil {
+				positives, zeros := partitionLivenessEvidence(allowed, outcomes)
+				revived, e := r.liveness.MarkAliveBatchTx(ctx, tx, positives, now, liveness.AliveSourceTrackerScrape)
+				if e != nil {
+					return e
+				}
+				c.LivenessRevived = int(revived)
+				suspects, e := r.liveness.RecordSuspectBatchTx(ctx, tx, zeros, now)
+				if e != nil {
+					return e
+				}
+				c.LivenessSuspect = int(suspects)
+			}
+			return nil
+		})
+		if err != nil {
+			r.incErr("persist")
+			return st, err
 		}
-		return nil
-	})
-	if err != nil {
-		r.incErr("persist")
-		st.SourcesUpserted = 0
-		st.SourcesCleared = 0
-		st.DenormSynced = 0
-		st.LivenessRevived = 0
-		st.LivenessSuspect = 0
-		return st, err
-	}
-	if r.metrics != nil {
-		r.metrics.sourcesUpserted.Add(float64(st.SourcesUpserted))
-		r.metrics.sourcesCleared.Add(float64(st.SourcesCleared))
-		r.metrics.denormSynced.Add(float64(st.DenormSynced))
-		r.metrics.livenessRevived.Add(float64(st.LivenessRevived))
-		r.metrics.livenessSuspect.Add(float64(st.LivenessSuspect))
+		st.Denied += c.Denied
+		st.SourcesUpserted += c.SourcesUpserted
+		st.SourcesCleared += c.SourcesCleared
+		st.DenormSynced += c.DenormSynced
+		st.LivenessRevived += c.LivenessRevived
+		st.LivenessSuspect += c.LivenessSuspect
+		if r.metrics != nil {
+			r.metrics.sourcesUpserted.Add(float64(c.SourcesUpserted))
+			r.metrics.sourcesCleared.Add(float64(c.SourcesCleared))
+			r.metrics.denormSynced.Add(float64(c.DenormSynced))
+			r.metrics.livenessRevived.Add(float64(c.LivenessRevived))
+			r.metrics.livenessSuspect.Add(float64(c.LivenessSuspect))
+		}
 	}
 	return st, nil
 }

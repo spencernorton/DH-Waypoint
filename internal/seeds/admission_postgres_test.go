@@ -176,6 +176,50 @@ func (failingLiveness) RecordSuspectBatchTx(context.Context, pgx.Tx, [][]byte, t
 	return 0, errors.New("synthetic liveness failure")
 }
 
+type secondChunkFails struct{ calls int }
+
+func (f *secondChunkFails) MarkAliveBatchTx(_ context.Context, _ pgx.Tx, hashes [][]byte, _ time.Time, _ string) (int64, error) {
+	f.calls++
+	if f.calls == 2 {
+		return 0, errors.New("synthetic second chunk failure")
+	}
+	return int64(len(hashes)), nil
+}
+func (*secondChunkFails) RecordSuspectBatchTx(context.Context, pgx.Tx, [][]byte, time.Time) (int64, error) {
+	return 0, nil
+}
+
+func TestPostgresSeedsPersistCommitsEachChunkSeparately(t *testing.T) {
+	pool := seedsTestPool(t)
+	for i := byte(1); i <= 3; i++ {
+		admissionInsert(t, pool, i, fmt.Sprintf("Allowed.Release.%d", i))
+	}
+	r := admissionRunner(t, pool, true)
+	r.persistChunk = 2
+	r.scraper.scrape = func(_ context.Context, _ string, hashes []infohash.T) ([]scrapeItem, error) {
+		items := make([]scrapeItem, len(hashes))
+		for i := range items {
+			items[i] = scrapeItem{Leechers: 2}
+		}
+		return items, nil
+	}
+	r.liveness = &secondChunkFails{}
+	st, err := r.RunBatch(context.Background(), true)
+	require.Error(t, err)
+	require.Equal(t, 2, st.SourcesUpserted)
+	require.Equal(t, 2, st.DenormSynced)
+	var persisted [][]byte
+	rows, err := pool.Query(context.Background(), `select info_hash from torrent_tracker_seeds order by info_hash`)
+	require.NoError(t, err)
+	for rows.Next() {
+		var h []byte
+		require.NoError(t, rows.Scan(&h))
+		persisted = append(persisted, h)
+	}
+	require.NoError(t, rows.Err())
+	require.Equal(t, [][]byte{admissionHash(1), admissionHash(2)}, persisted, "the first chunk commits; the failed chunk writes nothing")
+}
+
 func TestPostgresSeedsAtomicPersistenceAndPositiveHistory(t *testing.T) {
 	pool := seedsTestPool(t)
 	hash := admissionInsert(t, pool, 1, "Allowed.Public.Wanted")
