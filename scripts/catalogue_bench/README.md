@@ -60,6 +60,26 @@ failed parallel load can leave noncontiguous committed ranges; the loader
 refuses that state rather than silently skipping holes. Recreate that disposable
 fixture. A complete prefix can grow to the next scale without reseeding it.
 
+After the main suite, `prepared.py --out results/prepared.jsonl --variant candidate`
+compares forced generic and custom plans without changing the corpus. The
+`indexes --variant selected` experiment removes the unused raw B-tree and the
+episode GIN, retains raw-name/external-ID/page indexes, and adds an ordered
+canonical-ID index to test skew-sensitive prepared plans. It uses concurrent
+index creation. Retain or reject those choices from the measurements.
+
+Additional cold queries can use `run_suite.py --cold-only --skip-seed` with one
+already loaded size, the current `--variants` label, and `--cold-cases` containing
+comma-separated case names. This mode leaves indexes untouched and does not
+claim a complete scale qualification.
+
+To summarize raw files and render the optional chart:
+
+```sh
+python3 scripts/catalogue_bench/summarize.py results/catalogue --out results/summary.json
+.venv/bin/pip install -r scripts/catalogue_bench/plot-requirements.txt
+.venv/bin/python scripts/catalogue_bench/plot.py results/summary.json --out results/latency.png
+```
+
 ## Corpus and authority
 
 Every torrent has a reproducible 20-byte synthetic hash, a raw release name,
