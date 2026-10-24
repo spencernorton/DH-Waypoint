@@ -48,6 +48,17 @@ multiplication when several aliases identify the same content. It gives the
 planner an opportunity to drive release lookup from the small key set instead
 of running a correlated OR subquery for every catalogue row.
 
+A hot external alias still timed out in the 32M prepared-plan test even with
+the ordered canonical index. The consumer search therefore first reads at most
+two distinct existing canonical keys inside a read-only repeatable-read
+transaction. Exactly one key adds direct equality predicates while retaining
+the complete authoritative identifier guard. Zero or multiple keys retain the
+full semijoin. This preserves OR semantics and avoids guessing which mapping
+is correct. Lookup inherits the caller deadline and has a five-second ceiling;
+the page, count and facets run serially on that same transaction connection.
+Speculative query races cannot share or cancel that connection. The next
+request observes any alias revocation committed after the snapshot began.
+
 The [Torznab supportedParams revision](https://torznab.github.io/spec-1.3-draft/revisions/1.1-Newznab-supportedParams.html)
 combines supplied ID systems with OR. Categories, type, episode/date and any
 supplied text still constrain the result. An unknown IMDb mapping must not veto
@@ -100,8 +111,11 @@ An episode GIN index is useful only when the actual predicate can use its
 operators. A function call or JSON subexpression does not automatically use a
 whole-document GIN index.
 
-Migration 00072 adds the complete published-page, typed-page and partial
-external-ID lookup indexes. It uses
+Migration 00072 adds the ordered canonical-identity and partial external-ID
+lookup indexes. Wider published-page and typed-page experiments were rejected
+after regressions at 32M. The retained canonical index orders by the complete
+identity followed by `(published_at DESC, info_hash DESC, id DESC)` and excludes
+unmapped rows. It uses
 [concurrent construction](https://www.postgresql.org/docs/16/sql-createindex.html#SQL-CREATEINDEX-CONCURRENTLY)
 outside a transaction. Concurrent construction still consumes I/O and disk,
 and can wait for old transactions. A failed build may leave an invalid index;
