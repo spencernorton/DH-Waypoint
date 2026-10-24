@@ -90,6 +90,7 @@ CANDIDATE_INDEXES = [
 IDENTITY_PAGE_INDEX = """CREATE INDEX tc_identity_page ON torrent_contents(
  content_type,content_source,content_id,published_at DESC,info_hash DESC,id DESC)
  WHERE content_id IS NOT NULL"""
+RAW_SUBSTRING_INDEX = "CREATE INDEX raw_name_trgm ON torrents USING gin(name public.gin_trgm_ops)"
 
 # Current catalogue authority is read separately from attributed plugin proposals.
 ELIGIBLE = """EXISTS (SELECT 1 FROM torrents t WHERE t.info_hash=tc.info_hash AND NOT t.private)
@@ -292,6 +293,13 @@ def cases(rows):
     queries['raw_text_rare']=raw_page("raw.tsv @@ 'title123456'::tsquery")
     queries['raw_text_miss']=raw_page("raw.tsv @@ 'unfindabletoken'::tsquery")
     queries['raw_keyset']=raw_page("raw.info_hash>decode('8000000000000000000000000000000000000000','hex')")
+    # REST v2 uses escaped literal ILIKE, not TSV syntax. Keep these separate
+    # from the raw full-text alternative and fetch limit+1 as the API does.
+    for name,term in {'hot':'title1','rare':'title123456 ',
+                      'miss':'unfindabletoken','wildcard':'title_%'}.items():
+        escaped=term.replace('\\','\\\\').replace('%','\\%').replace('_','\\_')
+        literal=psycopg.sql.Literal('%'+escaped+'%').as_string()
+        queries['raw_substring_'+name]=raw_page('raw.name ILIKE '+literal).replace('LIMIT 100','LIMIT 101')
     return queries
 
 
@@ -330,6 +338,16 @@ def verify_page(conn,args,name,result):
             raise RuntimeError("wrong episode or pack")
     if name in ['text_miss','raw_text_miss'] and result:
         raise RuntimeError("miss returned results")
+    if name.startswith('raw_substring_'):
+        if name in ['raw_substring_miss','raw_substring_wildcard'] and result:
+            raise RuntimeError('literal substring miss returned results')
+        for _,hash_value in result:
+            n=by_hash[bytes(hash_value)]
+            family=1 if n%20==0 else 1000+(n*48271)%1000003
+            if name=='raw_substring_hot' and 'title1' not in 'title'+str(family):
+                raise RuntimeError('wrong literal substring candidate')
+            if name=='raw_substring_rare' and family!=123456:
+                raise RuntimeError('wrong rare literal substring candidate')
     emit(args.out,{"kind":"page_correctness","case":name,"checked":len(result),"failures":0})
 
 
@@ -418,6 +436,10 @@ def run(conn,args):
     queries=cases(rows)
     if args.cases:
         queries={k:v for k,v in queries.items() if k in args.cases.split(',')}
+    else:
+        # Preserve the original 25-case mix across all three main scales.
+        # The subsequently merged v2 API gets an explicit supplemental profile.
+        queries={k:v for k,v in queries.items() if not k.startswith('raw_substring_')}
     # Resolve cursor outside measurement; fetching an anchor is not part of the keyset request.
     if "keyset" in queries:
         anchor_start=time.perf_counter()
@@ -512,14 +534,16 @@ def indexes(conn,args):
     if args.variant=='selected':
         # Qualify the compact serving set separately: the raw B-tree cannot
         # implement @@, and current episode predicates do not use whole-JSON GIN.
-        statements=[sql for sql in CANDIDATE_INDEXES if 'tc_episodes_gin' not in sql]
+        conn.execute('CREATE EXTENSION IF NOT EXISTS pg_trgm WITH SCHEMA public')
+        statements=[sql for sql in CANDIDATE_INDEXES if not any(x in sql for x in ['tc_episodes_gin','raw_tsv_gin'])]
+        statements.append(RAW_SUBSTRING_INDEX)
         statements.append(IDENTITY_PAGE_INDEX)
         for sql in statements:
             start=time.perf_counter()
             statement=sql.replace('CREATE INDEX ','CREATE INDEX CONCURRENTLY IF NOT EXISTS ')
             conn.execute(statement)
             emit(args.out,{"kind":"index_change","variant":args.variant,"sql":statement,"seconds":time.perf_counter()-start})
-        for name in ['raw_tsv_btree','tc_episodes_gin']:
+        for name in ['raw_tsv_btree','raw_tsv_gin','tc_episodes_gin']:
             start=time.perf_counter()
             statement='DROP INDEX CONCURRENTLY IF EXISTS '+name
             conn.execute(statement)
@@ -528,6 +552,7 @@ def indexes(conn,args):
         storage(conn,args)
         return
     conn.execute('DROP INDEX IF EXISTS tc_identity_page')
+    conn.execute('DROP INDEX IF EXISTS raw_name_trgm')
     conn.execute('CREATE INDEX IF NOT EXISTS raw_tsv_btree ON torrents(tsv)')
     for sql in CANDIDATE_INDEXES:
         name=sql.split()[2]
