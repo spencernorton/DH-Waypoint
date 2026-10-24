@@ -16,12 +16,12 @@ p.add_argument('--out',type=Path,required=True)
 args=p.parse_args()
 data=json.loads(args.summary.read_text())
 rows=[r for r in data['latencies'] if r['rows']==32000000 and not r['concurrent_writes']]
-colors={'candidate':'#53dfb0','selected':'#ffbd73'}
+colors={'candidate':'#53dfb0','retained':'#ffbd73','resolved':'#c79bff'}
 plt.rcParams.update({'font.family':'DejaVu Sans','font.size':10,'figure.facecolor':'#111722',
     'axes.facecolor':'#111722','axes.edgecolor':'#465267','text.color':'#edf1f7',
     'axes.labelcolor':'#d1dae8','xtick.color':'#b7c5d8','ytick.color':'#dbe4f1',
     'savefig.facecolor':'#111722'})
-fig,axes=plt.subplots(1,2,figsize=(15,7))
+fig,axes=plt.subplots(1,2,figsize=(17,8.5))
 profiles=[
  [('raw_substring_hot','literal','Substring · common'),('raw_substring_rare','literal','Substring · rare'),
   ('raw_substring_miss','literal','Substring · absent'),('raw_substring_wildcard','literal','Literal wildcard characters'),
@@ -29,12 +29,13 @@ profiles=[
  [('identity_hot','auto','Hot canonical ID · automatic'),('identity_hot','force_generic_plan','Hot canonical ID · generic'),
   ('identity_episode_quality','auto','ID + episode + quality · automatic'),
   ('identity_episode_quality','force_generic_plan','ID + episode + quality · generic'),
-  ('external_keyset','auto','External ID · automatic'),('external_keyset','force_generic_plan','External ID · generic')]
+  ('external_keyset','auto','Rare external ID · automatic'),('external_keyset','force_generic_plan','Rare external ID · generic'),
+  ('external_hot','auto','Hot external alias · automatic'),('external_hot','force_generic_plan','Hot external alias · generic')]
 ]
 for ax,cases,title in zip(axes,profiles,['Raw v2 operator/order profile','Prepared identities · server plan mode']):
     for ci,(case,mode,label) in enumerate(cases):
         for vi,variant in enumerate(colors):
-            y=ci+(vi-.5)*.25
+            y=ci+(vi-1)*.2
             r=next((r for r in rows if r['case']==case and r['plan_mode']==mode and
                     r['variant']==variant and r['cache_state']=='warm'),None)
             if r:
@@ -58,10 +59,10 @@ for ax,cases,title in zip(axes,profiles,['Raw v2 operator/order profile','Prepar
     ax.spines[['top','right','left']].set_visible(False)
 legend=[Line2D([0],[0],color=color,marker='o',lw=2,label=variant.capitalize()) for variant,color in colors.items()]
 legend.append(Line2D([0],[0],marker='o',markerfacecolor='none',color='#cdd6e3',lw=0,label='Cold p95 · selected cases'))
-fig.legend(handles=legend,loc='upper right',bbox_to_anchor=(.99,.99),ncol=3,frameon=False,fontsize=9)
+fig.legend(handles=legend,loc='upper right',bbox_to_anchor=(.99,.99),ncol=4,frameon=False,fontsize=9)
 fig.suptitle('32 million torrents: predicate and plan sensitivity',x=.02,y=.99,ha='left',fontsize=18,fontweight='bold')
 fig.text(.02,.04,'Warm dots span p50 → p95. Hollow dots are cold p95. Triangles mark timeouts at the 5-second budget; partial successes remain in JSON.\n'
-    'Reduced serving model · 6-CPU / 16-GiB database cap · 30 warm observations scheduled / 10 selected cold trials · no HTTP latency claim.',
+    'Resolved includes lookup + page + snapshot round trips. Reduced serving model · 6-CPU / 16-GiB database cap · 30 warm observations scheduled / 10 selected cold trials · no HTTP latency claim.',
     fontsize=9,color='#b7c5d8')
 fig.tight_layout(rect=(.01,.12,.995,.91),w_pad=3)
 args.out.parent.mkdir(parents=True,exist_ok=True)

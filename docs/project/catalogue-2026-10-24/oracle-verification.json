@@ -1,0 +1,21 @@
+{
+  "by_case": {
+    "external_correlated": 240,
+    "external_hot": 90,
+    "external_hot_or_canonical": 90,
+    "external_hot_or_missing": 90,
+    "external_identifier": 240,
+    "external_keyset": 590,
+    "identity_episode_quality": 90,
+    "identity_rare": 500,
+    "raw_substring_rare": 110,
+    "raw_text_rare": 180,
+    "text_rare": 240
+  },
+  "failures": 0,
+  "files_with_verified_samples": 192,
+  "format": 1,
+  "scope": "non-concurrent saved rare, hot-alias and combined-filter pages; independent modular population and hash/order oracle",
+  "source_sha256": "55fc14ac271960bf0c1a2503f2f3d27733a8fa6a8fb27c57971dd360d89e25b8",
+  "verified_sample_digests": 2460
+}

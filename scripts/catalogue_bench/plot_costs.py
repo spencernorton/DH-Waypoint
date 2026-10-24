@@ -24,11 +24,11 @@ for col,size in enumerate(sizes):
     for row in sorted(data['storage'],key=lambda r:r['at']):
         if row['rows']!=size or not row['file'].endswith('-indexes.jsonl'):continue
         variant=row['file'].rsplit('/',1)[-1].split('-')[1]
-        if variant not in ['baseline','candidate','selected']:continue
+        if variant not in ['baseline','candidate','retained']:continue
         total=sum(r[3] for r in row['relations'])/2**30
         indexes=sum(r[2] for r in row['relations'])/2**30
         storage[variant]=(total-indexes,indexes)
-    variants=[v for v in ['baseline','candidate','selected'] if v in storage]
+    variants=[v for v in ['baseline','candidate','retained'] if v in storage]
     x=list(range(len(variants)))
     ax=axes[0,col]
     table=[storage[v][0] for v in variants];indexes=[storage[v][1] for v in variants]
@@ -42,7 +42,7 @@ for col,size in enumerate(sizes):
     ax.set_xticks(x,[v.capitalize() for v in variants])
     ax.grid(axis='y',alpha=.15)
     ax=axes[1,col]
-    writes={r['variant']:r for r in data['concurrent_writes'] if r['rows']==size and '-substring-' not in r['file']}
+    writes={r['variant']:r for r in data['concurrent_writes'] if r['rows']==size and '-substring-' not in r['file'] and not r['file'].endswith('/raw-concurrent.jsonl')}
     ax.bar([i-.18 for i in x],[writes[v]['inserts_per_second'] for v in variants],width=.34,color='#53dfb0',label='Inserted torrents/s')
     ax.bar([i+.18 for i in x],[writes[v]['updates_per_second'] for v in variants],width=.34,color='#8eacff',label='Reobserved torrents/s')
     ax.set_xticks(x,[v.capitalize() for v in variants])

@@ -21,8 +21,8 @@ cases=[('raw_text_rare','Raw FTS · rare · alternative'),('external_keyset','Ex
        ('identity_hot','Canonical ID · hot'),('type_browse','Type browse'),
        ('offset','Offset · 1,000,000'),('keyset','Published cursor'),
        ('enriched_with_fallback','Full fallback union'),('enriched_bounded_fallback','Bounded fallback merge')]
-variants=['baseline','candidate','selected']
-colors={'baseline':'#8eacff','candidate':'#53dfb0','selected':'#ffbd73'}
+variants=['baseline','candidate','retained']
+colors={'baseline':'#8eacff','candidate':'#53dfb0','retained':'#ffbd73'}
 plt.rcParams.update({'font.family':'DejaVu Sans','font.size':10,'figure.facecolor':'#111722',
                     'axes.facecolor':'#111722','axes.edgecolor':'#465267','text.color':'#edf1f7',
                     'axes.labelcolor':'#d1dae8','xtick.color':'#b7c5d8','ytick.color':'#dbe4f1',
@@ -56,7 +56,7 @@ legend=[Line2D([0],[0],color=colors[v],marker='o',lw=2,label=v.capitalize()) for
 fig.legend(handles=legend,loc='upper right',bbox_to_anchor=(.99,.99),ncol=len(legend),frameon=False)
 fig.suptitle('Catalogue retrieval: measured p50 → p95',x=.02,y=.99,ha='left',fontsize=18,fontweight='bold')
 fig.text(.02,.045,'Dots start at p50 and end at p95. Triangles mark query errors at the 5-second budget.\n'
-         'Synthetic SQL workload · PostgreSQL 16.15 · 6-CPU / 16-GiB cap · 30 scheduled warm observations · no HTTP latency claim.',
+         'Retained tested at 32M only. Synthetic SQL workload · PostgreSQL 16.15 · 6-CPU / 16-GiB cap · 30 scheduled warm observations · no HTTP latency claim.',
          fontsize=9,color='#b7c5d8',va='bottom')
 fig.tight_layout(rect=(.01,.12,.995,.92),w_pad=2)
 args.out.parent.mkdir(parents=True,exist_ok=True)

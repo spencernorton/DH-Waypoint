@@ -74,7 +74,11 @@ page with an independent mathematical oracle. The
 episode GIN, replaces the experimental raw TSV GIN with the v2 API's literal
 name-substring trigram index, retains external-ID/page indexes, and adds an
 ordered canonical-ID index to test skew-sensitive prepared plans. It uses
-concurrent index creation. Retain or reject those choices from the measurements.
+concurrent index creation. `indexes --variant retained` removes the wider published/typed browse indexes
+while keeping ordered canonical lookup, reverse identifiers and migration71's
+raw-name trigram operator. It is the final 32M index profile. `--keep-current-indexes`
+with `--skip-seed` lets a full suite validate that already established set rather
+than rebuild it before timing. The run records its actual inventory and bytes.
 The original 25-case mix stays fixed. Request the supplemental v2 profile with
 `--cases raw_substring_hot,raw_substring_rare,raw_substring_miss,raw_substring_wildcard,raw_v2_keyset`.
 It uses escaped `ILIKE`, canonical-hash ordering and 101 rows for a 100-row page
@@ -83,6 +87,17 @@ It also follows raw serving's direct private-field predicate. The original
 25-case model retains a redundant private self-semijoin on raw queries, so its
 raw FTS/hash-cursor timings must not be attributed to the v2 API. Both profiles
 still use reduced quarantine/adult guards, not the complete application policy.
+
+`resolved.py --out results/resolved.jsonl` measures a second profile after the
+retained 32M suite. It resolves at most two complete canonical keys, then reads
+the page in one read-only repeatable-read transaction. A singleton adds direct
+canonical equality plus the original identifier guard; multiple keys retain the
+original semijoin. Timing includes BEGIN, lookup, page and COMMIT round trips.
+Automatic/custom/generic probes include hot/rare aliases, a missing alternate,
+a duplicate canonical alternative and two distinct keys. Failed warmups and
+skipped observations remain visible. These are SQL transactions, not GORM
+hydration or HTTP latency. Go integration tests separately cover source wiring,
+namespace/OR behavior, policy before paging, alias revocation and cancellation.
 
 Additional cold queries can use `run_suite.py --cold-only --skip-seed` with one
 already loaded size, the current `--variants` label, and `--cold-cases` containing
