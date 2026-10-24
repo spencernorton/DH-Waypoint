@@ -4,6 +4,7 @@ import argparse
 import json
 import math
 from pathlib import Path
+import re
 import statistics
 
 p=argparse.ArgumentParser(description=__doc__)
@@ -22,7 +23,9 @@ for path in args.resources:
 points.sort(key=lambda r:r['at'])
 
 def bytes_value(text):
-    value,unit=text.split()
+    match=re.fullmatch(r'([0-9.]+)\s*([A-Za-z]+)',text.strip())
+    if not match:raise ValueError('unrecognized Docker memory unit')
+    value,unit=match.groups()
     multiplier={'B':1,'KiB':2**10,'MiB':2**20,'GiB':2**30,'TiB':2**40,
                 'kB':1000,'MB':1000**2,'GB':1000**3,'TB':1000**4}[unit]
     return float(value)*multiplier
@@ -36,11 +39,12 @@ def distribution(values):
 stages=[]
 starts={}
 for event in summary['stages']:
-    if event['kind']=='stage_start':starts[event['stage']]=event['at']
-    elif event['stage'] in starts:
-        start=starts.pop(event['stage'])
+    key=(event['file'],event['stage'])
+    if event['kind']=='stage_start':starts[key]=event['at']
+    elif key in starts:
+        start=starts.pop(key)
         selected=[r for r in points if start<=r['at']<=event['at']]
-        stages.append({'stage':event['stage'],'start':start,'end':event['at'],
+        stages.append({'file':event['file'],'stage':event['stage'],'start':start,'end':event['at'],
             'exit_code':event['exit_code'],'sample_count':len(selected),
             'cpu_percent_one_core_is_100':distribution([float(r['CPUPerc'].rstrip('%')) for r in selected]),
             'docker_working_set_bytes':distribution([bytes_value(r['MemUsage'].split(' / ')[0]) for r in selected]),
