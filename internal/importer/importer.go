@@ -477,11 +477,22 @@ func (i *activeImport) Import(items ...Item) error {
 	if i.stopped {
 		return ErrImportClosed
 	}
+	if err := i.ctx.Err(); err != nil {
+		return err
+	}
 
 	i.wg.Add(len(items))
 
-	for _, item := range items {
-		i.itemChan <- item
+	for index, item := range items {
+		select {
+		case i.itemChan <- item:
+		case <-i.ctx.Done():
+			// Only dispatched items have a buffer worker to call Done.
+			// Balance the remainder before releasing the mutex so Close
+			// and Drain cannot deadlock after the receiver cancels.
+			i.wg.Add(-(len(items) - index))
+			return i.ctx.Err()
+		}
 	}
 
 	return nil

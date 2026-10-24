@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Streaming NDJSON imports cap each line at 1 MiB, detect body read errors,
+  propagate client cancellation through the real HTTP request context and
+  always drain/close the importer. Failed streams never report `import complete`;
+  accepted prefixes can remain persisted. Overall stream size remains unbounded
+  so callers can import many individually bounded records. Cancellation also
+  unblocks an importer waiting to dispatch and balances undispatched items so
+  draining cannot deadlock.
+
 - REST search returns `total_count_is_estimate` alongside `total_count`, so
   clients can distinguish an approximate total from an exact count. The flag
   is always present, including `false`, and documented in OpenAPI. REST stats

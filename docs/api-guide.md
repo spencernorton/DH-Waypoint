@@ -14,9 +14,9 @@ exhaustive references are linked at the end.
 | Torznab | `GET /torznab/api` | `apikey=` or `Authorization: Bearer` when `TORZNAB_API_KEY` is set | Sonarr/Radarr/Lidarr/Readarr/Prowlarr indexer feed |
 | Processors admin | `/api/processors/v1/*` | `Authorization: Bearer $PROCESSORS_ADMIN_TOKEN` (503 when unset) | Register/pause/remove plugins, job status |
 | Evidence webhook | `POST /evidence/arr/<instance>` | `X-Evidence-Token: $EVIDENCE_WEBHOOK_SECRET` | Feed *arr grab/import outcomes back into matching |
-| Import | `POST /import` | none built-in | Bulk NDJSON import of torrent records |
+| Import | `POST /import` | `HTTP_SERVER_API_KEY` when set | Bulk NDJSON import of torrent records |
 | Private files + tracker | `/api/private/v1/*`, `/announce/<passkey>`, `/scrape/<passkey>` | admin bearer token / member passkey | Private `.torrent` upload, personalised download, swarm tracking ([guide](private-tracker.md)) |
-| Metrics / status | `GET /metrics`, `GET /status` | none built-in | Prometheus scrape, liveness |
+| Metrics / status | `GET /metrics`, `GET /status` | metrics uses `HTTP_SERVER_API_KEY` when set; status is public | Prometheus scrape, liveness |
 
 All examples use `B=http://localhost:3333`.
 
@@ -137,6 +137,19 @@ catalogue is untouched until you switch to `apply`.
 back a count. Imported rows pass the same CSAM/blocklist gates as
 crawled ones. Treat this endpoint as trusted-network only.
 
+Each JSON line is limited to 1 MiB, excluding its LF or CRLF delimiter; the
+overall stream can contain many such lines. Blank lines are ignored, and a
+final complete JSON record may omit its newline. Read/parse/import failures
+stop the stream and close its importer. Client disconnection cancels downstream
+work through the actual request context.
+
+Imports are incremental, so an accepted prefix can persist after a later error.
+The response includes progress counts and ends with `import complete` only if
+reading, importing and closing all succeed. Always verify that final marker:
+after progress has committed HTTP headers, a later failure is reported in the
+body and cannot change the earlier HTTP status. Before progress is sent,
+oversized lines return 413 and other import failures return 400.
+
 ## Building a UI or client on top
 
 - Read path: GraphQL, REST (`/api/v1`) and Torznab are the stable
@@ -145,8 +158,7 @@ crawled ones. Treat this endpoint as trusted-network only.
 - Auth is yours to add: put Caddy/Traefik/NPM in front and keep
   `:3333` on a trusted network. The recipes are in
   [operations/security](operations/security.md).
-- Live updates: poll GraphQL/`/metrics`, or use the GraphQL
-  websocket transport the endpoint already speaks.
+- Live updates: poll GraphQL/`/metrics`; the schema has no subscriptions.
 - Versioning: the processor contract is versioned
   (`dh-waypoint.processor.v1`); GraphQL fields are additive — pin your
   queries, not the whole schema.
