@@ -385,6 +385,12 @@ def verify_page(conn,args,name,result):
 
 
 def correctness(conn,args,queries):
+    def differences(left,right):
+        # Each complete result is evaluated once, then compared both ways.
+        # This does not alter or time the serving-query implementation.
+        return f"WITH a AS MATERIALIZED ({left}), b AS MATERIALIZED ({right}) "+\
+            "SELECT count(*) FROM ((SELECT * FROM a EXCEPT SELECT * FROM b) "+\
+            "UNION ALL (SELECT * FROM b EXCEPT SELECT * FROM a)) differences"
     pairs=[("identity_hot","identity_join"),("external_correlated","external_identifier"),
            ("external_identifier","external_keyset"),("season_current","season_indexable"),
            ("episode_current","episode_indexable"),("text_hot","enriched_with_fallback")]
@@ -392,8 +398,7 @@ def correctness(conn,args,queries):
     for left,right in pairs:
         def full(sql):
             return sql.rsplit(" ORDER BY ",1)[0]
-        query=f"SELECT count(*) FROM (({full(queries[left])} EXCEPT {full(queries[right])}) UNION ALL "
-        query+=f"({full(queries[right])} EXCEPT {full(queries[left])})) differences"
+        query=differences(full(queries[left]),full(queries[right]))
         start=time.perf_counter()
         conn.execute("SET statement_timeout='600s'")
         delta=conn.execute(query).fetchone()[0]
@@ -409,8 +414,8 @@ def correctness(conn,args,queries):
                    "page_equal":True,"differences":0})
     left=queries['text_hot'].rsplit(' ORDER BY ',1)[0]
     right=queries['raw_text_hot'].rsplit(' ORDER BY ',1)[0]
-    delta=conn.execute(f"SELECT count(*) FROM ((SELECT info_hash FROM ({left}) a EXCEPT SELECT info_hash FROM ({right}) b) "
-                       f"UNION ALL (SELECT info_hash FROM ({right}) b EXCEPT SELECT info_hash FROM ({left}) a)) difference").fetchone()[0]
+    delta=conn.execute(differences(f'SELECT info_hash FROM ({left}) x',
+                                  f'SELECT info_hash FROM ({right}) y')).fetchone()[0]
     emit(args.out,{"kind":"correctness","left":"content_name_fts","right":"raw_torrent_name_fts","differences":delta})
     if delta:
         raise RuntimeError("raw and content name indexes disagree")
