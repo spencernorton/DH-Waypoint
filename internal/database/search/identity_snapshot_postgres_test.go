@@ -20,10 +20,13 @@ func TestResolvedIdentitySnapshotRetainsAlternativesAndServing(t *testing.T) {
 	require.NoError(t, err)
 	s := f.serving(t, true)
 	ref := model.ContentRef{Type: model.ContentTypeMovie, Source: "imdb", ID: "tt-one"}
-	options := append(adultServingExactOptions(model.TableNameTorrentContent), query.WithFacet(TorrentContentTypeFacet(query.FacetIsAggregated())))
+	options := append(adultServingExactOptions(model.TableNameTorrentContent),
+		TorrentContentDefaultHydrate(), query.WithFacet(TorrentContentTypeFacet(query.FacetIsAggregated())))
 	result, err := s.TorrentContentByIdentifiers(ctx, []model.ContentRef{ref}, options...)
 	require.NoError(t, err)
 	require.Equal(t, f.hashes[4:5], adultServingContentHashes(result.Items))
+	require.Equal(t, "ordinary", result.Items[0].Content.ID)
+	require.Equal(t, f.hashes[4], result.Items[0].Torrent.InfoHash)
 	require.EqualValues(t, 1, result.Aggregations[TorrentContentTypeFacetKey].Items["movie"].Count)
 	for _, miss := range []model.ContentRef{
 		{Type: model.ContentTypeTvShow, Source: "imdb", ID: "tt-one"},

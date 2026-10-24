@@ -34,6 +34,13 @@ type GenericResult[T interface{}] struct {
 
 type SubQueryFactory = func(context.Context, *dao.Query) SubQuery
 
+type serialExecutionKey struct{}
+
+func isSerialExecution(ctx context.Context) bool {
+	serial, _ := ctx.Value(serialExecutionKey{}).(bool)
+	return serial
+}
+
 // GenericQuery executes queries for any type of search and returns a GenericResult
 func GenericQuery[T interface{}](
 	_ctx context.Context,
@@ -42,12 +49,15 @@ func GenericQuery[T interface{}](
 	tableName string,
 	factory SubQueryFactory,
 ) (GenericResult[T], error) {
-	return genericQueryWithExecution[T](_ctx, daoQ, option, tableName, factory, false)
+	return genericQueryWithExecution[T](_ctx, daoQ, option, tableName, factory, isSerialExecution(_ctx))
 }
 
 // GenericQuerySerial keeps all reads on a caller-owned snapshot transaction.
 // Speculative strategies must not race or cancel each other on one connection.
 func GenericQuerySerial[T interface{}](ctx context.Context, daoQ *dao.Query, option Option, tableName string, factory SubQueryFactory) (GenericResult[T], error) {
+	// Hydrators issue nested GenericQuery calls using this context. They must
+	// inherit the same execution mode while sharing the transaction connection.
+	ctx = context.WithValue(ctx, serialExecutionKey{}, true)
 	return genericQueryWithExecution[T](ctx, daoQ, option, tableName, factory, true)
 }
 
@@ -998,14 +1008,19 @@ func (b optionBuilder) applyCallbacks(ctx context.Context, results any) error {
 	wg.Add(len(b.callbacks))
 
 	for _, cb := range b.callbacks {
-		go (func(cb Callback) {
+		run := func(cb Callback) {
 			defer wg.Done()
 			if err := cb(ctx, cbCtx, results); err != nil {
 				cbCtx.Lock()
 				defer cbCtx.Unlock()
 				errs = append(errs, err)
 			}
-		})(cb)
+		}
+		if isSerialExecution(ctx) {
+			run(cb)
+		} else {
+			go run(cb)
+		}
 	}
 
 	wg.Wait()
