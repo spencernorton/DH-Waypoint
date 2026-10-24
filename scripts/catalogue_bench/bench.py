@@ -214,6 +214,7 @@ def seed_range(conn,args,start,end):
 
 
 def storage(conn,args):
+    conn.execute("SET statement_timeout='180s'")
     emit(args.out,{"kind":"storage","rows":conn.execute("SELECT count(*) FROM torrents").fetchone()[0],
                   "files":conn.execute("SELECT count(*) FROM torrent_files").fetchone()[0],
                   "relations":conn.execute("""SELECT relname,pg_relation_size(oid),pg_indexes_size(oid),
@@ -221,6 +222,7 @@ def storage(conn,args):
                     AND relkind='r' ORDER BY relname""").fetchall(),
                   "indexes":conn.execute("""SELECT indexrelname,pg_relation_size(indexrelid)
                     FROM pg_stat_user_indexes WHERE schemaname='catalogue_bench' ORDER BY indexrelname""").fetchall()})
+    conn.execute("SET statement_timeout='5s'")
 
 
 def cases(rows):
@@ -398,16 +400,20 @@ def writer(args,stop,counter):
 
 def run(conn,args):
     preflight(conn,args)
+    conn.execute("SET statement_timeout='180s'")
     rows=(args.rows if args.cache_state=="first_touch" else conn.execute("SELECT count(*) FROM torrents").fetchone()[0])
     queries=cases(rows)
     if args.cases:
         queries={k:v for k,v in queries.items() if k in args.cases.split(',')}
     # Resolve cursor outside measurement; fetching an anchor is not part of the keyset request.
     if "keyset" in queries:
+        anchor_start=time.perf_counter()
         anchor=conn.execute(f"SELECT published_at,info_hash,id FROM torrent_contents ORDER BY {ORDER} "
                             f"OFFSET {min(rows//2,1000000)} LIMIT 1").fetchone()
         literal=psycopg.sql.SQL("({},{},{})").format(*(psycopg.sql.Literal(x) for x in anchor)).as_string(conn)
         queries['keyset']=queries['keyset'].replace('CURSOR_ANCHOR',literal)
+        emit(args.out,{"kind":"anchor_setup","rows":rows,"seconds":time.perf_counter()-anchor_start})
+    conn.execute("SET statement_timeout='5s'")
     if not args.cases and args.cache_state=="warm":
         correctness(conn,args,queries)
     emit(args.out,{"kind":"run_start","rows":rows,"variant":args.variant,"cache_state":args.cache_state,

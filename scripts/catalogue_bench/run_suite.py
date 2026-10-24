@@ -83,6 +83,10 @@ for size in [int(x) for x in args.sizes.split(',')]:
     run(f"{size}-remove-candidates","indexes","--variant","baseline")
     if not args.skip_seed:
         run(f"{size}-seed","seed","--rows",str(size),"--workers","4","--disposable")
+    with bench.connect(os.environ['CATALOGUE_BENCH_DSN']) as conn:
+        conn.execute("SET statement_timeout=180000")
+        if conn.execute("SELECT count(*) FROM torrents").fetchone()[0]!=size:
+            raise SystemExit("fixture row count does not equal requested scale")
     for variant in args.variants.split(','):
         if variant not in ["baseline","candidate"]:
             raise SystemExit("invalid variant")
@@ -101,12 +105,14 @@ for size in [int(x) for x in args.sizes.split(',')]:
                     "--samples","1","--cache-state","first_touch","--cases",case,"--rows",str(size))
         run(f"{size}-{variant}-reindex","reindex","--variant",variant)
     with bench.connect(os.environ["CATALOGUE_BENCH_DSN"]) as conn:
+        conn.execute("SET statement_timeout=180000")
         before=conn.execute("SELECT count(*) FROM torrents").fetchone()[0]
     # A deliberate crash is confined to this disposable container/volume.
     subprocess.run(["docker","kill","--signal","KILL",args.container],check=True,stdout=subprocess.DEVNULL)
     start=time.monotonic()
     start_database()
     with bench.connect(os.environ["CATALOGUE_BENCH_DSN"]) as conn:
+        conn.execute("SET statement_timeout=180000")
         after=conn.execute("SELECT count(*) FROM torrents").fetchone()[0]
         sentinel=conn.execute("SELECT format FROM sentinel").fetchone()[0]
     bench.emit(out/"suite.jsonl",{"kind":"crash_recovery","rows":size,"before":before,"after":after,
