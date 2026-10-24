@@ -80,7 +80,12 @@ func readSource(ctx context.Context, tx pgx.Tx, hash []byte, lock bool) (source,
 	if lock {
 		// Lock order matches core persistence: independent authority, then parent
 		// and child rows. The short transaction has a deadline and no network I/O.
-		if _, e := tx.Exec(ctx, `LOCK TABLE label_evidence,torrent_canonical_labels,torrent_verdict_state,junkpurge_quarantine,torrent_files,torrent_hints,torrent_contents,torrent_tags IN SHARE MODE`); e != nil {
+		// A waiting SHARE request also holds back every later writer to these
+		// tables, so its wait is bounded whatever the caller's deadline; the rest
+		// of the transaction keeps the session's lock_timeout.
+		if _, e := tx.Exec(ctx, `SET LOCAL lock_timeout='2s';
+LOCK TABLE label_evidence,torrent_canonical_labels,torrent_verdict_state,junkpurge_quarantine,torrent_files,torrent_hints,torrent_contents,torrent_tags IN SHARE MODE;
+SET LOCAL lock_timeout TO DEFAULT`); e != nil {
 			return out, nil, e
 		}
 		if _, e := tx.Exec(ctx, `SELECT info_hash FROM torrents WHERE info_hash=$1 FOR UPDATE`, hash); e != nil {
