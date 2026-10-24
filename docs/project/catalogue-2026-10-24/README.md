@@ -61,6 +61,13 @@ plans and a combined canonical-ID/episode/quality predicate, recording server
 plan counters. Forcing a generic plan does not prove that automatic mode chose
 it in an application.
 
+The supplemental v2 probes also use raw serving's direct private-field check;
+the original raw-query model retains a redundant private self-semijoin. The
+models represent the same eligible set but can produce different plans. Even
+the supplemental profile models only the reduced quarantine/adult checks,
+not the complete application policy or HTTP/hydration work. The raw cursor
+probe uses the API's 101-row hash order without a count.
+
 ## Observations and decision
 
 Final results are populated only after the complete qualification finishes.
@@ -94,6 +101,7 @@ sampling latency. Docker working set excludes inactive file cache. Charged
 cgroup memory and peak include that cache; those counters were added late in
 the 10M run, so earlier coverage remains missing. Short stages can have no
 resource sample. CPU percentage uses 100% per core, with a six-core cap.
+The host and storage are shared; unrelated host I/O is not experimentally controlled.
 
 Reindex timings use offline `REINDEX SCHEMA` on the reduced schema. Concurrent
 index construction is measured on a quiescent synthetic corpus; it does not

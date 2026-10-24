@@ -60,20 +60,31 @@ for mode in ["auto","force_custom_plan","force_generic_plan"]:
             conn.execute("PREPARE catalogue_probe ("+','.join(['text']*len(params))+") AS "+query)
             execute=sql.SQL("EXECUTE catalogue_probe ({})").format(sql.SQL(',').join(sql.Literal(x) for x in params))
             bench.emit(args.out,{"kind":"prepared_query","case":name,"plan_mode":mode,"sql":query,"params":params})
+            phase='warmup'
+            attempted=0
             try:
                 result=conn.execute(execute,prepare=False).fetchall()
                 bench.verify_page(conn,args,name,result)
                 for i in range(args.samples):
+                    phase='sample'
+                    attempted=i+1
                     start=time.perf_counter()
                     result=conn.execute(execute,prepare=False).fetchall()
                     bench.emit(args.out,{"kind":"sample","rows":rows,"variant":args.variant,"cache_state":"warm",
                       "updates":False,"case":name,"sample":i,"ms":(time.perf_counter()-start)*1000,
                       "count":len(result),"digest":bench.digest(result),"plan_mode":mode})
+                phase='plan'
                 plan=conn.execute(sql.SQL("EXPLAIN (ANALYZE,BUFFERS,WAL,SETTINGS,FORMAT JSON) ")+execute).fetchone()[0]
                 bench.emit(args.out,{"kind":"plan","rows":rows,"variant":args.variant,"case":name,"plan_mode":mode,"plan":plan})
             except psycopg.Error as err:
-                bench.emit(args.out,{"kind":"sample_error","rows":rows,"variant":args.variant,"case":name,
-                           "cache_state":"warm","updates":False,"plan_mode":mode,"sqlstate":err.sqlstate})
+                kind={'warmup':'warmup_error','sample':'sample_error','plan':'plan_error'}[phase]
+                bench.emit(args.out,{"kind":kind,"rows":rows,"variant":args.variant,"case":name,
+                           "cache_state":"warm","updates":False,"plan_mode":mode,"sqlstate":err.sqlstate,
+                           'phase':phase,'sample':attempted-1 if phase=='sample' else None})
+                if err.sqlstate!='57014':raise
+                for i in range(attempted,args.samples):
+                    bench.emit(args.out,{'kind':'sample_skipped','rows':rows,'variant':args.variant,'case':name,
+                        'cache_state':'warm','updates':False,'plan_mode':mode,'sample':i,'reason':'prior timeout'})
             counters=conn.execute("SELECT generic_plans,custom_plans FROM pg_prepared_statements WHERE name='catalogue_probe'").fetchone()
             bench.emit(args.out,{'kind':'prepared_counters','case':name,'plan_mode':mode,
-                       'generic_plans':counters[0],'custom_plans':counters[1]})
+                       'rows':rows,'variant':args.variant,'generic_plans':counters[0],'custom_plans':counters[1]})
