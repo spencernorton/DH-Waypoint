@@ -83,8 +83,12 @@ paths:
             application/json:
               schema:
                 type: object
+                required: [torrent_contents, torrent_contents_is_estimate]
                 properties:
                   torrent_contents: { type: integer }
+                  torrent_contents_is_estimate:
+                    type: boolean
+                    description: True when torrent_contents is approximate. Always present, including false for exact counts.
   /api/v1/openapi.yaml:
     get:
       summary: This specification
@@ -103,8 +107,14 @@ components:
   schemas:
     SearchResponse:
       type: object
+      required: [total_count, total_count_is_estimate, has_next_page, items]
       properties:
-        total_count: { type: integer }
+        total_count:
+          type: integer
+          description: Matching row count; approximate when total_count_is_estimate is true.
+        total_count_is_estimate:
+          type: boolean
+          description: True when the count budget was exceeded and total_count is an estimate. Always present, including false for exact counts.
         has_next_page: { type: boolean }
         items:
           type: array

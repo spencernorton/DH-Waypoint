@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- REST search returns `total_count_is_estimate` alongside `total_count`, so
+  clients can distinguish an approximate total from an exact count. The flag
+  is always present, including `false`, and documented in OpenAPI. REST stats
+  likewise returns `torrent_contents_is_estimate` with its catalogue total.
+
 ## 5.7.0 — 2026-10-24
 
 - GraphQL torrent search accepts `contentIdentity: {type, source, id}` to
