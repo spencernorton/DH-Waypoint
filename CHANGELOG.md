@@ -38,6 +38,11 @@
   as well as dependency names; enforce the adapter's public-contract boundary.
 
 
+- Add algorithm-aware torrent identity and bounded BEP 52 metadata validation
+  foundations, including verified hybrid layouts, original-info-byte hashing,
+  v2 piece-layer checks and full SHA-256 magnet helpers. Runtime integration
+  follows separately; this increment does not yet enable v2 crawling or APIs.
+
 ## 5.7.0 — 2026-10-24
 
 - GraphQL torrent search accepts `contentIdentity: {type, source, id}` to
