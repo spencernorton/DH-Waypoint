@@ -12,7 +12,7 @@
 services:
 
   dh-waypoint:
-    image: ghcr.io/spencernorton/dh-waypoint:${DH_WAYPOINT_VERSION:-v5.6.0}
+    image: ghcr.io/spencernorton/dh-waypoint:${DH_WAYPOINT_VERSION:-v5.7.1}
     container_name: dh-waypoint
     restart: unless-stopped
     depends_on:
@@ -41,6 +41,17 @@ services:
       TRACKER_PUBLIC_BASE_URL: ${TRACKER_PUBLIC_BASE_URL:-}
       TORZNAB_API_KEY: ${TORZNAB_API_KEY:-}
       TMDB_API_KEY: ${TMDB_API_KEY:-}
+      # Shared secret for /evidence/arr/<instance>: the X-Evidence-Token
+      # header each *arr webhook sends. Empty accepts unauthenticated posts.
+      EVIDENCE_WEBHOOK_SECRET: ${EVIDENCE_WEBHOOK_SECRET:-}
+      CSAM_BLOCKLIST_ENABLED: "${CSAM_BLOCKLIST_ENABLED:-true}"
+      CSAM_BLOCKLIST_FEED_URLS: "${CSAM_BLOCKLIST_FEED_URLS:-}"
+      CSAM_BLOCKLIST_EXPORT_ENABLED: "${CSAM_BLOCKLIST_EXPORT_ENABLED:-true}"
+      CSAM_BLOCKLIST_EXPORT_UPSTREAM_URL: "${CSAM_BLOCKLIST_EXPORT_UPSTREAM_URL:-}"
+      CONTENT_FILTER_ENABLED: "${CONTENT_FILTER_ENABLED:-false}"
+      CONTENT_FILTER_ENFORCE: "${CONTENT_FILTER_ENFORCE:-false}"
+      RETENTION_ENABLED: "${RETENTION_ENABLED:-false}"
+      RETENTION_ENABLE_PURGE: "${RETENTION_ENABLE_PURGE:-false}"
       DHT_CRAWLER_SCALING_FACTOR: "${DHT_SCALING_FACTOR:-1}"
       LOG_LEVEL: ${LOG_LEVEL:-info}
     ports:
