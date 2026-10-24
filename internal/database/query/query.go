@@ -75,7 +75,7 @@ func genericQueryWithExecution[T interface{}](_ctx context.Context, daoQ *dao.Qu
 			gq.doCount()
 		}
 		if len(gq.errs) == 0 {
-			if aggs, err := gq.builder.calculateAggregations(gq.ctx); err != nil {
+			if aggs, err := gq.builder.calculateAggregationsSerial(gq.ctx); err != nil {
 				gq.addError(err)
 			} else {
 				gq.result.Aggregations = aggs
@@ -534,6 +534,7 @@ type OptionBuilder interface {
 	applyPost(*gorm.DB) error
 	createFacetsFilterCriteria() (Criteria, error)
 	calculateAggregations(context.Context) (Aggregations, error)
+	calculateAggregationsSerial(context.Context) (Aggregations, error)
 	WithTotalCount(bool) OptionBuilder
 	WithHasNextPage(bool) OptionBuilder
 	WithAggregationBudget(float64) OptionBuilder
