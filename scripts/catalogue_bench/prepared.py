@@ -15,6 +15,7 @@ p=argparse.ArgumentParser(description=__doc__)
 p.add_argument("--out",required=True)
 p.add_argument("--variant",required=True)
 p.add_argument("--samples",type=int,default=30)
+p.add_argument('--cases',help='optional comma-separated prepared cases')
 args=p.parse_args()
 raw_policy=bench.ELIGIBLE.replace('=tc.info_hash','=raw.info_hash')
 identity=("SELECT tc.id,tc.info_hash FROM torrent_contents tc WHERE "
@@ -39,6 +40,7 @@ cases={
     "identity_rare":(identity,["movie","synthetic","123456"]),
     "identity_episode_quality":(filtered_identity,["tv_show","synthetic","1"]),
     "external_keyset":(external,["movie","imdb","tt123456"]),
+    "external_hot":(external,["tv_show","imdb","tt1"]),
     "raw_text_hot":(raw,["title1"]),
     "raw_text_rare":(raw,["title123456"]),
     "raw_text_miss":(raw,["unfindabletoken"]),
@@ -47,6 +49,10 @@ cases={
     "raw_substring_miss":(substring,["%unfindabletoken%"]),
     "raw_v2_keyset":(raw_cursor,["80"+"00"*19]),
 }
+if args.cases:
+    wanted=set(args.cases.split(','))
+    if wanted-cases.keys():p.error('unknown prepared case')
+    cases={k:v for k,v in cases.items() if k in wanted}
 with bench.connect(os.environ['CATALOGUE_BENCH_DSN']) as metadata:
     metadata.execute('SET statement_timeout=180000')
     rows=metadata.execute('SELECT count(*) FROM torrents').fetchone()[0]
