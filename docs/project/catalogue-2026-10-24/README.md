@@ -48,6 +48,11 @@ Thirty warm observations are scheduled per case; four query workers repeat the
 mix alongside actual source reobservations and inserts. A synthetic tail is
 removed afterward, in FK order, and the exact initial population is restored.
 
+Variants run sequentially with the same scheduled case mix and random seed.
+Timeouts change the executed work and writer windows have different durations.
+The observed writer rates are neither an isolated estimate of index overhead
+nor a production capacity forecast.
+
 REST v2 uses escaped literal `ILIKE`, canonical-hash order and `limit + 1`.
 Its separate substring profile tests common, rare, absent and literal-wildcard
 queries with 101-row retrieval. TSV measurements are an alternative query,
@@ -97,8 +102,11 @@ restart and exact row-count/sentinel check, including count time. It does not
 measure restoration from backup, in-flight transaction loss or HA failover.
 
 Setup/correctness/maintenance use budgets separate from measured queries.
-Development failures included an unsuitable initial query shape, an insufficient
-tail-cleanup budget, and an insufficient cursor-anchor setup budget. They were
+Development failures included an unsuitable initial query shape, insufficient
+tail-cleanup and cursor-anchor budgets, and a 180-second full-set comparison
+timeout at 32M. A repeat was interrupted before timing to remove duplicate
+complete-set computation. Full validation then uses 600 seconds and materializes
+each set once; timed queries retain five seconds. These were
 corrected before resumed final stages; no failed setup is labeled a completed
 scale. Stage hashes and frozen source retain the implementation changes.
 

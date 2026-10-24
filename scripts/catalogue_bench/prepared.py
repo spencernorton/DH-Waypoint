@@ -31,7 +31,9 @@ external=("SELECT tc.id,tc.info_hash FROM torrent_contents tc WHERE "
 raw=("SELECT encode(raw.info_hash,'hex') AS id,raw.info_hash FROM torrents raw "
      "WHERE raw.tsv @@ $1::tsquery AND "+raw_policy+" ORDER BY raw.info_hash LIMIT 100")
 substring=("SELECT encode(raw.info_hash,'hex') AS id,raw.info_hash FROM torrents raw "
-           "WHERE raw.name ILIKE $1 AND "+raw_policy+" ORDER BY raw.info_hash LIMIT 101")
+           "WHERE raw.name ILIKE $1 AND "+bench.raw_serving_policy()+" ORDER BY raw.info_hash LIMIT 101")
+raw_cursor=("SELECT encode(raw.info_hash,'hex') AS id,raw.info_hash FROM torrents raw "
+            "WHERE raw.info_hash>decode($1,'hex') AND "+bench.raw_serving_policy()+" ORDER BY raw.info_hash LIMIT 101")
 cases={
     "identity_hot":(identity,["tv_show","synthetic","1"]),
     "identity_rare":(identity,["movie","synthetic","123456"]),
@@ -43,6 +45,7 @@ cases={
     "raw_substring_hot":(substring,["%title1%"]),
     "raw_substring_rare":(substring,["%title123456 %"]),
     "raw_substring_miss":(substring,["%unfindabletoken%"]),
+    "raw_v2_keyset":(raw_cursor,["80"+"00"*19]),
 }
 bench.emit(args.out,{"kind":"prepared_manifest","source_sha256":hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
                     "bench_sha256":hashlib.sha256(Path(bench.__file__).read_bytes()).hexdigest(),
