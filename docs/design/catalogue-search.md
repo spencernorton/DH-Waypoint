@@ -100,6 +100,15 @@ An episode GIN index is useful only when the actual predicate can use its
 operators. A function call or JSON subexpression does not automatically use a
 whole-document GIN index.
 
+Migration 00072 adds the complete published-page, typed-page and partial
+external-ID lookup indexes. It uses
+[concurrent construction](https://www.postgresql.org/docs/16/sql-createindex.html#SQL-CREATEINDEX-CONCURRENTLY)
+outside a transaction. Concurrent construction still consumes I/O and disk,
+and can wait for old transactions. A failed build may leave an invalid index;
+inspect validity and remove that failed index before retrying the migration.
+Qualify build time, temporary headroom and ingestion impact on a restored
+catalogue before rollout. Existing indexes and historical migrations stay intact.
+
 Published content pages use `(published_at, info_hash, id)`. `id` distinguishes
 several content rows belonging to the same torrent. A deterministic order fixes
 ties in a stable snapshot; it does not freeze concurrent inserts or mutable
