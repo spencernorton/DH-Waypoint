@@ -57,6 +57,17 @@ services:
       # open internet.
       TORZNAB_API_KEY: ${TORZNAB_API_KEY:-}
 
+      # --- *arr evidence webhook ---
+      # Shared secret for /evidence/arr/<instance>: the X-Evidence-Token
+      # header each *arr webhook sends. Empty accepts unauthenticated posts.
+      EVIDENCE_WEBHOOK_SECRET: ${EVIDENCE_WEBHOOK_SECRET:-}
+
+      # --- Private tracker (opt-in): see docs/private-tracker.md ---
+      TRACKER_ENABLED: "${TRACKER_ENABLED:-false}"
+      TRACKER_PASSKEYS: ${TRACKER_PASSKEYS:-}
+      TRACKER_ADMIN_TOKEN: ${TRACKER_ADMIN_TOKEN:-}
+      TRACKER_PUBLIC_BASE_URL: ${TRACKER_PUBLIC_BASE_URL:-}
+
       # --- CSAM blocklist (pre-fetch defense) ---
       # Enabled by default with no feeds = NoOp until you opt in.
       # Self-export to a local JSONL log is on by default; outbound

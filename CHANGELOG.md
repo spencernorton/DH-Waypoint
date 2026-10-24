@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- The Compose examples pin `v5.7.1` and pass `EVIDENCE_WEBHOOK_SECRET` from
+  `.env`, so the *arr webhook can be authenticated as the README describes.
+  Both stacks now read the same `.env.example` settings, which no longer sets
+  `PROCESSING_MODE`: the root stack runs `basic` and the source stack `full`,
+  as documented.
+
 - Bound the optional grouped candidate-prefix strategy to two seconds for
   full-text searches, then use the existing exact grouped query while the
   caller's deadline remains live. Fast searches and unfiltered browsing retain
