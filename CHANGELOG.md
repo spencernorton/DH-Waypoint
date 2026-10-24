@@ -2,21 +2,6 @@
 
 ## Unreleased
 
-- Seed scrape results are committed 250 hashes per transaction instead of the
-  whole batch in one. Each transaction holds the admission SHARE lock on
-  `label_evidence` and its torrents' row locks, so a large batch stalled every
-  evidence writer until it finished. Each chunk still rechecks admission and
-  commits its ledger, sources, derived counts and liveness together; a failure
-  leaves earlier chunks committed.
-- The *arr webhook allows its evidence insert 30 seconds instead of five. The
-  insert can still wait behind a seed-scrape packet's admission lock, held for
-  one tracker round trip, and *arr clients never retry a failed webhook, so a
-  timeout lost the observation.
-- The v2 processor's source lock gives up after two seconds whatever the
-  caller's deadline, so a waiting SHARE request cannot hold back writers to its
-  eight tables for longer; the rest of its transaction keeps the session's
-  `lock_timeout`.
-
 - Bound the optional grouped candidate-prefix strategy to two seconds for
   full-text searches, then use the existing exact grouped query while the
   caller's deadline remains live. Fast searches and unfiltered browsing retain
@@ -77,6 +62,23 @@
   v1 API and processor semantics. Identity migrations refuse unsafe downgrade;
   raw name search gains a concurrent trigram index. Metadata indexing does not
   download payloads or claim unavailable BEP 9 outer piece layers were verified.
+
+## 5.7.1 — 2026-10-24
+
+- Seed scrape results are committed 250 hashes per transaction instead of the
+  whole batch in one. Each transaction holds the admission SHARE lock on
+  `label_evidence` and its torrents' row locks, so a large batch stalled every
+  evidence writer until it finished. Each chunk still rechecks admission and
+  commits its ledger, sources, derived counts and liveness together; a failure
+  leaves earlier chunks committed.
+- The *arr webhook allows its evidence insert 30 seconds instead of five. The
+  insert can still wait behind a seed-scrape packet's admission lock, held for
+  one tracker round trip, and *arr clients never retry a failed webhook, so a
+  timeout lost the observation.
+- The v2 processor's source lock gives up after two seconds whatever the
+  caller's deadline, so a waiting SHARE request cannot hold back writers to its
+  eight tables for longer; the rest of its transaction keeps the session's
+  `lock_timeout`.
 
 ## 5.7.0 — 2026-10-24
 
