@@ -24,7 +24,7 @@ Paged inputs accept `limit` from 0 to 1,000. Input lists contain at most 1,000
 entries, `queryString` is at most 4,096 bytes and an explicit
 `aggregationBudget` is from 1 to 5,000 planner-cost units. Split larger bulk
 operations and paginate results. Rejected operations return an error with code
-`OPERATION_LIMIT_EXCEEDED` before any resolver runs; parser/schema failures
+`OPERATION_LIMIT_EXCEEDED` before any resolver runs; other parser/schema failures
 retain their normal GraphQL errors. An oversized body returns HTTP 413 and an
 unsupported content type returns HTTP 415.
 

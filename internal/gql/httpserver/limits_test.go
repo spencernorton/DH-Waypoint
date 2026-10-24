@@ -197,13 +197,8 @@ func TestGraphQLBoundsDocumentsAndSelectionDepth(t *testing.T) {
 	deep := `{__type(name:"Query"){` + strings.Repeat("ofType{", 21) + "name" + strings.Repeat("}", 21) + "}}"
 	r = graphRequest(t, e, deep, nil)
 	require.Contains(t, r.Body.String(), `"OPERATION_LIMIT_EXCEEDED"`)
-	var wide strings.Builder
-	wide.WriteString("{")
-	for i := range 4000 {
-		fmt.Fprintf(&wide, "f%d:__typename ", i)
-	}
-	wide.WriteString("}")
-	r = graphRequest(t, e, wide.String(), nil)
-	require.Contains(t, r.Body.String(), `"GRAPHQL_PARSE_FAILED"`)
+	manyTokens := `{torrentContent{search(input:{infoHashes:[` + strings.Repeat(`"0" `, 10001) + `]}){totalCount}}}`
+	r = graphRequest(t, e, manyTokens, nil)
+	require.Contains(t, r.Body.String(), `"OPERATION_LIMIT_EXCEEDED"`)
 	require.Zero(t, s.calls.Load())
 }
