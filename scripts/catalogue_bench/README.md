@@ -59,6 +59,11 @@ indexes. `seed --workers 4` uses four independent transactional loaders. A
 failed parallel load can leave noncontiguous committed ranges; the loader
 refuses that state rather than silently skipping holes. Recreate that disposable
 fixture. A complete prefix can grow to the next scale without reseeding it.
+Growth of at least one million records rebuilds the harness's secondary query
+indexes after the bulk load; primary, unique and foreign-key constraints remain
+active. `--keep-seed-indexes` retains them during construction. The seed policy
+and actual build times are recorded. Bulk population throughput is distinct from
+the concurrent ingestion phase, which always runs with the tested index set.
 
 After the main suite, `prepared.py --out results/prepared.jsonl --variant candidate`
 compares forced generic and custom plans without changing the corpus. The

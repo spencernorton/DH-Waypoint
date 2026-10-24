@@ -163,6 +163,16 @@ def seed(conn, args):
     count=conn.execute("SELECT count(*) FROM torrents").fetchone()[0]
     if count != first-1:
         raise RuntimeError("incomplete previous parallel seed: recreate disposable fixture")
+    bulk=args.rows-count>=1000000 and not args.keep_seed_indexes
+    emit(args.out,{"kind":"seed_policy","rows_before":count,"rows_target":args.rows,
+                   "workers":args.workers,"bulk_secondary_rebuild":bulk})
+    if bulk:
+        # Population construction is separate from steady ingestion. Keep all
+        # PK/unique/FK constraints, and rebuild only our query indexes afterward.
+        for sql in BASE_INDEXES:
+            name=sql.split()[2]
+            conn.execute('DROP INDEX IF EXISTS '+name)
+            emit(args.out,{"kind":"bulk_index_drop","index":name})
     ranges=[(start,min(start+args.batch-1,args.rows)) for start in range(first,args.rows+1,args.batch)]
     def worker(bounds):
         with connect(args.dsn) as batch_conn:
@@ -483,6 +493,8 @@ def run(conn,args):
             deleted=conn.execute("DELETE FROM torrents WHERE n>%s",(initial_max,)).rowcount
         emit(args.out,{"kind":"synthetic_tail_cleanup","deleted_torrents":deleted,"initial_max":initial_max})
         conn.execute("SET statement_timeout='5s'")
+    if any('error' in batch for batch in counter):
+        raise RuntimeError('concurrent writer failed; inspect retained batch errors')
     for name,sql in queries.items():
         if args.cache_state=="first_touch":
             continue
@@ -535,6 +547,7 @@ def main():
     p.add_argument("--out",required=True)
     p.add_argument("--rows",type=int,default=2400000)
     p.add_argument("--batch",type=int,default=100000)
+    p.add_argument("--keep-seed-indexes",action="store_true",help="retain query indexes during large fixture construction")
     p.add_argument("--samples",type=int,default=30)
     p.add_argument("--workers",type=int,default=1)
     p.add_argument("--updates",action="store_true")
