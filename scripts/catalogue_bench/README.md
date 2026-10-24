@@ -76,9 +76,13 @@ name-substring trigram index, retains external-ID/page indexes, and adds an
 ordered canonical-ID index to test skew-sensitive prepared plans. It uses
 concurrent index creation. Retain or reject those choices from the measurements.
 The original 25-case mix stays fixed. Request the supplemental v2 profile with
-`--cases raw_substring_hot,raw_substring_rare,raw_substring_miss,raw_substring_wildcard`.
+`--cases raw_substring_hot,raw_substring_rare,raw_substring_miss,raw_substring_wildcard,raw_v2_keyset`.
 It uses escaped `ILIKE`, canonical-hash ordering and 101 rows for a 100-row page
 plus has-next-page. This is separate from the token-based full-text experiment.
+It also follows raw serving's direct private-field predicate. The original
+25-case model retains a redundant private self-semijoin on raw queries, so its
+raw FTS/hash-cursor timings must not be attributed to the v2 API. Both profiles
+still use reduced quarantine/adult guards, not the complete application policy.
 
 Additional cold queries can use `run_suite.py --cold-only --skip-seed` with one
 already loaded size, the current `--variants` label, and `--cold-cases` containing

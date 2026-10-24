@@ -23,7 +23,8 @@ if not files:
     p.error("no raw JSONL files found")
 if len(set(labels.values()))!=len(files):
     p.error("duplicate raw paths; select distinct qualified run folders")
-groups=defaultdict(lambda:{"samples":[],"errors":0,"skipped":0,"counts":set(),"files":set()})
+groups=defaultdict(lambda:{"samples":[],"errors":0,"warmup_errors":0,"skipped":0,
+                          "sqlstates":defaultdict(int),"counts":set(),"files":set()})
 storage=[]
 writes=[]
 indexes=[]
@@ -35,6 +36,7 @@ complete=set()
 inventory=[]
 stages=[]
 prepared=[]
+plan_errors=[]
 
 
 def key(row):
@@ -62,7 +64,10 @@ for file in files:
                 if kind=='sample':
                     group['samples'].append(row['ms']);group['counts'].add(row['count'])
                 elif kind=='sample_skipped':group['skipped']+=1
-                else:group['errors']+=1
+                else:
+                    group['errors']+=1
+                    group['warmup_errors']+=kind=='warmup_error'
+                    group['sqlstates'][str(row.get('sqlstate'))]+=1
             elif kind=='storage':storage.append({"file":label,**row})
             elif kind=='update_summary' and row.get('batches'):
                 batches=row['batches']
@@ -81,6 +86,8 @@ for file in files:
                 manifests.append(row)
                 if kind=='prepared_manifest':prepared_variant=row['variant']
             elif kind=='prepared_counters':prepared.append({'file':label,'variant':prepared_variant,**row})
+            elif kind=='plan_error':plan_errors.append({'file':label,
+                **{k:context[k] for k in ['rows','variant'] if k in context},**row})
             elif kind=='scale_complete':complete.add(row['rows'])
             elif kind in ['stage_start','stage_end']:stages.append({'file':label,**row})
 
@@ -94,6 +101,7 @@ for k,group in groups.items():
     values=sorted(group['samples'])
     latencies.append({"rows":k[0],"variant":k[1],"cache_state":k[2],"concurrent_writes":k[3],"case":k[4],"plan_mode":k[5],
       "samples":len(values),"errors":group['errors'],"skipped":group['skipped'],"p50_ms":quantile(values,.5),
+      "warmup_errors":group['warmup_errors'],"sqlstates":dict(group['sqlstates']),
       "p95_ms":quantile(values,.95),"p99_ms":quantile(values,.99),"min_ms":min(values) if values else None,
       "max_ms":max(values) if values else None,"result_counts":sorted(group['counts']),"files":sorted(group['files'])})
 result={"format":1,"quantile_method":"nearest rank; successes only; failures/skips retained separately",
@@ -101,6 +109,7 @@ result={"format":1,"quantile_method":"nearest rank; successes only; failures/ski
   "storage":storage,"concurrent_writes":writes,"index_operations":indexes,"reindex":reindex,"recovery":recovery,
   "correctness":correctness,"stages":stages,"raw_files":inventory,
   "prepared_plan_counters":prepared,
+  "plan_errors":plan_errors,
   "limits":["SQL microbenchmark; no HTTP serialization or complete production schema",
             "20-byte synthetic hashes; stated skew and file distribution",
             "30 warm and 10 selected cold samples give limited p99 resolution",

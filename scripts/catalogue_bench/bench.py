@@ -486,7 +486,9 @@ def run(conn,args):
     rows=(args.rows if args.cache_state=="first_touch" else conn.execute("SELECT count(*) FROM torrents").fetchone()[0])
     queries=cases(rows)
     if args.cases:
-        queries={k:v for k,v in queries.items() if k in args.cases.split(',')}
+        wanted=set(args.cases.split(','))
+        if wanted-queries.keys():raise RuntimeError('unknown query case: '+','.join(sorted(wanted-queries.keys())))
+        queries={k:v for k,v in queries.items() if k in wanted}
     else:
         # Preserve the original 25-case mix across all three main scales.
         # The subsequently merged v2 API gets an explicit supplemental profile.
@@ -523,6 +525,8 @@ def run(conn,args):
                 emit(args.out,{"kind":"warmup_error","case":name,"sqlstate":err.sqlstate})
                 if err.sqlstate=='57014':
                     timed_out.add(name)
+                else:
+                    raise
     random.Random(4501).shuffle(jobs)
     start=time.perf_counter()
     def worker(part):
@@ -542,6 +546,8 @@ def run(conn,args):
                       "sqlstate":err.sqlstate})
                     if err.sqlstate=='57014':
                         timed_out.add(name)
+                    else:
+                        raise
     try:
         with concurrent.futures.ThreadPoolExecutor(max_workers=args.workers) as executor:
             futures=[executor.submit(worker,jobs[i::args.workers]) for i in range(args.workers)]
@@ -576,6 +582,7 @@ def run(conn,args):
             emit(args.out,{"kind":"plan","rows":rows,"variant":args.variant,"case":name,"plan":plan})
         except psycopg.Error as err:
             emit(args.out,{"kind":"plan_error","case":name,"sqlstate":err.sqlstate})
+            if err.sqlstate!='57014':raise
     if args.cache_state!='first_touch':
         storage(conn,args)
 
