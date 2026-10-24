@@ -467,11 +467,13 @@ def run(conn,args):
     if args.ingest:
         # Restore the exact initial corpus before comparing another variant.
         # Remove only this run's synthetic tail, in FK order, within one transaction.
+        conn.execute("SET statement_timeout='180s'")
         with conn.transaction():
             for table in ['quarantined','torrent_files','annotations','torrent_contents']:
                 conn.execute(f"DELETE FROM {table} WHERE info_hash IN (SELECT info_hash FROM torrents WHERE n>%s)",(initial_max,))
             deleted=conn.execute("DELETE FROM torrents WHERE n>%s",(initial_max,)).rowcount
         emit(args.out,{"kind":"synthetic_tail_cleanup","deleted_torrents":deleted,"initial_max":initial_max})
+        conn.execute("SET statement_timeout='5s'")
     for name,sql in queries.items():
         if args.cache_state=="first_touch":
             continue
