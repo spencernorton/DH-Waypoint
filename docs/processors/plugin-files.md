@@ -42,7 +42,7 @@ by the first sync after restart. Re-registering through the
 id: my-filter              # optional; defaults to the file name
 enabled: true              # false keeps the file but deregisters
 driver: builtin/filter-list
-endpoint: ""               # http services + builtin/llm only
+endpoint: ""               # http processor services only
 mode: shadow               # shadow (record only) | apply
 state: active              # active | paused | draining
 priority: 100              # lower runs earlier within a stage
@@ -83,7 +83,9 @@ Template: `examples/plugins/01-filter-list.plugin.yml`.
 
 ### `builtin/regex-weights` — category documents
 
-Weighted rules stamp content type, video fields, tags and scores.
+Static weighted rules stamp content type, video fields, tags and scores.
+They do not learn or read retained learned state; use an external HTTP
+processor for calibration. Built-ins support feedback logging only.
 This is the "custom dataset" surface: rules can be generated from
 your own lists. Template: `examples/plugins/02-categories-regex.plugin.yml`.
 
@@ -100,12 +102,12 @@ Acts on tracker-observed swarm facts (`min_seeders`,
 never scraped is *unknown*, never dead.
 Template: `examples/plugins/03-tracker-liveness.plugin.yml`.
 
-### `builtin/llm`
+### Independent LLM adapter
 
-Sends each torrent to an OpenAI-compatible chat API and applies
-the model's JSON proposal. Templates:
-`04-llm-local-ollama.plugin.yml`, `05-llm-hosted.plugin.yml`.
-Full walkthrough: [connecting an LLM](llm.md).
+`builtin/llm` is retired. Run the [standalone LLM adapter](llm.md) and
+register it as `http`. Provider URLs, prompts, model settings, credentials
+and inference budgets belong in that service's configuration, never in
+this file. The `04` and `05` examples show the new registrations.
 
 ### `http` — your own service, any language
 
@@ -145,7 +147,7 @@ non-matching torrents record an abstention without a network call:
 ## Processing modes compose with plugins
 
 `PROCESSING_MODE` decides how much the *core* does before plugins
-see a torrent: `full` (built-in classifier), `basic` (coarse
+see a torrent: `full` (explicit built-in classifier), `basic` (default; coarse
 category from file extensions only), `raw` (nothing). Most
 plugin-first installs want `basic` or `raw` so their filter and
 category documents — not core defaults — decide outcomes. See

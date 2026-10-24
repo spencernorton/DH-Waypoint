@@ -69,6 +69,7 @@ func TestPostgresLegacyCELWriterRecoveryOffProtectedAndCaptured(t *testing.T) {
 			require.NoError(t, err)
 			deleteMetrics := processor.NewDeleteMetrics()
 			p, err := processor.New(processor.Params{
+				ProcessingConfig: processor.Config{Mode: processor.ModeFull}, // exercise the explicit CEL delete path
 				ClassifierConfig: classifierConfig, Search: backend, Dao: ld,
 				Workflow:        lazy.New(func() (classifier.Runner, error) { return runner, nil }),
 				BlockingManager: lazy.New(func() (blocking.Manager, error) { return manager, nil }),

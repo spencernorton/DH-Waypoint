@@ -161,41 +161,27 @@ func searchRequestToQueryOptions(r torznab.SearchRequest) ([]query.Option, error
 		options = append(options, query.Where(query.Or(catsCriteria...)))
 	}
 
+	// The supportedParams protocol combines alternative ID systems with OR.
+	// A client may know an ID that this catalogue has not mapped yet.
+	var identifiers []model.ContentRef
 	if r.IMDBID.Valid {
 		imdbID := r.IMDBID.String
 		if !strings.HasPrefix(imdbID, "tt") {
 			imdbID = "tt" + imdbID
 		}
 
-		var ct model.ContentType
-		if r.Type != torznab.FunctionTV {
-			ct = model.ContentTypeMovie
-		} else if r.Type != torznab.FunctionMovie {
-			ct = model.ContentTypeTvShow
-		}
-
-		options = append(options, query.Where(search.ContentAlternativeIdentifierCriteria(model.ContentRef{
-			Type:   ct,
-			Source: "imdb",
-			ID:     imdbID,
-		})))
+		identifiers = append(identifiers, identifierRefs(r.Type, "imdb", imdbID)...)
 	}
 
 	if r.TMDBID.Valid {
-		tmdbID := r.TMDBID.String
+		identifiers = append(identifiers, identifierRefs(r.Type, "tmdb", r.TMDBID.String)...)
+	}
 
-		var ct model.ContentType
-		if r.Type != torznab.FunctionTV {
-			ct = model.ContentTypeMovie
-		} else if r.Type != torznab.FunctionMovie {
-			ct = model.ContentTypeTvShow
-		}
-
-		options = append(options, query.Where(search.ContentCanonicalIdentifierCriteria(model.ContentRef{
-			Type:   ct,
-			Source: "tmdb",
-			ID:     tmdbID,
-		})))
+	if r.TVDBID.Valid {
+		identifiers = append(identifiers, identifierRefs(torznab.FunctionTV, "tvdb", r.TVDBID.String)...)
+	}
+	if len(identifiers) > 0 {
+		options = append(options, query.Where(search.TorrentContentIdentifiersCriteria(identifiers...)))
 	}
 
 	limit := r.Profile.DefaultLimit
@@ -216,4 +202,19 @@ func searchRequestToQueryOptions(r torznab.SearchRequest) ([]query.Option, error
 	}
 
 	return options, nil
+}
+
+func identifierRefs(function, source, id string) []model.ContentRef {
+	types := []model.ContentType{model.ContentTypeMovie, model.ContentTypeTvShow}
+	switch function {
+	case torznab.FunctionMovie:
+		types = []model.ContentType{model.ContentTypeMovie}
+	case torznab.FunctionTV:
+		types = []model.ContentType{model.ContentTypeTvShow}
+	}
+	var refs []model.ContentRef
+	for _, kind := range types {
+		refs = append(refs, model.ContentRef{Type: kind, Source: source, ID: id})
+	}
+	return refs
 }

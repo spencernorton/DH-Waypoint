@@ -1,0 +1,14 @@
+{
+  "id": "hosted-llm",
+  "endpoint": "https://api.openai.com/v1/chat/completions",
+  "model": "gpt-5-mini",
+  "api_key_env": "LLM_PROVIDER_API_KEY",
+  "capabilities": ["classify", "extract"],
+  "enable_inference": false,
+  "dry_run": true,
+  "json_mode": true,
+  "token_limit_field": "max_completion_tokens",
+  "max_output_tokens": 4096,
+  "max_requests": 100,
+  "requests_per_minute": 10
+}

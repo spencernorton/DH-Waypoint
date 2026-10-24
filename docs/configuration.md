@@ -106,7 +106,7 @@ classification and filtering live in plugins or a custom dataset.
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `PROCESSING_MODE` | `full` | `full`: complete CEL classifier workflow (title parsing, matching, TMDB/anime enrichment) plus the content filter when separately enabled. `basic`: no workflow, no metadata providers, no network — core stamps only a coarse content type from file-extension byte majority (episode pattern separates TV from movies); hints still win; nothing is ever deleted by classification. `raw`: metainfo persisted untouched, content type stays unknown until a plugin proposes one; classifier and content filter never run. Invalid values fail startup. Name policy and the CSAM pre-fetch blocklist are independent safety controls and are unaffected. Changing the mode stales outstanding processor pipelines by design. |
+| `PROCESSING_MODE` | `basic` | `full`: complete CEL classifier workflow (title parsing, matching, TMDB/anime enrichment) plus the content filter when separately enabled. `basic`: no workflow, no metadata providers, no network — core stamps only a coarse content type from file-extension byte majority (episode pattern separates TV from movies); hints still win; nothing is ever deleted by classification. `raw`: metainfo persisted untouched, content type stays unknown until a plugin proposes one; classifier and content filter never run. Invalid values fail startup. Name policy and the CSAM pre-fetch blocklist are independent safety controls and are unaffected. Changing the mode stales outstanding processor pipelines by design. |
 
 ## Classifier
 

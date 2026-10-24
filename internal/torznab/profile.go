@@ -62,6 +62,7 @@ func (p Profile) Caps() Caps {
 					ParamQuery,
 					ParamIMDBID,
 					ParamTMDBID,
+					ParamTVDBID,
 					ParamSeason,
 					ParamEpisode,
 				}, ","),

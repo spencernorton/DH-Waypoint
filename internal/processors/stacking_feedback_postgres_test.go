@@ -15,6 +15,7 @@ import (
 	"github.com/spencernorton/DH-Waypoint/internal/classifier/contentfilter"
 	"github.com/spencernorton/DH-Waypoint/internal/evidence"
 	"github.com/spencernorton/DH-Waypoint/internal/lazy"
+	"github.com/spencernorton/DH-Waypoint/plugins/llm"
 	v1 "github.com/spencernorton/DH-Waypoint/processorapi/v1"
 	"github.com/stretchr/testify/require"
 )
@@ -190,7 +191,7 @@ func TestPostgresStackingAndDynamicSelectors(t *testing.T) {
 	require.Equal(t, "HEAVYLLM", grpAmbiguous)
 }
 
-func TestPostgresBuiltinDrivers(t *testing.T) {
+func TestPostgresBuiltinAndIndependentLLMDrivers(t *testing.T) {
 	s, p, _ := fixture(t)
 
 	h := seedTorrent(t, p, 105, nil)
@@ -202,6 +203,7 @@ func TestPostgresBuiltinDrivers(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"choices": []map[string]any{
 				{
+					"finish_reason": "stop",
 					"message": map[string]string{
 						"content": `{"outcome":"completed","proposal":{"content_type":"tv_show","extraction":{"title":"Anime Show","season":1,"episodes":[1]}},"uncertainty":0.1,"reasons":["llm_classified"]}`,
 					},
@@ -210,6 +212,17 @@ func TestPostgresBuiltinDrivers(t *testing.T) {
 		})
 	}))
 	defer llmServer.Close()
+	cfg := llm.DefaultConfig()
+	cfg.ID = "external-llm"
+	cfg.EnableInference = true
+	cfg.DryRun = false
+	cfg.Model = "synthetic-model"
+	cfg.Endpoint = llmServer.URL + "/v1/chat/completions"
+	service, err := llm.New(cfg)
+	require.NoError(t, err)
+	defer service.Close()
+	processorServer := httptest.NewServer(service.Handler())
+	defer processorServer.Close()
 
 	// 1. builtin/regex-weights (Priority 10)
 	_, err = s.Register(testContext, "regex-scorer", v1.RegistryWrite{
@@ -231,11 +244,11 @@ func TestPostgresBuiltinDrivers(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// 3. builtin/llm (Priority 30) - gated by score_thresholds from prior steps!
+	// 3. Independent HTTP LLM adapter (Priority 30) - gated by score_thresholds from prior steps!
 	minQual := 2.0
-	_, err = s.Register(testContext, "builtin-llm", v1.RegistryWrite{
-		Driver:   v1.DriverBuiltinLLM,
-		Endpoint: llmServer.URL,
+	_, err = s.Register(testContext, "external-llm", v1.RegistryWrite{
+		Driver:   v1.DriverHTTP,
+		Endpoint: processorServer.URL,
 		Priority: 30,
 		Mode:     "apply",
 		State:    "active",
@@ -243,7 +256,7 @@ func TestPostgresBuiltinDrivers(t *testing.T) {
 			RequiredTags:    []string{"hd-webdl", "swarm-alive"},
 			ScoreThresholds: []v1.ScoreThreshold{{Dimension: "quality", Min: &minQual}},
 		},
-		Configuration: json.RawMessage(`{"model":"qwen2.5-7b-instruct","capabilities":["classify","extract"]}`),
+		Configuration: json.RawMessage(`{}`),
 	})
 	require.NoError(t, err)
 
@@ -253,7 +266,7 @@ func TestPostgresBuiltinDrivers(t *testing.T) {
 	require.Len(t, st.Processors, 3)
 	for _, proc := range st.Processors {
 		require.Equal(t, "healthy", proc.Health)
-		require.NotEmpty(t, proc.Driver)
+		require.NotEmpty(t, normalizedDriver(proc.Driver))
 	}
 
 	admitted, err := s.Scan(testContext)
@@ -398,16 +411,16 @@ func TestPostgresBiDirectionalFeedbackAndOnlineLearning(t *testing.T) {
 	}))
 	defer teacherSrv.Close()
 
-	// Student: builtin/regex-weights at Priority 10 with online_calibrate
+	// Static student retains feedback routing, but no core learning.
 	_, err := s.Register(testContext, "regex-student", v1.RegistryWrite{
 		Driver:   v1.DriverBuiltinRegex,
 		Priority: 10,
 		Mode:     "apply",
 		State:    "active",
 		Learning: &v1.LearningConfig{
-			Enabled: true,
-			Mode:    "online_calibrate",
-			AcceptedTiers:   []string{v1.FeedbackTierOperationalReceipt, v1.FeedbackTierTeacherConsensus, v1.FeedbackTierVerifiedImport, v1.FeedbackTierHumanGold},
+			Enabled:       true,
+			Mode:          "log_only",
+			AcceptedTiers: []string{v1.FeedbackTierOperationalReceipt, v1.FeedbackTierTeacherConsensus, v1.FeedbackTierVerifiedImport, v1.FeedbackTierHumanGold},
 		},
 		Configuration: json.RawMessage(`{"rules":[{"id":"amber-rule","pattern":"(?i)Amber","dimension":"score","weight":1.0,"content_type":"movie"}]}`),
 	})
@@ -420,10 +433,10 @@ func TestPostgresBiDirectionalFeedbackAndOnlineLearning(t *testing.T) {
 		Mode:     "apply",
 		State:    "active",
 		Learning: &v1.LearningConfig{
-			Enabled:     true,
-			Mode:        "online_calibrate",
-			AcceptedTiers:       []string{v1.FeedbackTierOperationalReceipt, v1.FeedbackTierVerifiedImport, v1.FeedbackTierHumanGold},
-			PushEnabled: true,
+			Enabled:       true,
+			Mode:          "online_calibrate",
+			AcceptedTiers: []string{v1.FeedbackTierOperationalReceipt, v1.FeedbackTierVerifiedImport, v1.FeedbackTierHumanGold},
+			PushEnabled:   true,
 		},
 		Configuration: json.RawMessage(`{}`),
 	})
@@ -434,13 +447,13 @@ func TestPostgresBiDirectionalFeedbackAndOnlineLearning(t *testing.T) {
 	run(t, s)
 	run(t, s)
 
-	// Check that operational_receipt and teacher_consensus calibrated regex-student's learned_state!
-	var studentLearned []byte
-	require.NoError(t, p.QueryRow(testContext, `SELECT learned_state FROM processor_registry WHERE id='regex-student'`).Scan(&studentLearned))
-	var state regexLearnedState
-	require.NoError(t, json.Unmarshal(studentLearned, &state))
-	require.GreaterOrEqual(t, state.FeedbackCount, int64(2))
-	require.Greater(t, state.RuleAdjustments["amber-rule"], 0.0)
+	// Feedback receipts never mutate built-in rule weights or learned state.
+	var studentLearned string
+	require.NoError(t, p.QueryRow(testContext, `SELECT learned_state::text FROM processor_registry WHERE id='regex-student'`).Scan(&studentLearned))
+	require.JSONEq(t, `{}`, studentLearned)
+	var feedbackCount int
+	require.NoError(t, p.QueryRow(testContext, `SELECT count(*) FROM processor_feedback_events WHERE processor_id='regex-student'`).Scan(&feedbackCount))
+	require.GreaterOrEqual(t, feedbackCount, 2)
 
 	// Tier 3 (verified_import): Wire evidence.Store post-insert hook and insert a Radarr webhook_import
 	evStore := evidence.NewStore(lazy.New(func() (*pgxpool.Pool, error) { return p, nil }))
@@ -487,13 +500,13 @@ func TestPostgresBiDirectionalFeedbackAndOnlineLearning(t *testing.T) {
 	})
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest("POST", "/api/processors/v1/feedback", bytes.NewReader(goldBody))
-	req.Header.Set("Authorization", "Bearer " + "feedback-admin-token")
+	req.Header.Set("Authorization", "Bearer "+"feedback-admin-token")
 	router.ServeHTTP(w, req)
 	require.Equal(t, 200, w.Code)
 
 	w = httptest.NewRecorder()
 	req = httptest.NewRequest("GET", "/api/processors/v1/feedback?processor_id=regex-student&consumer_id=trainer-1&limit=10", nil)
-	req.Header.Set("Authorization", "Bearer " + "feedback-admin-token")
+	req.Header.Set("Authorization", "Bearer "+"feedback-admin-token")
 	router.ServeHTTP(w, req)
 	require.Equal(t, 200, w.Code)
 	var fbPage v1.FeedbackPage
@@ -509,14 +522,14 @@ func TestPostgresBiDirectionalFeedbackAndOnlineLearning(t *testing.T) {
 	})
 	w = httptest.NewRecorder()
 	req = httptest.NewRequest("POST", "/api/processors/v1/feedback/ack", bytes.NewReader(ackBody))
-	req.Header.Set("Authorization", "Bearer " + "feedback-admin-token")
+	req.Header.Set("Authorization", "Bearer "+"feedback-admin-token")
 	router.ServeHTTP(w, req)
 	require.Equal(t, 200, w.Code)
 
 	// Pulling again with consumer_id=trainer-1 and default after_seq=0 resumes from acked cursor and returns 0 items
 	w = httptest.NewRecorder()
 	req = httptest.NewRequest("GET", "/api/processors/v1/feedback?processor_id=regex-student&consumer_id=trainer-1&limit=10", nil)
-	req.Header.Set("Authorization", "Bearer " + "feedback-admin-token")
+	req.Header.Set("Authorization", "Bearer "+"feedback-admin-token")
 	router.ServeHTTP(w, req)
 	require.Equal(t, 200, w.Code)
 	var emptyPage v1.FeedbackPage
@@ -562,7 +575,6 @@ func mustReadAll(t *testing.T, r *http.Request) []byte {
 	require.NoError(t, err)
 	return buf.Bytes()
 }
-
 
 func TestPostgresStrictV1MultiStageHTTPProcessorInStack(t *testing.T) {
 	s, p, _ := fixture(t)

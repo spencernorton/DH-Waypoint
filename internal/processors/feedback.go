@@ -58,14 +58,6 @@ func insertFeedbackTx(
 	if err != nil {
 		return nil, err
 	}
-	if entry != nil && entry.Driver == v1.DriverBuiltinRegex && entry.Learning != nil && entry.Learning.Enabled && entry.Learning.Mode == "online_calibrate" {
-		var currentState []byte
-		if err := tx.QueryRow(ctx, `SELECT learned_state FROM processor_registry WHERE id=$1 FOR UPDATE`, entry.ID).Scan(&currentState); err == nil {
-			if nextState, ok := calibrateBuiltinRegex(currentState, trace, pred, gt); ok {
-				_, _ = tx.Exec(ctx, `UPDATE processor_registry SET learned_state=$2,updated_at=clock_timestamp() WHERE id=$1`, entry.ID, string(nextState))
-			}
-		}
-	}
 	return &v1.FeedbackEvent{
 		Seq:                 seq,
 		EventID:             eventID,
