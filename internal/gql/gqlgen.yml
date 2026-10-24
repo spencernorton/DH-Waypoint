@@ -75,6 +75,18 @@ autobind:
 # modelgen, the others will be allowed when binding to fields. Configure them to
 # your liking
 models:
+  Torrent:
+    fields:
+      infoHash:
+        fieldName: LegacyInfoHash
+  TorrentFile:
+    fields:
+      infoHash:
+        fieldName: LegacyInfoHash
+  TorrentContent:
+    fields:
+      infoHash:
+        fieldName: LegacyInfoHash
   ID:
     model:
       - github.com/99designs/gqlgen/graphql.ID

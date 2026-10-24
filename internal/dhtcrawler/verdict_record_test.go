@@ -10,8 +10,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func hashOf(b byte) protocol.ID {
-	var h protocol.ID
+func hashOf(b byte) protocol.InfoHash {
+	var h protocol.InfoHash
 	h[0] = b
 	return h
 }
@@ -19,9 +19,9 @@ func hashOf(b byte) protocol.ID {
 // removedHashes must return exactly the hashes Filter dropped (all minus
 // kept), in order, and nothing when nothing was dropped.
 func TestRemovedHashes(t *testing.T) {
-	all := []protocol.ID{hashOf(1), hashOf(2), hashOf(3), hashOf(4)}
+	all := []protocol.InfoHash{hashOf(1), hashOf(2), hashOf(3), hashOf(4)}
 
-	got := removedHashes(all, []protocol.ID{hashOf(1), hashOf(3)})
+	got := removedHashes(all, []protocol.InfoHash{hashOf(1), hashOf(3)})
 	require.Len(t, got, 2)
 	assert.Equal(t, hashOf(2), got[0])
 	assert.Equal(t, hashOf(4), got[1])
@@ -46,7 +46,7 @@ func TestCsamEvidence(t *testing.T) {
 // inPlaceFilter replicates csamblocklist.service.Filter EXACTLY: it compacts
 // in place (out := in[:0:len(in)]), so it mutates the caller's backing array.
 // Anything blocked (first byte in `block`) is dropped.
-func inPlaceFilter(in []protocol.ID, block map[byte]struct{}) []protocol.ID {
+func inPlaceFilter(in []protocol.InfoHash, block map[byte]struct{}) []protocol.InfoHash {
 	out := in[:0:len(in)]
 	for _, h := range in {
 		if _, blocked := block[h[0]]; !blocked {
@@ -61,19 +61,19 @@ func inPlaceFilter(in []protocol.ID, block map[byte]struct{}) []protocol.ID {
 // records nothing. Guards infohash_triage.go's preFilter copy.
 func TestCsamRejectDiff_SurvivesInPlaceFilter(t *testing.T) {
 	block := map[byte]struct{}{1: {}, 2: {}} // rejects at the FRONT — worst case
-	orig := []protocol.ID{hashOf(1), hashOf(2), hashOf(3), hashOf(4)}
+	orig := []protocol.InfoHash{hashOf(1), hashOf(2), hashOf(3), hashOf(4)}
 
 	// The FIXED sequence: snapshot with a fresh backing array, then Filter.
-	all := append([]protocol.ID(nil), orig...)
+	all := append([]protocol.InfoHash(nil), orig...)
 	preFilter := append(all[:0:0], all...)
 	kept := inPlaceFilter(all, block)
 	removed := removedHashes(preFilter, kept)
-	assert.ElementsMatch(t, []protocol.ID{hashOf(1), hashOf(2)}, removed,
+	assert.ElementsMatch(t, []protocol.InfoHash{hashOf(1), hashOf(2)}, removed,
 		"snapshot before Filter must recover the true reject set")
 
 	// Sanity: diffing against the POST-Filter (mutated) slice loses the
 	// rejects — proving the snapshot is load-bearing, not decorative.
-	all2 := append([]protocol.ID(nil), orig...)
+	all2 := append([]protocol.InfoHash(nil), orig...)
 	kept2 := inPlaceFilter(all2, block)
 	assert.Empty(t, removedHashes(all2, kept2),
 		"without the snapshot the in-place compaction hides every front reject")
@@ -84,7 +84,7 @@ func TestCsamRejectDiff_SurvivesInPlaceFilter(t *testing.T) {
 func TestRecordVerdict_NilSafe(t *testing.T) {
 	c := &crawler{}
 	assert.NotPanics(t, func() {
-		c.recordCsamRejects(context.Background(), []protocol.ID{hashOf(1)}, nil, "triage")
+		c.recordCsamRejects(context.Background(), []protocol.InfoHash{hashOf(1)}, nil, "triage")
 		c.recordCsamReject(context.Background(), hashOf(1), "egress")
 		c.recordBlockingVerdict(context.Background(), hashOf(1))
 	})

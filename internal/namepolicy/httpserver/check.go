@@ -105,10 +105,10 @@ func CheckName(p *namepolicy.Policy) gin.HandlerFunc {
 				c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request"})
 				return
 			}
-			var hash protocol.ID
+			var hash protocol.InfoHash
 			if item.InfoHash != "" {
 				var err error
-				hash, err = protocol.ParseID(item.InfoHash)
+				hash, err = protocol.ParseInfoHash(item.InfoHash)
 				if err != nil {
 					c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request"})
 					return

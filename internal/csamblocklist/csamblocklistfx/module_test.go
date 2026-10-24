@@ -18,7 +18,7 @@ import (
 // returns (review fix: "Initial blocklist refresh does not block
 // crawler startup").
 func TestRunStartupRefresh_BlocksUntilFirstFetchCompletes(t *testing.T) {
-	var bad protocol.ID
+	var bad protocol.InfoHash
 	for i := range bad {
 		bad[i] = byte(0x55)
 	}
@@ -90,7 +90,7 @@ func TestRunStartupRefresh_BoundedByBudget(t *testing.T) {
 	}
 
 	// Active bloom is empty (no feed succeeded).
-	var ih protocol.ID
+	var ih protocol.InfoHash
 	if mgr.IsBlocked(ih) {
 		t.Error("expected empty bloom after failed initial refresh")
 	}

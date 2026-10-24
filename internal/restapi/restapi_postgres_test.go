@@ -79,10 +79,10 @@ func restEngine(t *testing.T) (*gin.Engine, *pgxpool.Pool) {
 func TestRESTSearchDetailAndPrivacy(t *testing.T) {
 	engine, pool := restEngine(t)
 	ctx := context.Background()
-	public := protocol.ID{0x11}
-	private := protocol.ID{0x22}
+	public := protocol.InfoHash{0x11}
+	private := protocol.InfoHash{0x22}
 	for _, seed := range []struct {
-		hash protocol.ID
+		hash protocol.InfoHash
 		name string
 		priv bool
 	}{{public, "Public Film 2026", false}, {private, "Private Film 2026", true}} {

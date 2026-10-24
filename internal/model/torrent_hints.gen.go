@@ -14,7 +14,7 @@ const TableNameTorrentHint = "torrent_hints"
 
 // TorrentHint mapped from table <torrent_hints>
 type TorrentHint struct {
-	InfoHash        protocol.ID         `gorm:"column:info_hash;primaryKey;<-:create" json:"infoHash"`
+	InfoHash        protocol.InfoHash   `gorm:"column:info_hash;primaryKey;<-:create" json:"infoHash"`
 	ContentType     ContentType         `gorm:"column:content_type;not null" json:"contentType"`
 	ContentSource   NullString          `gorm:"column:content_source" json:"contentSource"`
 	ContentID       NullString          `gorm:"column:content_id" json:"contentId"`

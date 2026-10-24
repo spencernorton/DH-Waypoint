@@ -186,7 +186,7 @@ func (s *Store) CoreSearch(ctx context.Context, req v1.CoreSearchRequest) (v1.Co
 
 func (s *Store) CoreLiveness(ctx context.Context, req v1.CoreLivenessRequest) (v1.CoreLivenessResponse, error) {
 	hash, err := hex.DecodeString(strings.ToLower(strings.TrimSpace(req.InfoHash)))
-	if err != nil || len(hash) != 20 {
+	if err != nil || (len(hash) != 20 && len(hash) != 32) {
 		return v1.CoreLivenessResponse{}, ErrControl
 	}
 	p, err := s.pool.Get()
@@ -249,9 +249,9 @@ func (s *Store) CorePolicy(_ context.Context, req v1.CorePolicyRequest) (v1.Core
 		out.FilterAllowed = false
 		out.Reasons = append(out.Reasons, "forbidden_content_type")
 	}
-	var id protocol.ID
+	var id protocol.InfoHash
 	if req.InfoHash != "" {
-		parsedID, err := protocol.ParseID(req.InfoHash)
+		parsedID, err := protocol.ParseInfoHash(req.InfoHash)
 		if err != nil {
 			return out, ErrControl
 		}

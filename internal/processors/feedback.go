@@ -12,6 +12,7 @@ import (
 	"github.com/spencernorton/DH-Waypoint/internal/catalogueguard"
 	"github.com/spencernorton/DH-Waypoint/internal/evidence"
 	v1 "github.com/spencernorton/DH-Waypoint/processorapi/v1"
+	v2 "github.com/spencernorton/DH-Waypoint/processorapi/v2"
 )
 
 func insertFeedbackTx(
@@ -28,6 +29,9 @@ func insertFeedbackTx(
 	gt v1.FeedbackGroundTruth,
 	entry *Entry,
 ) (*v1.FeedbackEvent, error) {
+	if len(hash) == 32 && (entry == nil || entry.Manifest.Contract != v2.Contract) {
+		return nil, ErrControl
+	}
 	eventID := digest([]any{processorID, execGen, jobID, hex.EncodeToString(hash), tier, gt})
 	var inRaw, predRaw, traceRaw any
 	if in != nil {
@@ -147,7 +151,7 @@ func (s *Store) recordExecutionFeedback(
 // HandleEvidence is an evidence.PostInsertHook that routes verified downstream
 // *arr and qBittorrent observations back to Processors with learning enabled.
 func (s *Store) HandleEvidence(ctx context.Context, ev evidence.Evidence) {
-	if len(ev.InfoHash) != 20 {
+	if len(ev.InfoHash) != 20 && len(ev.InfoHash) != 32 {
 		return
 	}
 	cat := strings.ToLower(strings.TrimSpace(ev.Category))
@@ -217,7 +221,7 @@ func (s *Store) HandleEvidence(ctx context.Context, ev evidence.Evidence) {
 
 func (s *Store) RecordFeedback(ctx context.Context, w v1.FeedbackWrite) ([]v1.FeedbackEvent, error) {
 	hash, err := hex.DecodeString(strings.ToLower(strings.TrimSpace(w.InfoHash)))
-	if err != nil || len(hash) != 20 {
+	if err != nil || (len(hash) != 20 && len(hash) != 32) {
 		return nil, ErrControl
 	}
 	if !slices.Contains(v1.FeedbackTiers, w.Tier) || w.GroundTruth.Outcome == "" {
@@ -270,6 +274,9 @@ func (s *Store) RecordFeedback(ctx context.Context, w v1.FeedbackWrite) ([]v1.Fe
 			if !ok {
 				currentEntry = step.Entry
 			}
+			if len(hash) == 32 && currentEntry.Manifest.Contract != v2.Contract {
+				continue
+			}
 			if w.ProcessorID == "" && (currentEntry.Learning == nil || !currentEntry.Learning.Accepts(w.Tier)) {
 				continue
 			}
@@ -289,6 +296,9 @@ func (s *Store) RecordFeedback(ctx context.Context, w v1.FeedbackWrite) ([]v1.Fe
 		}
 	}
 	for _, entry := range es {
+		if len(hash) == 32 && entry.Manifest.Contract != v2.Contract {
+			continue
+		}
 		if recordedProc[entry.ID] {
 			continue
 		}
@@ -328,6 +338,7 @@ func (s *Store) Feedback(ctx context.Context, processorID string, afterSeq int64
 	rows, err := p.Query(ctx, `SELECT seq,event_id,processor_id,execution_generation,job_id,info_hash,tier,input,prediction,trace,ground_truth,created_at
   FROM processor_feedback_events
   WHERE seq>$1 AND ($2='' OR processor_id=$2) AND ($3='' OR tier=$3)
+  AND ($2<>'' OR (octet_length(info_hash)=20 AND COALESCE(prediction->>'contract','dh-waypoint.processor.v1')='dh-waypoint.processor.v1'))
   ORDER BY seq ASC LIMIT $4`, afterSeq, processorID, tier, limit)
 	if err != nil {
 		return out, err
@@ -341,6 +352,9 @@ func (s *Store) Feedback(ctx context.Context, processorID string, afterSeq int64
 			return out, err
 		}
 		ev.InfoHash = hex.EncodeToString(hash)
+		if len(hash) == 32 {
+			out.Contract = v2.FeedbackContract
+		}
 		if len(inRaw) > 0 {
 			var in v1.Input
 			if json.Unmarshal(inRaw, &in) == nil {
@@ -351,6 +365,9 @@ func (s *Store) Feedback(ctx context.Context, processorID string, afterSeq int64
 			var pred v1.Result
 			if json.Unmarshal(predRaw, &pred) == nil {
 				ev.Prediction = &pred
+				if pred.Contract == v2.Contract {
+					out.Contract = v2.FeedbackContract
+				}
 			}
 		}
 		if len(traceRaw) > 0 {
@@ -454,6 +471,9 @@ func (s *Store) DeliverFeedback(ctx context.Context) (int, error) {
 			Contract:  v1.FeedbackContract,
 			Processor: entry.Manifest.Processor,
 			Events:    events,
+		}
+		if entry.Manifest.Contract == v2.Contract {
+			batch.Contract = v2.FeedbackContract
 		}
 		bounded, cancel := context.WithTimeout(ctx, s.cfg.RequestTimeout)
 		ack, pushErr := s.transport.Feedback(bounded, entry.Endpoint, entry.AuthEnv, batch)

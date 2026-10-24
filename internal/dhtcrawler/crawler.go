@@ -136,11 +136,13 @@ func (c *crawler) start() {
 type nodeHasPeersForHash struct {
 	infoHash protocol.ID
 	node     netip.AddrPort
+	// Set only after metadata verification, then carried through scrape.
+	identity *protocol.InfoHash
 }
 
 type infoHashWithMetaInfo struct {
 	nodeHasPeersForHash
-	metaInfo metainfo.Info
+	validated metainfo.ValidatedInfo
 }
 
 type infoHashWithPeers struct {

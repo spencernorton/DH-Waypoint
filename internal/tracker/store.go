@@ -333,7 +333,7 @@ func (s *Store) Upload(ctx context.Context, torrentFile []byte) (UploadResult, e
 		ai := imp.New(ctx, importer.Info{ID: "private-upload"})
 		if err := ai.Import(importer.Item{
 			Source:   UploadSource,
-			InfoHash: hash,
+			InfoHash: protocol.InfoHashV1(hash),
 			Name:     info.BestName(),
 			Size:     uint(info.TotalLength()),
 			Private:  private,

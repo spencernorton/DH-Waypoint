@@ -50,11 +50,11 @@ func (b publicHashBuilder) check(c *gin.Context) {
 		c.AbortWithStatus(http.StatusBadRequest)
 		return
 	}
-	hashes := make([]protocol.ID, len(request.InfoHashes))
-	unique := make([]protocol.ID, 0, len(hashes))
-	seen := make(map[protocol.ID]struct{}, len(hashes))
+	hashes := make([]protocol.InfoHash, len(request.InfoHashes))
+	unique := make([]protocol.InfoHash, 0, len(hashes))
+	seen := make(map[protocol.InfoHash]struct{}, len(hashes))
 	for i, value := range request.InfoHashes {
-		hash, err := protocol.ParseID(value)
+		hash, err := protocol.ParseInfoHash(value)
 		if err != nil {
 			c.AbortWithStatus(http.StatusBadRequest)
 			return
@@ -82,12 +82,16 @@ func (b publicHashBuilder) check(c *gin.Context) {
 		c.AbortWithStatus(http.StatusServiceUnavailable)
 		return
 	}
-	allowed := make(map[protocol.ID]namepolicy.Decision, len(result.Torrents))
+	allowed := make(map[protocol.InfoHash]namepolicy.Decision, len(result.Torrents))
 	for _, torrent := range result.Torrents {
-		if _, requested := seen[torrent.InfoHash]; !requested || torrent.Private {
+		if torrent.Private {
 			continue
 		}
-		allowed[torrent.InfoHash] = b.policy.Evaluate(torrent.InfoHash, torrent.Name)
+		for _, hash := range hashes {
+			if torrent.Identities().Contains(hash) {
+				allowed[hash] = b.policy.Evaluate(torrent.InfoHash, torrent.Name)
+			}
+		}
 	}
 	results := make([]Result, len(hashes))
 	for i, hash := range hashes {

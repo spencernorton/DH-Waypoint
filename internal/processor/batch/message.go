@@ -12,7 +12,7 @@ import (
 const MessageName = "process_torrent_batch"
 
 type MessageParams struct {
-	InfoHashGreaterThan protocol.ID             `json:"InfoHashGreaterThan,omitempty"`
+	InfoHashGreaterThan protocol.InfoHash       `json:"InfoHashGreaterThan,omitempty"`
 	UpdatedBefore       time.Time               `json:"UpdatedBefore,omitempty"`
 	ClassifyMode        processor.ClassifyMode  `json:"ClassifyMode,omitempty"`
 	ClassifierWorkflow  string                  `json:"ClassifierWorkflow,omitempty"`

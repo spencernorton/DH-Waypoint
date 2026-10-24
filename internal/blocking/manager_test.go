@@ -10,10 +10,10 @@ import (
 )
 
 func TestRecoveryOffRejectsBlockBeforeBufferOrDatabaseAccess(t *testing.T) {
-	hash := protocol.ID{1}
-	m := &manager{buffer: map[protocol.ID]struct{}{}}
+	hash := protocol.InfoHash{1}
+	m := &manager{buffer: map[protocol.InfoHash]struct{}{}}
 	for _, flush := range []bool{false, true} {
-		if err := m.Block(context.Background(), []protocol.ID{hash}, "blocking", "synthetic", flush); !errors.Is(err, cataloguerecovery.ErrDisabled) {
+		if err := m.Block(context.Background(), []protocol.InfoHash{hash}, "blocking", "synthetic", flush); !errors.Is(err, cataloguerecovery.ErrDisabled) {
 			t.Fatalf("Block error = %v, want recovery disabled", err)
 		}
 		if len(m.buffer) != 0 || m.filter != nil {
@@ -23,8 +23,8 @@ func TestRecoveryOffRejectsBlockBeforeBufferOrDatabaseAccess(t *testing.T) {
 }
 
 func TestRecoveryOffRejectsLegacyBufferedFlushBeforeDatabaseAccess(t *testing.T) {
-	hash := protocol.ID{1}
-	m := &manager{buffer: map[protocol.ID]struct{}{hash: {}}}
+	hash := protocol.InfoHash{1}
+	m := &manager{buffer: map[protocol.InfoHash]struct{}{hash: {}}}
 	if err := m.Flush(context.Background()); !errors.Is(err, cataloguerecovery.ErrDisabled) {
 		t.Fatalf("Flush error = %v, want recovery disabled", err)
 	}

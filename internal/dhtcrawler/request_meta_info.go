@@ -56,7 +56,11 @@ func (c *crawler) runRequestMetaInfo(ctx context.Context) {
 		//      post-classifier hook (separate follow-up MR).
 		//      (review finding, fixed.)
 		if c.contentFilter != nil && c.contentFilter.Enabled() {
-			fi := metaInfoToFilterInput(mi.Info.Name, mi.Info.Files)
+			files := mi.Info.Files
+			if mi.Info.HasV2() {
+				files = mi.Validated.Files
+			}
+			fi := metaInfoToFilterInput(mi.Info.Name, files)
 			d := c.contentFilter.DecideDeterministic(fi)
 			if c.contentFilterMetrics != nil {
 				c.contentFilterMetrics.Observe(d)
@@ -92,7 +96,7 @@ func (c *crawler) runRequestMetaInfo(ctx context.Context) {
 		case <-ctx.Done():
 		case c.persistTorrents.In() <- infoHashWithMetaInfo{
 			nodeHasPeersForHash: req.nodeHasPeersForHash,
-			metaInfo:            mi.Info,
+			validated:           mi.Validated,
 		}:
 		}
 	})
@@ -163,8 +167,8 @@ func (c *crawler) doRequestMetaInfo(
 	hash protocol.ID,
 	peers []netip.AddrPort,
 ) (metainforequester.Response, error) {
-	if c.namePolicy.ExcludesHash(hash) {
-		d := c.namePolicy.Evaluate(hash, "")
+	if c.namePolicy.ExcludesHash(protocol.InfoHashV1(hash)) {
+		d := c.namePolicy.Evaluate(protocol.InfoHashV1(hash), "")
 		c.namePolicy.Observe("crawler_acquisition", d)
 		return metainforequester.Response{}, namepolicy.ErrExcluded
 	}
@@ -176,10 +180,10 @@ func (c *crawler) doRequestMetaInfo(
 	// The IsBlocked call is a single bloom-test, O(1), no allocation.
 	// Worth it to guarantee no BEP-9 fetch touches a community-known
 	// CSAM swarm. See issue #494.
-	if c.csamBlocklist.IsBlocked(hash) {
+	if c.csamBlocklist.IsBlocked(protocol.InfoHashV1(hash)) {
 		// Phase-C: record the egress re-check reject (feed refresh added
 		// this hash between triage and here). Recording-only.
-		c.recordCsamReject(ctx, hash, "egress")
+		c.recordCsamReject(ctx, protocol.InfoHashV1(hash), "egress")
 		return metainforequester.Response{}, errCsamBlocklistBlocked
 	}
 
@@ -199,16 +203,25 @@ func (c *crawler) doRequestMetaInfo(
 			continue
 		}
 
-		decision := c.namePolicy.Evaluate(hash, res.Info.BestName())
+		identity := res.Validated.Identities.Canonical()
+		if res.Validated.Identities.V1 == nil && res.Validated.Identities.V2 == nil {
+			return metainforequester.Response{}, errors.New("requester returned no verified torrent identity")
+		}
+		for _, h := range []*protocol.InfoHash{res.Validated.Identities.V1, res.Validated.Identities.V2} {
+			if h != nil && (c.namePolicy.ExcludesHash(*h) || c.csamBlocklist.IsBlocked(*h)) {
+				return metainforequester.Response{}, namepolicy.ErrExcluded
+			}
+		}
+		decision := c.namePolicy.Evaluate(identity, res.Info.BestName())
 		if !decision.Eligible {
 			c.namePolicy.Observe("crawler_acquisition", decision)
 			return metainforequester.Response{}, namepolicy.ErrExcluded
 		}
 		if banErr := c.banningChecker.Check(res.Info); banErr != nil {
-			_ = c.blockingManager.Block(ctx, []protocol.ID{hash}, "csam", "csam_crawler", false)
+			_ = c.blockingManager.Block(ctx, []protocol.InfoHash{identity}, "csam", "csam_crawler", false)
 			// Phase-C: dual-write a blocking verdict for the ban-driven
 			// block. Recording-only, after the block (never rolls it back).
-			c.recordBlockingVerdict(ctx, hash)
+			c.recordBlockingVerdict(ctx, identity)
 			return metainforequester.Response{}, banErr
 		}
 

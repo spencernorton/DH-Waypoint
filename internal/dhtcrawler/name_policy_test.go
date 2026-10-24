@@ -16,16 +16,17 @@ import (
 
 type policyCsam struct{ csamblocklist.Manager }
 
-func (policyCsam) IsBlocked(protocol.ID) bool { return false }
+func (policyCsam) IsBlocked(protocol.InfoHash) bool { return false }
 
 type policyRequester struct {
 	calls int
 	info  metainfo.Info
 }
 
-func (r *policyRequester) Request(context.Context, protocol.ID, netip.AddrPort) (metainforequester.Response, error) {
+func (r *policyRequester) Request(_ context.Context, key protocol.ID, _ netip.AddrPort) (metainforequester.Response, error) {
 	r.calls++
-	return metainforequester.Response{Info: r.info}, nil
+	h := protocol.InfoHashV1(key)
+	return metainforequester.Response{Info: r.info, Validated: metainfo.ValidatedInfo{Info: r.info, Identities: protocol.TorrentIdentities{V1: &h}}}, nil
 }
 
 type policyBanning struct{ calls int }

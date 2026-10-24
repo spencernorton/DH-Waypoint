@@ -28,6 +28,7 @@ func newTorrent(db *gorm.DB, opts ...gen.DOOption) torrent {
 	tableName := _torrent.torrentDo.TableName()
 	_torrent.ALL = field.NewAsterisk(tableName)
 	_torrent.InfoHash = field.NewField(tableName, "info_hash")
+	_torrent.InfoHashV2 = field.NewField(tableName, "info_hash_v2")
 	_torrent.Name = field.NewString(tableName, "name")
 	_torrent.Size = field.NewUint(tableName, "size")
 	_torrent.Private = field.NewBool(tableName, "private")
@@ -87,6 +88,7 @@ type torrent struct {
 
 	ALL         field.Asterisk
 	InfoHash    field.Field
+	InfoHashV2  field.Field
 	Name        field.String
 	Size        field.Uint
 	Private     field.Bool
@@ -123,6 +125,7 @@ func (t torrent) As(alias string) *torrent {
 func (t *torrent) updateTableName(table string) *torrent {
 	t.ALL = field.NewAsterisk(table)
 	t.InfoHash = field.NewField(table, "info_hash")
+	t.InfoHashV2 = field.NewField(table, "info_hash_v2")
 	t.Name = field.NewString(table, "name")
 	t.Size = field.NewUint(table, "size")
 	t.Private = field.NewBool(table, "private")
@@ -149,6 +152,7 @@ func (t *torrent) GetFieldByName(fieldName string) (field.OrderExpr, bool) {
 func (t *torrent) fillFieldMap() {
 	t.fieldMap = make(map[string]field.Expr, 15)
 	t.fieldMap["info_hash"] = t.InfoHash
+	t.fieldMap["info_hash_v2"] = t.InfoHashV2
 	t.fieldMap["name"] = t.Name
 	t.fieldMap["size"] = t.Size
 	t.fieldMap["private"] = t.Private

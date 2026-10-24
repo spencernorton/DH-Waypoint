@@ -41,8 +41,8 @@ func (f *fakeTitleLabels) count() int {
 	return f.calls
 }
 
-func hashOf(b byte) protocol.ID {
-	var ih protocol.ID
+func hashOf(b byte) protocol.InfoHash {
+	var ih protocol.InfoHash
 	for i := range ih {
 		ih[i] = b
 	}

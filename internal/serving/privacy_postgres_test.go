@@ -32,9 +32,9 @@ import (
 func TestServingPrivacyAcrossNativeConsumersIndependentOfOptionalPolicies(t *testing.T) {
 	ctx := context.Background()
 	pool, q := newServingPostgresDatabase(t, ctx)
-	hashes := make([]protocol.ID, 9)
+	hashes := make([]protocol.InfoHash, 9)
 	for i := range hashes {
-		hashes[i] = protocol.ID{byte(150 + i)}
+		hashes[i] = protocol.InfoHash{byte(150 + i)}
 		_, err := pool.Exec(ctx, `INSERT INTO torrents(info_hash,name,size,private,files_status,files_count,created_at,updated_at) VALUES($1,$2,4096,$3,'multi',1,now(),now());
 INSERT INTO torrent_contents(info_hash,content_type,size,is_anime,created_at,updated_at) VALUES($1,'movie',4096,false,now(),now());
 INSERT INTO torrent_files(info_hash,"index",path,size,created_at,updated_at) VALUES($1,0,'Synthetic.mkv',4096,now(),now());
@@ -69,7 +69,7 @@ INSERT INTO torrent_canonical_labels(info_hash,category,resolved_source,resolved
 				if i < 5 {
 					want = 0
 				}
-				raw, e := s.TorrentsWithMissingInfoHashes(ctx, []protocol.ID{h})
+				raw, e := s.TorrentsWithMissingInfoHashes(ctx, []protocol.InfoHash{h})
 				require.NoError(t, e)
 				require.Len(t, raw.Torrents, want)
 				contents, e := s.TorrentContent(ctx, query.WithTotalCount(true), query.WithAggregationBudget(0), query.Where(search.TorrentContentInfoHashCriteria(h)))

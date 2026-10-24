@@ -25,7 +25,7 @@ import (
 type adultServingPostgresFixture struct {
 	q      *dao.Query
 	pool   *pgxpool.Pool
-	hashes []protocol.ID
+	hashes []protocol.InfoHash
 }
 
 // This fixture is opt-in, uses invented data in its own schema, and makes no
@@ -64,6 +64,7 @@ func newAdultServingPostgresFixture(t *testing.T) adultServingPostgresFixture {
 	_, err = pool.Exec(ctx, `
 CREATE TABLE torrents (
   info_hash bytea PRIMARY KEY, name text NOT NULL, size bigint NOT NULL DEFAULT 4096,
+  info_hash_v2 bytea,
   private boolean NOT NULL DEFAULT false, files_status text NOT NULL DEFAULT 'single',
   extension text DEFAULT 'mkv', files_count integer DEFAULT 1,
   created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(),
@@ -142,8 +143,8 @@ INSERT INTO content (type, source, id, title, adult) VALUES
 		"Synthetic.Recrawled.Ordinary.2031.mkv",
 	}
 	for i, name := range names {
-		var hash protocol.ID
-		for j := range hash {
+		var hash protocol.InfoHash
+		for j := range 20 {
 			hash[j] = byte(i + 1)
 		}
 		fixture.hashes = append(fixture.hashes, hash)
@@ -238,8 +239,8 @@ func (f adultServingPostgresFixture) snapshot(t *testing.T) map[string]adultServ
 	return result
 }
 
-func adultServingContentHashes(items []TorrentContentResultItem) []protocol.ID {
-	hashes := make([]protocol.ID, 0, len(items))
+func adultServingContentHashes(items []TorrentContentResultItem) []protocol.InfoHash {
+	hashes := make([]protocol.InfoHash, 0, len(items))
 	for _, item := range items {
 		hashes = append(hashes, item.InfoHash)
 	}
@@ -253,13 +254,13 @@ func TestAdultServingPostgresFiltersBeforePaginationCountAndFacets(t *testing.T)
 	ctx := context.Background()
 	for _, page := range []struct {
 		offset uint
-		want   []protocol.ID
+		want   []protocol.InfoHash
 		next   bool
 	}{
 		{0, f.hashes[4:5], true},
 		{1, f.hashes[5:6], true},
 		{2, f.hashes[6:7], false},
-		{3, []protocol.ID{}, false},
+		{3, []protocol.InfoHash{}, false},
 	} {
 		options := append(adultServingExactOptions(model.TableNameTorrentContent),
 			query.Limit(1), query.Offset(page.offset), query.WithHasNextPage(true),
@@ -305,10 +306,10 @@ func TestAdultServingPostgresExplicitHashAndTypeCannotBypass(t *testing.T) {
 		require.NoError(t, err)
 		require.Empty(t, torrents.Items)
 		require.Zero(t, torrents.TotalCount)
-		missing, err := s.TorrentsWithMissingInfoHashes(ctx, []protocol.ID{hash})
+		missing, err := s.TorrentsWithMissingInfoHashes(ctx, []protocol.InfoHash{hash})
 		require.NoError(t, err)
 		require.Empty(t, missing.Torrents)
-		require.Equal(t, []protocol.ID{hash}, missing.MissingInfoHashes)
+		require.Equal(t, []protocol.InfoHash{hash}, missing.MissingInfoHashes)
 		content, err := s.TorrentContent(ctx, append(adultServingExactOptions(model.TableNameTorrentContent), query.Where(TorrentContentInfoHashCriteria(hash)))...)
 		require.NoError(t, err)
 		require.Empty(t, content.Items)
@@ -416,7 +417,7 @@ func TestAdultServingPostgresFlagOffRestoresAdultVisibilityWithoutMutation(t *te
 		query.WithTotalCount(true), query.WithAggregationBudget(0))
 	require.NoError(t, err)
 	require.EqualValues(t, 3, grouped.TotalCount)
-	require.ElementsMatch(t, []protocol.ID{f.hashes[0], f.hashes[1], f.hashes[3]}, adultServingContentHashes(grouped.Items))
+	require.ElementsMatch(t, []protocol.InfoHash{f.hashes[0], f.hashes[1], f.hashes[3]}, adultServingContentHashes(grouped.Items))
 	require.Equal(t, before, f.snapshot(t), "flag changes and serving reads cannot rewrite the catalogue")
 }
 

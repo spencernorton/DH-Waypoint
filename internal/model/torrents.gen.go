@@ -14,7 +14,8 @@ const TableNameTorrent = "torrents"
 
 // Torrent mapped from table <torrents>
 type Torrent struct {
-	InfoHash    protocol.ID             `gorm:"column:info_hash;primaryKey;<-:create" json:"infoHash"`
+	InfoHash    protocol.InfoHash       `gorm:"column:info_hash;primaryKey;<-:create" json:"infoHash"`
+	InfoHashV2  *protocol.InfoHash      `gorm:"column:info_hash_v2" json:"infoHashV2,omitempty"`
 	Name        string                  `gorm:"column:name;not null" json:"name"`
 	Size        uint                    `gorm:"column:size;not null" json:"size"`
 	Private     bool                    `gorm:"column:private;not null" json:"private"`

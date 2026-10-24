@@ -235,7 +235,7 @@ func (p *poller) retainPieces(ctx context.Context, c *client, torrents []qbTorre
 }
 
 func (p *poller) retainOne(ctx context.Context, c *client, infoHash []byte) error {
-	id, err := protocol.NewIDFromByteSlice(infoHash)
+	id, err := protocol.NewInfoHash(infoHash)
 	if err != nil {
 		return err
 	}
@@ -243,7 +243,8 @@ func (p *poller) retainOne(ctx context.Context, c *client, infoHash []byte) erro
 	if err != nil {
 		return err
 	}
-	info, err := metainfo.ParseTorrentFileInfo(id, torrent)
+	validated, err := metainfo.ParseTorrentBytes(torrent, &id)
+	info := validated.Info
 	if err != nil {
 		return err
 	}
@@ -289,7 +290,7 @@ func torrentToEvidence(instance string, t qbTorrent) (evidence.Evidence, bool) {
 		return evidence.Evidence{}, false
 	}
 	ih, err := hex.DecodeString(t.Hash)
-	if err != nil || len(ih) != 20 {
+	if err != nil || (len(ih) != 20 && len(ih) != 32) {
 		return evidence.Evidence{}, false
 	}
 	strength := evidence.StrengthQBCategoryPublic
@@ -329,7 +330,7 @@ func torrentToStateEvidence(instance string, t qbTorrent, now time.Time) (eviden
 		return evidence.Evidence{}, false
 	}
 	ih, err := hex.DecodeString(t.Hash)
-	if err != nil || len(ih) != 20 {
+	if err != nil || (len(ih) != 20 && len(ih) != 32) {
 		return evidence.Evidence{}, false
 	}
 	bucket := now.Truncate(time.Minute).Format(time.RFC3339)

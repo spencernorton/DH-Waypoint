@@ -43,7 +43,7 @@ func (r *fakeRunner) Run(_ context.Context, _ string, _ Flags, torrent model.Tor
 // torrent whose info_hash is a well-known byte pattern so assertions
 // on the store's seen value are readable.
 func torrentWithHash(b byte) model.Torrent {
-	var ih protocol.ID
+	var ih protocol.InfoHash
 	for i := range ih {
 		ih[i] = b
 	}

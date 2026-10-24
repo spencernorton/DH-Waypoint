@@ -21,6 +21,24 @@ import (
 // An array keeps identities comparable for maps without allocating per lookup.
 type InfoHash [33]byte
 
+func RandomV1InfoHash() InfoHash { return InfoHashV1(RandomNodeID()) }
+
+func MustNewInfoHash(b []byte) InfoHash {
+	h, err := NewInfoHash(b)
+	if err != nil {
+		panic(err)
+	}
+	return h
+}
+
+func V1InfoHashes(ids []ID) []InfoHash {
+	out := make([]InfoHash, len(ids))
+	for i, id := range ids {
+		out[i] = InfoHashV1(id)
+	}
+	return out
+}
+
 func InfoHashV1(id ID) (h InfoHash) { copy(h[:20], id[:]); return }
 
 func InfoHashV2(sum [32]byte) (h InfoHash) {
@@ -198,6 +216,9 @@ func (ids TorrentIdentities) Magnet(name string) string {
 // ParseMagnetIdentities parses claimed exact topics. The returned pair is
 // untrusted until both digests have been checked against validated metadata.
 func ParseMagnetIdentities(s string) (TorrentIdentities, error) {
+	if len(s) > 64*1024 {
+		return TorrentIdentities{}, errors.New("magnet URI exceeds 64 KiB")
+	}
 	u, err := url.Parse(s)
 	if err != nil || u.Scheme != "magnet" {
 		return TorrentIdentities{}, errors.New("invalid magnet URI")

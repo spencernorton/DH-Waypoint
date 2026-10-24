@@ -11,10 +11,10 @@ import (
 
 // hashWithLeadingByte builds an info-hash whose first byte decides sample
 // membership, so the sampling branch is exercised deterministically.
-func hashWithLeadingByte(b byte) protocol.ID {
+func hashWithLeadingByte(b byte) protocol.InfoHash {
 	var arr [20]byte
 	arr[0] = b
-	return protocol.ID(arr)
+	return protocol.InfoHashV1(protocol.ID(arr))
 }
 
 func evidenceName(t *testing.T, tor model.Torrent, paths []string) (string, bool) {

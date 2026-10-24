@@ -308,24 +308,24 @@ type ComplexityRoot struct {
 	}
 
 	Torrent struct {
-		CreatedAt    func(childComplexity int) int
-		Extension    func(childComplexity int) int
-		FileType     func(childComplexity int) int
-		FileTypes    func(childComplexity int) int
-		Files        func(childComplexity int) int
-		FilesCount   func(childComplexity int) int
-		FilesStatus  func(childComplexity int) int
-		HasFilesInfo func(childComplexity int) int
-		InfoHash     func(childComplexity int) int
-		Leechers     func(childComplexity int) int
-		MagnetURI    func(childComplexity int) int
-		Name         func(childComplexity int) int
-		Seeders      func(childComplexity int) int
-		SingleFile   func(childComplexity int) int
-		Size         func(childComplexity int) int
-		Sources      func(childComplexity int) int
-		TagNames     func(childComplexity int) int
-		UpdatedAt    func(childComplexity int) int
+		CreatedAt      func(childComplexity int) int
+		Extension      func(childComplexity int) int
+		FileType       func(childComplexity int) int
+		FileTypes      func(childComplexity int) int
+		Files          func(childComplexity int) int
+		FilesCount     func(childComplexity int) int
+		FilesStatus    func(childComplexity int) int
+		HasFilesInfo   func(childComplexity int) int
+		Leechers       func(childComplexity int) int
+		LegacyInfoHash func(childComplexity int) int
+		MagnetURI      func(childComplexity int) int
+		Name           func(childComplexity int) int
+		Seeders        func(childComplexity int) int
+		SingleFile     func(childComplexity int) int
+		Size           func(childComplexity int) int
+		Sources        func(childComplexity int) int
+		TagNames       func(childComplexity int) int
+		UpdatedAt      func(childComplexity int) int
 	}
 
 	TorrentContent struct {
@@ -338,9 +338,9 @@ type ComplexityRoot struct {
 		EnglishAudioSource func(childComplexity int) int
 		Episodes           func(childComplexity int) int
 		ID                 func(childComplexity int) int
-		InfoHash           func(childComplexity int) int
 		Languages          func(childComplexity int) int
 		Leechers           func(childComplexity int) int
+		LegacyInfoHash     func(childComplexity int) int
 		PublishedAt        func(childComplexity int) int
 		ReleaseAttributes  func(childComplexity int) int
 		ReleaseGroup       func(childComplexity int) int
@@ -380,14 +380,14 @@ type ComplexityRoot struct {
 	}
 
 	TorrentFile struct {
-		CreatedAt func(childComplexity int) int
-		Extension func(childComplexity int) int
-		FileType  func(childComplexity int) int
-		Index     func(childComplexity int) int
-		InfoHash  func(childComplexity int) int
-		Path      func(childComplexity int) int
-		Size      func(childComplexity int) int
-		UpdatedAt func(childComplexity int) int
+		CreatedAt      func(childComplexity int) int
+		Extension      func(childComplexity int) int
+		FileType       func(childComplexity int) int
+		Index          func(childComplexity int) int
+		LegacyInfoHash func(childComplexity int) int
+		Path           func(childComplexity int) int
+		Size           func(childComplexity int) int
+		UpdatedAt      func(childComplexity int) int
 	}
 
 	TorrentFileTypeAgg struct {
@@ -1659,19 +1659,19 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.Torrent.HasFilesInfo(childComplexity), true
 
-	case "Torrent.infoHash":
-		if e.complexity.Torrent.InfoHash == nil {
-			break
-		}
-
-		return e.complexity.Torrent.InfoHash(childComplexity), true
-
 	case "Torrent.leechers":
 		if e.complexity.Torrent.Leechers == nil {
 			break
 		}
 
 		return e.complexity.Torrent.Leechers(childComplexity), true
+
+	case "Torrent.infoHash":
+		if e.complexity.Torrent.LegacyInfoHash == nil {
+			break
+		}
+
+		return e.complexity.Torrent.LegacyInfoHash(childComplexity), true
 
 	case "Torrent.magnetUri":
 		if e.complexity.Torrent.MagnetURI == nil {
@@ -1792,13 +1792,6 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.TorrentContent.ID(childComplexity), true
 
-	case "TorrentContent.infoHash":
-		if e.complexity.TorrentContent.InfoHash == nil {
-			break
-		}
-
-		return e.complexity.TorrentContent.InfoHash(childComplexity), true
-
 	case "TorrentContent.languages":
 		if e.complexity.TorrentContent.Languages == nil {
 			break
@@ -1812,6 +1805,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 		}
 
 		return e.complexity.TorrentContent.Leechers(childComplexity), true
+
+	case "TorrentContent.infoHash":
+		if e.complexity.TorrentContent.LegacyInfoHash == nil {
+			break
+		}
+
+		return e.complexity.TorrentContent.LegacyInfoHash(childComplexity), true
 
 	case "TorrentContent.publishedAt":
 		if e.complexity.TorrentContent.PublishedAt == nil {
@@ -2036,11 +2036,11 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 		return e.complexity.TorrentFile.Index(childComplexity), true
 
 	case "TorrentFile.infoHash":
-		if e.complexity.TorrentFile.InfoHash == nil {
+		if e.complexity.TorrentFile.LegacyInfoHash == nil {
 			break
 		}
 
-		return e.complexity.TorrentFile.InfoHash(childComplexity), true
+		return e.complexity.TorrentFile.LegacyInfoHash(childComplexity), true
 
 	case "TorrentFile.path":
 		if e.complexity.TorrentFile.Path == nil {
@@ -10951,7 +10951,7 @@ func (ec *executionContext) _Torrent_infoHash(ctx context.Context, field graphql
 	}()
 	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
 		ctx = rctx // use context from middleware stack in children
-		return obj.InfoHash, nil
+		return obj.LegacyInfoHash()
 	})
 	if err != nil {
 		ec.Error(ctx, err)
@@ -10972,7 +10972,7 @@ func (ec *executionContext) fieldContext_Torrent_infoHash(_ context.Context, fie
 	fc = &graphql.FieldContext{
 		Object:     "Torrent",
 		Field:      field,
-		IsMethod:   false,
+		IsMethod:   true,
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return nil, errors.New("field of type Hash20 does not have child fields")
@@ -11793,7 +11793,7 @@ func (ec *executionContext) _TorrentContent_infoHash(ctx context.Context, field 
 	}()
 	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
 		ctx = rctx // use context from middleware stack in children
-		return obj.InfoHash, nil
+		return obj.LegacyInfoHash()
 	})
 	if err != nil {
 		ec.Error(ctx, err)
@@ -11814,7 +11814,7 @@ func (ec *executionContext) fieldContext_TorrentContent_infoHash(_ context.Conte
 	fc = &graphql.FieldContext{
 		Object:     "TorrentContent",
 		Field:      field,
-		IsMethod:   false,
+		IsMethod:   true,
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return nil, errors.New("field of type Hash20 does not have child fields")
@@ -13679,7 +13679,7 @@ func (ec *executionContext) _TorrentFile_infoHash(ctx context.Context, field gra
 	}()
 	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
 		ctx = rctx // use context from middleware stack in children
-		return obj.InfoHash, nil
+		return obj.LegacyInfoHash()
 	})
 	if err != nil {
 		ec.Error(ctx, err)
@@ -13700,7 +13700,7 @@ func (ec *executionContext) fieldContext_TorrentFile_infoHash(_ context.Context,
 	fc = &graphql.FieldContext{
 		Object:     "TorrentFile",
 		Field:      field,
-		IsMethod:   false,
+		IsMethod:   true,
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return nil, errors.New("field of type Hash20 does not have child fields")

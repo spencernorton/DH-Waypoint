@@ -139,7 +139,7 @@ func retainFixture(t *testing.T) (*poller, *pgxpool.Pool) {
 		admin.Close()
 	})
 	// torrents keeps the pre-00013 piece columns so the migration applies unchanged.
-	_, err = pool.Exec(ctx, `CREATE TABLE torrents(info_hash bytea PRIMARY KEY, private boolean NOT NULL DEFAULT false,
+	_, err = pool.Exec(ctx, `CREATE TABLE torrents(info_hash bytea PRIMARY KEY, info_hash_v2 bytea, private boolean NOT NULL DEFAULT false,
    piece_length bigint, pieces bytea, created_at timestamptz NOT NULL DEFAULT now());
  CREATE TABLE label_evidence(info_hash bytea, source text NOT NULL, source_kind text NOT NULL, category text);
  CREATE TABLE torrent_tags(info_hash bytea NOT NULL, name text NOT NULL);

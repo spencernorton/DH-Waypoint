@@ -29,7 +29,7 @@ func (p *fakePrivacy) IsPrivateInfoHash(_ context.Context, _ []byte) (bool, erro
 // fake doesn't inspect it.
 func makeTorrent(name, ext string) model.Torrent {
 	return model.Torrent{
-		InfoHash:  protocol.ID{},
+		InfoHash:  protocol.InfoHash{},
 		Name:      name,
 		Extension: model.NewNullString(ext),
 	}

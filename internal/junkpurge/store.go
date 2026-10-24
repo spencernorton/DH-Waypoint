@@ -100,11 +100,11 @@ const legacySnapshotMaxRows = 65536
 // 'extension' is a generated column on both tables, so it is excluded from the
 // explicit column lists.
 func RestoreQuarantined(ctx context.Context, pool *pgxpool.Pool, vstore *verdicts.Store, recoveryStore *cataloguerecovery.Store, logger *zap.SugaredLogger, infoHashHex string) error {
-	ih, err := protocol.ParseID(infoHashHex)
+	ih, err := protocol.ParseInfoHash(infoHashHex)
 	if err != nil {
 		return fmt.Errorf("invalid info_hash %q: %w", infoHashHex, err)
 	}
-	ihBytes := ih[:]
+	ihBytes := ih.Bytes()
 	if recoveryStore != nil && recoveryStore.Enabled() {
 		var snapID int64
 		err = pool.QueryRow(ctx, `SELECT id FROM catalogue_recovery_snapshots WHERE info_hash=$1 AND state='removed' ORDER BY id DESC LIMIT 1`, ihBytes).Scan(&snapID)
@@ -121,7 +121,7 @@ func RestoreQuarantined(ctx context.Context, pool *pgxpool.Pool, vstore *verdict
 		}
 	}
 	job, err := processor.NewQueueJob(processor.MessageParams{
-		InfoHashes:   []protocol.ID{ih},
+		InfoHashes:   []protocol.InfoHash{ih},
 		ClassifyMode: processor.ClassifyModeRematch,
 	})
 	if err != nil {
@@ -323,7 +323,7 @@ ON CONFLICT (fingerprint) WHERE status IN ('pending', 'retry') DO NOTHING`, job.
 // policy and complete recovery caller contract have been qualified. An explicit
 // operator request cannot substitute for missing complete source capture.
 func DeleteQuarantinedNow(ctx context.Context, pool *pgxpool.Pool, vstore *verdicts.Store, logger *zap.SugaredLogger, infoHashHex string) error {
-	if _, err := protocol.ParseID(infoHashHex); err != nil {
+	if _, err := protocol.ParseInfoHash(infoHashHex); err != nil {
 		return fmt.Errorf("invalid info_hash %q: %w", infoHashHex, err)
 	}
 	return cataloguerecovery.ErrDisabled

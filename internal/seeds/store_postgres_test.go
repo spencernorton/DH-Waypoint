@@ -40,7 +40,7 @@ func seedsTestPool(t *testing.T) *pgxpool.Pool {
 			_ = conn.Close(context.Background())
 		}
 	})
-	_, err = pool.Exec(ctx, `create table torrents(info_hash bytea primary key,name text not null default 'Synthetic.Allowed.Release',private boolean not null default false);
+	_, err = pool.Exec(ctx, `create table torrents(info_hash bytea primary key,info_hash_v2 bytea,name text not null default 'Synthetic.Allowed.Release',private boolean not null default false);
 create table torrent_tracker_seeds(info_hash bytea primary key,tracker_known boolean,seeders int,leechers int,completed int,best_tracker text,checked_at timestamptz,peak_seeders int,prev_seeders int,last_positive_at timestamptz);
 create table torrents_torrent_sources(source text,info_hash bytea,seeders int,leechers int,created_at timestamptz,updated_at timestamptz,primary key(source,info_hash));
 create table torrent_liveness(info_hash bytea primary key,status text,last_qb_state text,suspect_first_seen_at timestamptz,suspect_observations int default 0,last_observed_at timestamptz,blacklisted_at timestamptz,next_revalidate_at timestamptz,alive_source text,updated_at timestamptz);

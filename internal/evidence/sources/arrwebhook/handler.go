@@ -246,12 +246,12 @@ func (p arrPayload) mediaID() string {
 }
 
 // decodeHexOrNil returns the decoded bytes of a hex string only if
-// the input looks like an infohash (40 hex chars for SHA1). qB
+// the input is a full infohash (40 hex chars for SHA-1 or 64 for SHA-256). qB
 // DownloadID is the lowercased infohash for torrents, so *arr inherits
 // that. A non-qB download client (e.g. NZBGet) yields a non-hex
 // DownloadID which we correctly decline.
 func decodeHexOrNil(s string) []byte {
-	if len(s) != 40 {
+	if len(s) != 40 && len(s) != 64 {
 		return nil
 	}
 	b, err := hex.DecodeString(s)

@@ -122,11 +122,11 @@ func (p *Policy) TorrentCondition(table string) clause.Expr {
 		private = "EXISTS (SELECT 1 FROM torrents serving_private WHERE serving_private.info_hash = " + root + " AND serving_private.private = FALSE)"
 	}
 	sql += " AND (" + private + ")" + `
- AND NOT EXISTS (SELECT 1 FROM label_evidence serving_e WHERE serving_e.info_hash = ` + root + ` AND ` + catalogueguard.QBPrivacySQL("serving_e.source", "serving_e.category", "?") + `)
+ AND NOT EXISTS (SELECT 1 FROM label_evidence serving_e WHERE ` + catalogueguard.IdentityMatchSQL("serving_e.info_hash", root) + ` AND ` + catalogueguard.QBPrivacySQL("serving_e.source", "serving_e.category", "?") + `)
  AND NOT EXISTS (SELECT 1 FROM torrent_tags serving_tag WHERE serving_tag.info_hash = ` + root + ` AND ` + catalogueguard.PrivacyTagSQL("serving_tag.name", "?") + `)
- AND NOT EXISTS (SELECT 1 FROM torrent_canonical_labels serving_label WHERE serving_label.info_hash = ` + root + ` AND lower(btrim(serving_label.category,?)) IN ('private','bitgrab'))`
+ AND NOT EXISTS (SELECT 1 FROM torrent_canonical_labels serving_label WHERE ` + catalogueguard.IdentityMatchSQL("serving_label.info_hash", root) + ` AND lower(btrim(serving_label.category,?)) IN ('private','bitgrab'))`
 	if p.processorExclusions {
-		sql += " AND NOT EXISTS(SELECT 1 FROM processor_exclusions serving_processor WHERE serving_processor.info_hash=" + root + ")"
+		sql += " AND NOT EXISTS(SELECT 1 FROM processor_exclusions serving_processor WHERE " + catalogueguard.IdentityMatchSQL("serving_processor.info_hash", root) + ")"
 	}
 	args := []any{catalogueguard.TagWhitespace, catalogueguard.TagWhitespace,
 		catalogueguard.TagWhitespace, catalogueguard.TagWhitespace, catalogueguard.TagWhitespace,

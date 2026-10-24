@@ -42,7 +42,7 @@ type Exporter interface {
 	//
 	// Errors are logged + counted but never propagated. The processor's
 	// path through this hook is non-fatal.
-	Record(ctx context.Context, infoHash protocol.ID, title string, filePaths []string)
+	Record(ctx context.Context, infoHash protocol.InfoHash, title string, filePaths []string)
 
 	// Close flushes any pending state. Safe to call multiple times.
 	Close() error
@@ -134,7 +134,7 @@ type observationRecord struct {
 	// elsewhere; this record is purely the queryable fingerprint.
 }
 
-func (e *exporter) Record(ctx context.Context, infoHash protocol.ID, title string, filePaths []string) {
+func (e *exporter) Record(ctx context.Context, infoHash protocol.InfoHash, title string, filePaths []string) {
 	if e.closed.Load() {
 		return
 	}
@@ -253,8 +253,8 @@ func (e *exporter) Close() error {
 
 type noOpExporter struct{}
 
-func (noOpExporter) Record(_ context.Context, _ protocol.ID, _ string, _ []string) {}
-func (noOpExporter) Close() error                                                  { return nil }
+func (noOpExporter) Record(_ context.Context, _ protocol.InfoHash, _ string, _ []string) {}
+func (noOpExporter) Close() error                                                        { return nil }
 
 // bannedKeywordRegex matches the same keyword set as `keywords.banned`
 // in internal/classifier/classifier.core.yml. This MUST stay in sync —

@@ -18,7 +18,7 @@ type TorrentSearch interface {
 	Torrents(ctx context.Context, options ...query.Option) (TorrentsResult, error)
 	TorrentsWithMissingInfoHashes(
 		ctx context.Context,
-		infoHashes []protocol.ID,
+		infoHashes []protocol.InfoHash,
 		options ...query.Option,
 	) (TorrentsWithMissingInfoHashesResult, error)
 	TorrentSuggestTags(
@@ -53,12 +53,12 @@ func (s search) Torrents(ctx context.Context, options ...query.Option) (Torrents
 
 type TorrentsWithMissingInfoHashesResult struct {
 	Torrents          []model.Torrent
-	MissingInfoHashes []protocol.ID
+	MissingInfoHashes []protocol.InfoHash
 }
 
 func (s search) TorrentsWithMissingInfoHashes(
 	ctx context.Context,
-	infoHashes []protocol.ID,
+	infoHashes []protocol.InfoHash,
 	options ...query.Option,
 ) (TorrentsWithMissingInfoHashesResult, error) {
 	searchResult, searchErr := s.Torrents(ctx,
@@ -68,12 +68,12 @@ func (s search) TorrentsWithMissingInfoHashes(
 	}
 
 	torrents := make([]model.Torrent, 0, len(searchResult.Items))
-	missingInfoHashes := make([]protocol.ID, 0, len(infoHashes)-len(searchResult.Items))
-	foundInfoHashes := make(map[protocol.ID]struct{}, len(searchResult.Items))
+	missingInfoHashes := make([]protocol.InfoHash, 0, len(infoHashes)-len(searchResult.Items))
+	foundInfoHashes := make(map[protocol.InfoHash]struct{}, len(searchResult.Items))
 nextInfoHash:
 	for _, h := range infoHashes {
 		for _, t := range searchResult.Items {
-			if t.InfoHash == h {
+			if t.InfoHash == h || t.InfoHashV2 != nil && *t.InfoHashV2 == h {
 				if _, ok := foundInfoHashes[h]; ok {
 					continue nextInfoHash
 				}

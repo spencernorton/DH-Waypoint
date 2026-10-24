@@ -97,7 +97,7 @@ func validateNow(now time.Time) error {
 	return nil
 }
 func validateHash(hash []byte) error {
-	if len(hash) != 20 {
+	if len(hash) != 20 && len(hash) != 32 {
 		return fmt.Errorf("catalogue recovery: 20-byte hash required")
 	}
 	return nil

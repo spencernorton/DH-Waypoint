@@ -36,9 +36,14 @@ func TestInfoHashFullDigestAndWireKeyAreDistinct(t *testing.T) {
 		_, err := NewInfoHash(make([]byte, n))
 		require.Error(t, err)
 	}
+	_, err := NewIDFromByteSlice(v2.Bytes())
+	require.Error(t, err)
+	var wire ID
+	require.Error(t, wire.Scan(v2.Bytes()))
+	require.Error(t, wire.UnmarshalBencode(append([]byte("32:"), v2.Bytes()...)))
 	bad := v1
 	bad[20] = 1
-	_, err := bad.Value()
+	_, err = bad.Value()
 	require.Error(t, err)
 }
 

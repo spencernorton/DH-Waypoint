@@ -35,7 +35,7 @@ func BuildGenerator(db *gorm.DB) *gen.Generator {
 		},
 	})
 
-	infoHashType := gen.FieldType("info_hash", "protocol.ID")
+	infoHashType := gen.FieldType("info_hash", "protocol.InfoHash")
 	infoHashReadOnly := readAndCreateField("info_hash")
 	createdAtReadOnly := readAndCreateField("created_at")
 
@@ -108,6 +108,7 @@ func BuildGenerator(db *gorm.DB) *gen.Generator {
 	)
 	torrents := g.GenerateModel(
 		"torrents",
+		gen.FieldType("info_hash_v2", "*protocol.InfoHash"),
 		gen.FieldRelate(
 			field.HasOne,
 			"Hint",

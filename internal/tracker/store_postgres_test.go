@@ -34,10 +34,10 @@ import (
 
 type passThroughBlocking struct{}
 
-func (passThroughBlocking) Filter(_ context.Context, hs []protocol.ID) ([]protocol.ID, error) {
+func (passThroughBlocking) Filter(_ context.Context, hs []protocol.InfoHash) ([]protocol.InfoHash, error) {
 	return hs, nil
 }
-func (passThroughBlocking) Block(context.Context, []protocol.ID, string, string, bool) error {
+func (passThroughBlocking) Block(context.Context, []protocol.InfoHash, string, string, bool) error {
 	return nil
 }
 func (passThroughBlocking) Flush(context.Context) error { return nil }

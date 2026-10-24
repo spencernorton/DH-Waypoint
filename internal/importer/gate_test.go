@@ -14,9 +14,9 @@ import (
 // fakeCsam drops any hash whose first byte is in `block`.
 type fakeCsam struct{ block map[byte]struct{} }
 
-func (f fakeCsam) IsBlocked(h protocol.ID) bool { _, ok := f.block[h[0]]; return ok }
-func (f fakeCsam) Filter(hs []protocol.ID) []protocol.ID {
-	out := make([]protocol.ID, 0, len(hs))
+func (f fakeCsam) IsBlocked(h protocol.InfoHash) bool { _, ok := f.block[h[0]]; return ok }
+func (f fakeCsam) Filter(hs []protocol.InfoHash) []protocol.InfoHash {
+	out := make([]protocol.InfoHash, 0, len(hs))
 	for _, h := range hs {
 		if _, ok := f.block[h[0]]; !ok {
 			out = append(out, h)
@@ -34,11 +34,11 @@ type fakeBlocking struct {
 	err   error
 }
 
-func (f fakeBlocking) Filter(_ context.Context, hs []protocol.ID) ([]protocol.ID, error) {
+func (f fakeBlocking) Filter(_ context.Context, hs []protocol.InfoHash) ([]protocol.InfoHash, error) {
 	if f.err != nil {
 		return nil, f.err
 	}
-	out := make([]protocol.ID, 0, len(hs))
+	out := make([]protocol.InfoHash, 0, len(hs))
 	for _, h := range hs {
 		if _, ok := f.block[h[0]]; !ok {
 			out = append(out, h)
@@ -46,13 +46,15 @@ func (f fakeBlocking) Filter(_ context.Context, hs []protocol.ID) ([]protocol.ID
 	}
 	return out, nil
 }
-func (fakeBlocking) Block(context.Context, []protocol.ID, string, string, bool) error { return nil }
-func (fakeBlocking) Flush(context.Context) error                      { return nil }
+func (fakeBlocking) Block(context.Context, []protocol.InfoHash, string, string, bool) error {
+	return nil
+}
+func (fakeBlocking) Flush(context.Context) error { return nil }
 
 func mkItems(firstBytes ...byte) []Item {
 	items := make([]Item, len(firstBytes))
 	for i, b := range firstBytes {
-		var h protocol.ID
+		var h protocol.InfoHash
 		h[0] = b
 		items[i] = Item{InfoHash: h, Name: "item"}
 	}

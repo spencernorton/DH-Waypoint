@@ -25,20 +25,20 @@ func (c *crawler) runInfoHashTriage(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case reqs := <-c.infoHashTriage.Out():
-			allHashes := make([]protocol.ID, 0, len(reqs))
+			allHashes := make([]protocol.InfoHash, 0, len(reqs))
 
-			reqMap := make(map[protocol.ID]nodeHasPeersForHash, len(reqs))
+			reqMap := make(map[protocol.InfoHash]nodeHasPeersForHash, len(reqs))
 			for _, r := range reqs {
-				if c.namePolicy.ExcludesHash(r.infoHash) {
-					c.namePolicy.Observe("crawler_existing", c.namePolicy.Evaluate(r.infoHash, ""))
+				if c.namePolicy.ExcludesHash(protocol.InfoHashV1(r.infoHash)) {
+					c.namePolicy.Observe("crawler_existing", c.namePolicy.Evaluate(protocol.InfoHashV1(r.infoHash), ""))
 					continue
 				}
-				if _, ok := reqMap[r.infoHash]; ok {
+				if _, ok := reqMap[protocol.InfoHashV1(r.infoHash)]; ok {
 					continue
 				}
 
-				allHashes = append(allHashes, r.infoHash)
-				reqMap[r.infoHash] = r
+				allHashes = append(allHashes, protocol.InfoHashV1(r.infoHash))
+				reqMap[protocol.InfoHashV1(r.infoHash)] = r
 			}
 
 			// CSAM blocklist (community-feed double-hashes) runs FIRST,
@@ -96,7 +96,7 @@ func (c *crawler) runInfoHashTriage(ctx context.Context) {
 					c.verdictsMetrics.Reader("crawler", "error", 1)
 					c.logger.Debugw("verdicts blocked-set lookup failed; continuing unfiltered", "err", verr)
 				case len(blocked) > 0 && c.verdictsLive:
-					kept := make([]protocol.ID, 0, len(filteredHashes))
+					kept := make([]protocol.InfoHash, 0, len(filteredHashes))
 					for _, h := range filteredHashes {
 						if _, isBlocked := blocked[h.String()]; isBlocked {
 							continue
@@ -113,7 +113,7 @@ func (c *crawler) runInfoHashTriage(ctx context.Context) {
 				}
 			}
 
-			filteredHashMap := make(map[protocol.ID]struct{}, len(filteredHashes))
+			filteredHashMap := make(map[protocol.InfoHash]struct{}, len(filteredHashes))
 			valuers := make([]driver.Valuer, 0, len(filteredHashes))
 
 			for _, h := range filteredHashes {
@@ -142,7 +142,7 @@ func (c *crawler) runInfoHashTriage(ctx context.Context) {
 				break
 			}
 
-			foundTorrents := make(map[protocol.ID]triageResult)
+			foundTorrents := make(map[protocol.InfoHash]triageResult)
 			for _, t := range result {
 				foundTorrents[t.InfoHash] = *t
 			}
@@ -156,7 +156,7 @@ func (c *crawler) runInfoHashTriage(ctx context.Context) {
 						continue
 					}
 				}
-				if t, ok := foundTorrents[r.infoHash]; !ok ||
+				if t, ok := foundTorrents[protocol.InfoHashV1(r.infoHash)]; !ok ||
 					t.FilesStatus == model.FilesStatusNoInfo ||
 					(t.FilesStatus != model.FilesStatusSingle && !t.FilesCount.Valid) ||
 					(t.FilesStatus == model.FilesStatusOverThreshold && t.FilesCount.Uint <= c.saveFilesThreshold) {
@@ -182,7 +182,7 @@ func (c *crawler) runInfoHashTriage(ctx context.Context) {
 
 type triageResult struct {
 	Name        string
-	InfoHash    protocol.ID
+	InfoHash    protocol.InfoHash
 	FilesStatus model.FilesStatus
 	FilesCount  model.NullUint
 	Seeders     model.NullUint

@@ -7,6 +7,7 @@ import (
 	"net/netip"
 
 	"github.com/spencernorton/DH-Waypoint/internal/protocol"
+	"github.com/spencernorton/DH-Waypoint/internal/protocol/metainfo"
 	"github.com/spencernorton/DH-Waypoint/internal/protocol/metainfo/peerrep"
 )
 
@@ -98,6 +99,9 @@ var ErrPeerRepSuppressed = errors.New("peerrep: peer suppressed by reputation ca
 func classifyForPeerRep(err error) peerrep.ErrorClass {
 	if err == nil {
 		return peerrep.ClassUnknown
+	}
+	if errors.Is(err, metainfo.ErrWrongInfoHash) {
+		return peerrep.ClassHashMismatch
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		return peerrep.ClassDialTimeout

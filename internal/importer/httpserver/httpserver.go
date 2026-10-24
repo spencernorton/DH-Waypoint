@@ -55,6 +55,7 @@ func (b builder) Apply(e *gin.Engine) error {
 	e.POST("/import", func(ctx *gin.Context) {
 		b.handle(ctx, i)
 	})
+	e.POST("/import/torrent", httpserver.QueryBudget(30*time.Second), func(ctx *gin.Context) { b.handleTorrent(ctx, i) })
 
 	return nil
 }

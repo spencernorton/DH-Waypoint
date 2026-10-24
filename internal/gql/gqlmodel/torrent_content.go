@@ -2,6 +2,7 @@ package gqlmodel
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -21,7 +22,7 @@ type TorrentContentQuery struct {
 
 type TorrentContent struct {
 	ID                string
-	InfoHash          protocol.ID
+	InfoHash          protocol.InfoHash
 	ContentType       model.NullContentType
 	ContentSource     model.NullString
 	ContentID         model.NullString
@@ -97,6 +98,13 @@ func NewTorrentContentFromResultItem(item search.TorrentContentResultItem) Torre
 	return c
 }
 
+func (t TorrentContent) LegacyInfoHash() (protocol.ID, error) {
+	if t.InfoHash.IsV2() {
+		return protocol.ID{}, errors.New("v2 identity requires the v2 API")
+	}
+	return t.InfoHash.WireID(), nil
+}
+
 type TorrentSourceInfo struct {
 	Key      string
 	Name     string
@@ -153,6 +161,7 @@ func (t TorrentContentQuery) Search(
 	input TorrentContentSearchQueryInput,
 ) (TorrentContentSearchResult, error) {
 	options := []q.Option{
+		q.Where(search.LegacyTorrentIdentityCriteria("torrent_contents")),
 		q.DefaultOption(),
 		search.TorrentContentCoreJoins(),
 		search.HydrateTorrentContentContent(),
@@ -182,7 +191,7 @@ func (t TorrentContentQuery) Search(
 	}
 
 	if infoHashes, ok := input.InfoHashes.ValueOK(); ok {
-		options = append(options, q.Where(search.TorrentContentInfoHashCriteria(infoHashes...)))
+		options = append(options, q.Where(search.TorrentContentInfoHashCriteria(protocol.V1InfoHashes(infoHashes)...)))
 	}
 
 	var torrentCreatedAtCriteria []q.Criteria

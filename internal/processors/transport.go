@@ -18,6 +18,7 @@ import (
 	"time"
 
 	v1 "github.com/spencernorton/DH-Waypoint/processorapi/v1"
+	v2 "github.com/spencernorton/DH-Waypoint/processorapi/v2"
 	"github.com/xeipuuv/gojsonschema"
 )
 
@@ -110,10 +111,10 @@ func (t *Transport) Inspect(ctx context.Context, w v1.RegistryWrite) (v1.Manifes
 	if e := t.call(ctx, w.Endpoint, w.AuthEnv, "/v1/manifest", nil, &m); e != nil {
 		return m, s, e
 	}
-	if m.Contract == v1.Contract && m.Processor.ID != "" {
+	if (m.Contract == v1.Contract || m.Contract == v2.Contract) && m.Processor.ID != "" {
 		m.ApplyDefaults(m.Processor.ID)
 	}
-	if e := m.Validate(); e != nil {
+	if e := validateManifest(m); e != nil {
 		return m, s, e
 	}
 	if len(w.Configuration) == 0 || len(w.Configuration) > 4096 {
@@ -134,7 +135,7 @@ func (t *Transport) Inspect(ctx context.Context, w v1.RegistryWrite) (v1.Manifes
 	if e != nil {
 		return m, s, e
 	}
-	if s.Contract != v1.Contract || s.Processor != m.Processor {
+	if s.Contract != m.Contract || s.Processor != m.Processor {
 		return m, s, errors.New("service_identity_mismatch")
 	}
 	if w.State == "active" && s.State != "ready" {
@@ -146,17 +147,24 @@ func (t *Transport) Status(ctx context.Context, endpoint, auth string) (v1.Servi
 	var s v1.ServiceStatus
 	e := t.call(ctx, endpoint, auth, "/v1/status", nil, &s)
 	if e == nil {
-		if s.Contract == v1.Contract && s.Processor.ID != "" {
+		if (s.Contract == v1.Contract || s.Contract == v2.Contract) && s.Processor.ID != "" {
 			s.Processor.ApplyDefaults(s.Processor.ID)
 		}
-		e = s.Validate()
+		e = validateStatus(s)
 	}
 	return s, e
 }
 func (t *Transport) Process(ctx context.Context, endpoint, auth string, j v1.Job) (v1.Result, error) {
 	var r v1.Result
-	if e := j.Validate(); e != nil {
+	if e := validateJob(j); e != nil {
 		return r, e
+	}
+	if j.Contract == v2.Contract {
+		if e := t.call(ctx, endpoint, auth, "/v2/process", j, &r); e != nil {
+			return r, e
+		}
+		r.FillDefaultBinding(j)
+		return r, validateResult(r, j)
 	}
 	if _, strict := t.strictEndpoints.Load(endpoint); strict {
 		return t.processStrictV1(ctx, endpoint, auth, j)
@@ -170,7 +178,7 @@ func (t *Transport) Process(ctx context.Context, endpoint, auth string, j v1.Job
 		return r, e
 	}
 	r.FillDefaultBinding(j)
-	return r, r.Validate(j)
+	return r, validateResult(r, j)
 }
 
 func strictV1Job(j v1.Job, stage v1.Stage) v1.Job {
@@ -303,7 +311,14 @@ func (t *Transport) processStrictV1(ctx context.Context, endpoint, auth string, 
 }
 func (t *Transport) Feedback(ctx context.Context, endpoint, auth string, batch v1.FeedbackBatch) (v1.FeedbackAck, error) {
 	var ack v1.FeedbackAck
-	e := t.call(ctx, endpoint, auth, "/v1/feedback", batch, &ack)
+	path := "/v1/feedback"
+	if batch.Contract == v2.FeedbackContract {
+		path = "/v2/feedback"
+	}
+	e := t.call(ctx, endpoint, auth, path, batch, &ack)
+	if e == nil && batch.Contract == v2.FeedbackContract && (ack.Contract != batch.Contract || ack.Accepted < 0 || ack.Accepted > len(batch.Events)) {
+		e = errors.New("invalid_v2_feedback_ack")
+	}
 	return ack, e
 }
 

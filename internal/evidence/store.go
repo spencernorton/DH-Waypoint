@@ -341,7 +341,9 @@ func (s *Store) IsPrivateInfoHash(ctx context.Context, infoHash []byte) (bool, e
 	q := `
 select exists (
   select 1 from label_evidence
-  where info_hash = $1
+  where (info_hash = $1 OR info_hash IN (
+   SELECT t.info_hash FROM torrents t WHERE t.info_hash_v2=$1
+   UNION ALL SELECT t.info_hash_v2 FROM torrents t WHERE t.info_hash=$1 AND t.info_hash_v2 IS NOT NULL))
     and ` + catalogueguard.QBPrivacySQL("source", "category", "$2") + `
 )`
 	var isPrivate bool

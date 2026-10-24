@@ -15,14 +15,14 @@ import (
 
 func TestNoOp_AlwaysAllows(t *testing.T) {
 	m := NewNoOp()
-	var ih protocol.ID
+	var ih protocol.InfoHash
 	for i := range ih {
 		ih[i] = byte(i)
 	}
 	if m.IsBlocked(ih) {
 		t.Fatal("NoOp.IsBlocked must be false")
 	}
-	out := m.Filter([]protocol.ID{ih, ih, ih})
+	out := m.Filter([]protocol.InfoHash{ih, ih, ih})
 	if len(out) != 3 {
 		t.Fatalf("NoOp.Filter dropped hashes: got %d, want 3", len(out))
 	}
@@ -56,7 +56,7 @@ func TestNew_NoOpWhenNoFeed(t *testing.T) {
 
 // makeFeed returns an httptest server that serves a feed body
 // containing the given infohashes (as their double-hashes), one per line.
-func makeFeed(t *testing.T, hashes ...protocol.ID) *httptest.Server {
+func makeFeed(t *testing.T, hashes ...protocol.InfoHash) *httptest.Server {
 	t.Helper()
 	var sb strings.Builder
 	sb.WriteString("# test feed\n")
@@ -71,11 +71,11 @@ func makeFeed(t *testing.T, hashes ...protocol.ID) *httptest.Server {
 }
 
 func TestService_RefreshAndFilter(t *testing.T) {
-	var bad protocol.ID
+	var bad protocol.InfoHash
 	for i := range bad {
 		bad[i] = byte(0xab)
 	}
-	var good protocol.ID
+	var good protocol.InfoHash
 	for i := range good {
 		good[i] = byte(0xcd)
 	}
@@ -101,7 +101,7 @@ func TestService_RefreshAndFilter(t *testing.T) {
 		t.Fatal("good infohash unexpectedly blocked")
 	}
 
-	out := mgr.Filter([]protocol.ID{good, bad, good})
+	out := mgr.Filter([]protocol.InfoHash{good, bad, good})
 	if len(out) != 2 {
 		t.Fatalf("Filter kept wrong count: got %d, want 2 (both 'good' should pass)", len(out))
 	}
@@ -142,7 +142,7 @@ func TestService_FeedFailureKeepsServiceUsable(t *testing.T) {
 		t.Fatal("expected non-nil error from failed feed")
 	}
 
-	var ih protocol.ID
+	var ih protocol.InfoHash
 	if mgr.IsBlocked(ih) {
 		t.Fatal("expected service with failed feed to allow all hashes")
 	}
@@ -185,7 +185,7 @@ func TestParseFeed_CountsParseErrorsButContinues(t *testing.T) {
 	body := `de47c9b27eb8d300dbb5f2c353e632c393262cf06340c4fa7f1b40c4cbd36f90
 this-is-not-a-hex-line
 NOTHEX
-` + DoubleHashHex(protocol.ID{1}) + "\n"
+` + DoubleHashHex(protocol.InfoHash{1}) + "\n"
 	entries, parseErrs, err := parseFeed(strings.NewReader(body), 4096)
 	if err != nil {
 		t.Fatalf("parseFeed error: %v", err)
@@ -199,7 +199,7 @@ NOTHEX
 }
 
 func TestParseFeed_RejectsExcessiveSize(t *testing.T) {
-	hexLine := DoubleHashHex(protocol.ID{1}) + "\n"
+	hexLine := DoubleHashHex(protocol.InfoHash{1}) + "\n"
 	body := strings.Repeat(hexLine, 10)
 	_, _, err := parseFeed(strings.NewReader(body), int64(len(hexLine)*3))
 	if err == nil {
@@ -228,7 +228,7 @@ func TestFeedLabel(t *testing.T) {
 // failure (review finding: "Feed refresh failures drop previously
 // loaded blocklist entries").
 func TestService_FeedFailureRetainsPreviouslyLoadedEntries(t *testing.T) {
-	var bad protocol.ID
+	var bad protocol.InfoHash
 	for i := range bad {
 		bad[i] = byte(0xab)
 	}
@@ -294,8 +294,8 @@ func TestService_FeedFailureRetainsPreviouslyLoadedEntries(t *testing.T) {
 // previously-cached entries (if any) plus the succeeding feed's
 // fresh entries.
 func TestService_MixedFeedOutcomesUnionBloom(t *testing.T) {
-	var hashA, hashB protocol.ID
-	for i := range hashA {
+	var hashA, hashB protocol.InfoHash
+	for i := range 20 {
 		hashA[i] = byte(0x11)
 		hashB[i] = byte(0x22)
 	}
@@ -332,7 +332,7 @@ func atomicAdd(p *int32, delta int32) int32 {
 
 // Sanity: the bloom filter's FPR isn't catastrophic at low fill.
 func TestService_LowFalsePositiveAtSparseFill(t *testing.T) {
-	var bad protocol.ID
+	var bad protocol.InfoHash
 	for i := range bad {
 		bad[i] = byte(i*17 + 3)
 	}
@@ -352,7 +352,7 @@ func TestService_LowFalsePositiveAtSparseFill(t *testing.T) {
 	const probes = 1000
 	fps := 0
 	for i := range probes {
-		var probe protocol.ID
+		var probe protocol.InfoHash
 		// Vary the bytes uniformly so probes don't accidentally
 		// match `bad`.
 		for j := range probe {

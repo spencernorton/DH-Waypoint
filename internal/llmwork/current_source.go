@@ -9,7 +9,6 @@ import (
 	"github.com/spencernorton/DH-Waypoint/internal/catalogueguard"
 	"github.com/spencernorton/DH-Waypoint/internal/model"
 	"github.com/spencernorton/DH-Waypoint/internal/namepolicy"
-	"github.com/spencernorton/DH-Waypoint/internal/protocol"
 	"strings"
 )
 
@@ -17,7 +16,7 @@ import (
 // while locking native privacy/name and existing classification authority.
 // It is independent of the optional later release-attribute schema.
 func LockedSource(ctx context.Context, tx pgx.Tx, task Task) (model.Torrent, error) {
-	if len(task.InfoHash) != len(protocol.ID{}) || len(task.SourceDigest) != 32 {
+	if len(task.InfoHash) != 20 || len(task.SourceDigest) != 32 {
 		return model.Torrent{}, ErrObsolete
 	}
 	// Keep source/privacy writers out of the final short application boundary.
@@ -27,7 +26,9 @@ func LockedSource(ctx context.Context, tx pgx.Tx, task Task) (model.Torrent, err
 		return model.Torrent{}, err
 	}
 	var t model.Torrent
-	copy(t.InfoHash[:], task.InfoHash)
+	if err := t.InfoHash.Scan(task.InfoHash); err != nil {
+		return t, ErrObsolete
+	}
 	err := tx.QueryRow(ctx, `SELECT name,size,private,files_status,extension,files_count FROM torrents WHERE info_hash=$1 FOR UPDATE`, task.InfoHash).
 		Scan(&t.Name, &t.Size, &t.Private, &t.FilesStatus, &t.Extension, &t.FilesCount)
 	if errors.Is(err, pgx.ErrNoRows) {

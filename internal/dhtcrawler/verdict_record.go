@@ -18,7 +18,7 @@ import (
 // sites, so each hash is recorded roughly once.
 
 // recordVerdict best-effort writes one blacklisted verdict. Nil-safe.
-func (c *crawler) recordVerdict(ctx context.Context, hash protocol.ID, mechanism, reason string, evidence []byte) {
+func (c *crawler) recordVerdict(ctx context.Context, hash protocol.InfoHash, mechanism, reason string, evidence []byte) {
 	if c.verdicts == nil {
 		return
 	}
@@ -43,15 +43,15 @@ func csamEvidence(site string) []byte {
 
 // removedHashes returns the hashes in all that are NOT in kept — the subset
 // the Filter dropped. Filter only ever removes, so this is the reject set.
-func removedHashes(all, kept []protocol.ID) []protocol.ID {
+func removedHashes(all, kept []protocol.InfoHash) []protocol.InfoHash {
 	if len(all) == len(kept) {
 		return nil
 	}
-	keptSet := make(map[protocol.ID]struct{}, len(kept))
+	keptSet := make(map[protocol.InfoHash]struct{}, len(kept))
 	for _, h := range kept {
 		keptSet[h] = struct{}{}
 	}
-	var out []protocol.ID
+	var out []protocol.InfoHash
 	for _, h := range all {
 		if _, ok := keptSet[h]; !ok {
 			out = append(out, h)
@@ -67,7 +67,7 @@ func removedHashes(all, kept []protocol.ID) []protocol.ID {
 //
 // csam verdicts are NON-operator-restorable (design §3/§6-Q3): any future
 // ledger-based restore path MUST refuse to restore a mechanism=csam verdict.
-func (c *crawler) recordCsamRejects(ctx context.Context, all, kept []protocol.ID, site string) {
+func (c *crawler) recordCsamRejects(ctx context.Context, all, kept []protocol.InfoHash, site string) {
 	if c.verdicts == nil {
 		return
 	}
@@ -83,12 +83,12 @@ func (c *crawler) recordCsamRejects(ctx context.Context, all, kept []protocol.ID
 
 // recordCsamReject records a single csam blacklist (the per-hash egress
 // re-check, where the batch diff is unavailable).
-func (c *crawler) recordCsamReject(ctx context.Context, hash protocol.ID, site string) {
+func (c *crawler) recordCsamReject(ctx context.Context, hash protocol.InfoHash, site string) {
 	c.recordVerdict(ctx, hash, verdicts.MechanismCsam, "community-feed CSAM reject ("+site+")", csamEvidence(site))
 }
 
 // recordBlockingVerdict records a blocking blacklist for a ban-check
 // auto-block (the blocking manager's own choke, driven by banningChecker).
-func (c *crawler) recordBlockingVerdict(ctx context.Context, hash protocol.ID) {
+func (c *crawler) recordBlockingVerdict(ctx context.Context, hash protocol.InfoHash) {
 	c.recordVerdict(ctx, hash, verdicts.MechanismBlocking, "banning check failed; blocked", nil)
 }

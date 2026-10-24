@@ -188,9 +188,9 @@ func coreProcess(t *testing.T, s *Store, p *pgxpool.Pool, h []byte) {
 	runner := classifier.New(classifier.Params{Config: config, Search: searches.Search, TmdbConfig: tmdb.NewDefaultConfig(), TmdbClient: lazy.New(func() (tmdb.Client, error) { return nil, nil })})
 	core, e := processor.New(processor.Params{CoreRecorder: s, ClassifierConfig: config, Search: searches.Search, Workflow: runner.Runner, Dao: query, BlockingManager: lazy.New(func() (blocking.Manager, error) { return nil, nil }), Logger: zap.NewNop().Sugar()}).Processor.Get()
 	require.NoError(t, e)
-	var id protocol.ID
-	copy(id[:], h)
-	require.NoError(t, core.Process(testContext, processor.MessageParams{InfoHashes: []protocol.ID{id}}))
+	var id protocol.InfoHash
+	require.NoError(t, id.Scan(h))
+	require.NoError(t, core.Process(testContext, processor.MessageParams{InfoHashes: []protocol.InfoHash{id}}))
 	var processing, matching string
 	require.NoError(t, p.QueryRow(testContext, `SELECT processing_outcome,outcome FROM processor_core_receipts WHERE info_hash=$1`, h).Scan(&processing, &matching))
 	require.Equal(t, "completed", processing)

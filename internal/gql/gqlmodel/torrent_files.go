@@ -29,6 +29,7 @@ func (t TorrentQuery) Files(ctx context.Context, query TorrentFilesQueryInput) (
 	}
 
 	options := []q.Option{
+		q.Where(search.LegacyTorrentIdentityCriteria("torrent_files")),
 		q.SearchParams{
 			Limit:             model.NullUint{Valid: true, Uint: limit},
 			Page:              query.Page,
@@ -41,7 +42,7 @@ func (t TorrentQuery) Files(ctx context.Context, query TorrentFilesQueryInput) (
 
 	var criteria []q.Criteria
 	if query.InfoHashes != nil {
-		criteria = append(criteria, search.TorrentFileInfoHashCriteria(query.InfoHashes...))
+		criteria = append(criteria, search.TorrentFileInfoHashCriteria(protocol.V1InfoHashes(query.InfoHashes)...))
 	}
 
 	options = append(options, q.Where(criteria...))

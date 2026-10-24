@@ -37,13 +37,13 @@ type Fields struct {
 	ReleaseAttributes *model.ReleaseAttributes `json:"releaseAttributes"`
 }
 type Entry struct {
-	SourceDigest     []byte      `json:"sourceDigest"`
-	InfoHash         protocol.ID `json:"infoHash"`
-	TargetID         string      `json:"targetId"`
-	SourceNameSHA256 string      `json:"sourceNameSha256"`
-	UpdatedAt        time.Time   `json:"updatedAt"`
-	Before           Fields      `json:"before"`
-	After            Fields      `json:"after"`
+	SourceDigest     []byte            `json:"sourceDigest"`
+	InfoHash         protocol.InfoHash `json:"infoHash"`
+	TargetID         string            `json:"targetId"`
+	SourceNameSHA256 string            `json:"sourceNameSha256"`
+	UpdatedAt        time.Time         `json:"updatedAt"`
+	Before           Fields            `json:"before"`
+	After            Fields            `json:"after"`
 	// Non-null historical source changes require reviewed ownership evidence.
 	// This is supplied in a reviewed frozen plan, never inferred by the parser.
 	SourceOwnershipEvidence string `json:"sourceOwnershipEvidence,omitempty"`
@@ -68,12 +68,12 @@ func equal(a, b any) bool         { return bytes.Equal(digest(a), digest(b)) }
 // selected hashes. Original names and paths are omitted; the planned index contains source
 // tokens and remains a private maintenance artefact. Historical
 // non-null source changes remain unauthorised until the plan is reviewed.
-func Freeze(ctx context.Context, pool *pgxpool.Pool, hashes []protocol.ID, noise bool, names ...*namepolicy.Policy) (Plan, error) {
+func Freeze(ctx context.Context, pool *pgxpool.Pool, hashes []protocol.InfoHash, noise bool, names ...*namepolicy.Policy) (Plan, error) {
 	if len(hashes) == 0 || len(hashes) > 1000 {
 		return Plan{}, fmt.Errorf("cohort must contain 1..1000 hashes")
 	}
 	plan := Plan{Schema: Schema, Parser: model.ReleaseAttributesParser, Build: llmcapture.CurrentBuildIdentity(), NoiseV2: noise}
-	seen := map[protocol.ID]bool{}
+	seen := map[protocol.InfoHash]bool{}
 	for _, hash := range hashes {
 		if seen[hash] {
 			return Plan{}, fmt.Errorf("duplicate cohort hash")
@@ -151,7 +151,7 @@ func codecFilesAllow(t model.Torrent, proposed model.NullVideoCodec) error {
 	return nil
 }
 
-func current(ctx context.Context, tx pgx.Tx, hash protocol.ID, names ...*namepolicy.Policy) (model.Torrent, model.TorrentContent, error) {
+func current(ctx context.Context, tx pgx.Tx, hash protocol.InfoHash, names ...*namepolicy.Policy) (model.Torrent, model.TorrentContent, error) {
 	var t model.Torrent
 	var tc model.TorrentContent
 	t.InfoHash = hash
@@ -394,7 +394,7 @@ func applyEntry(ctx context.Context, tx pgx.Tx, key []byte, e Entry, noise, writ
 	return "applied", err
 }
 
-func repairApplications(ctx context.Context, tx pgx.Tx, hash protocol.ID, old, new Fields) (json.RawMessage, json.RawMessage, error) {
+func repairApplications(ctx context.Context, tx pgx.Tx, hash protocol.InfoHash, old, new Fields) (json.RawMessage, json.RawMessage, error) {
 	before := map[string]json.RawMessage{}
 	after := map[string]json.RawMessage{}
 	if !equal(old, new) {

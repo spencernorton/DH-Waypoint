@@ -36,7 +36,7 @@ func TestPostgresLegacyCELWriterRecoveryOffProtectedAndCaptured(t *testing.T) {
 			pool := recoveryPool(t)
 			h := hash(1)
 			seed(t, pool, h, false)
-			id, err := protocol.NewIDFromByteSlice(h)
+			id, err := protocol.NewInfoHash(h)
 			require.NoError(t, err)
 			lp := lazy.New(func() (*pgxpool.Pool, error) { return pool, nil })
 			manager, err := blocking.New(blocking.Params{Pool: lp, PgxPoolWait: &sync.WaitGroup{}}).Manager.Get()
@@ -77,7 +77,7 @@ func TestPostgresLegacyCELWriterRecoveryOffProtectedAndCaptured(t *testing.T) {
 				DeleteMetrics:   deleteMetrics, Logger: zap.NewNop().Sugar(),
 			}).Processor.Get()
 			require.NoError(t, err)
-			err = p.Process(ctx, processor.MessageParams{InfoHashes: []protocol.ID{id}})
+			err = p.Process(ctx, processor.MessageParams{InfoHashes: []protocol.InfoHash{id}})
 			if mode != "captured" {
 				want := cataloguerecovery.ErrDisabled
 				held := 1
@@ -97,7 +97,7 @@ func TestPostgresLegacyCELWriterRecoveryOffProtectedAndCaptured(t *testing.T) {
 				require.Equal(t, held, testutil.CollectAndCount(collectors[1]))
 				// The direct GraphQL action must use exactly the same guard.
 				resolver := resolvers.Resolver{BlockingManager: manager}
-				_, err = resolver.TorrentMutation().Delete(ctx, &gqlmodel.TorrentMutation{}, []protocol.ID{id})
+				_, err = resolver.TorrentMutation().Delete(ctx, &gqlmodel.TorrentMutation{}, []protocol.ID{id.WireID()})
 				require.ErrorIs(t, err, want)
 				require.Equal(t, before, raw(t, pool, h))
 				return

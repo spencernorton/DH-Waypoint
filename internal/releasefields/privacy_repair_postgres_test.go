@@ -20,7 +20,7 @@ func TestPostgresRepairNormalizesIndependentPrivacyBeforeFreezeAndAfterPlan(t *t
 					var plan Plan
 					var err error
 					if late {
-						plan, err = Freeze(ctx, pool, []protocol.ID{hash}, false)
+						plan, err = Freeze(ctx, pool, []protocol.InfoHash{hash}, false)
 						require.NoError(t, err)
 					}
 					_, err = pool.Exec(ctx, `INSERT INTO label_evidence(source,source_kind,source_instance,source_object_id,info_hash,category,observed_at,strength)
@@ -36,7 +36,7 @@ VALUES($1,'synthetic-privacy','fixture','synthetic-owner', $2,$3,now(),1)`, sour
 						return out
 					}
 					before := snapshot()
-					_, err = Freeze(ctx, pool, []protocol.ID{hash}, false)
+					_, err = Freeze(ctx, pool, []protocol.InfoHash{hash}, false)
 					require.ErrorIs(t, err, ErrChanged)
 					if late {
 						for _, write := range []bool{false, true} {
@@ -56,11 +56,11 @@ func TestPostgresRepairRechecksNewNamePolicyBeforeApplyingFrozenPlan(t *testing.
 	ctx := context.Background()
 	_, err := pool.Exec(ctx, `UPDATE torrents SET name='Synthetic.测试.2026.WEB-DL.HEVC.mkv' WHERE info_hash=$1`, hash.Bytes())
 	require.NoError(t, err)
-	plan, err := Freeze(ctx, pool, []protocol.ID{hash}, false)
+	plan, err := Freeze(ctx, pool, []protocol.InfoHash{hash}, false)
 	require.NoError(t, err, "default-off policy preserves original repair behavior")
 	policy, err := namepolicy.New(namepolicy.Config{Enabled: true})
 	require.NoError(t, err)
-	_, err = Freeze(ctx, pool, []protocol.ID{hash}, false, policy)
+	_, err = Freeze(ctx, pool, []protocol.InfoHash{hash}, false, policy)
 	require.ErrorIs(t, err, namepolicy.ErrExcluded)
 	for _, write := range []bool{false, true} {
 		_, err = Apply(ctx, pool, plan, write, policy)

@@ -42,8 +42,8 @@ type Decision struct {
 
 type Policy struct {
 	enabled        bool
-	excluded       map[protocol.ID]struct{}
-	excludedHashes []protocol.ID
+	excluded       map[protocol.InfoHash]struct{}
+	excludedHashes []protocol.InfoHash
 	internalToken  SecretToken
 	terms          []*regexp.Regexp
 	strong         []bool
@@ -56,9 +56,9 @@ func New(c Config) (*Policy, error) {
 	if err := c.Validate(); err != nil {
 		return nil, err
 	}
-	p := &Policy{enabled: c.Enabled, excluded: map[protocol.ID]struct{}{}, internalToken: c.InternalCheckToken, denied: newDeniedMetric()}
+	p := &Policy{enabled: c.Enabled, excluded: map[protocol.InfoHash]struct{}{}, internalToken: c.InternalCheckToken, denied: newDeniedMetric()}
 	for _, value := range c.ExcludedInfoHashes {
-		h, _ := protocol.ParseID(value)
+		h, _ := protocol.ParseInfoHash(value)
 		p.excluded[h] = struct{}{}
 	}
 	for h := range p.excluded {
@@ -76,13 +76,13 @@ func New(c Config) (*Policy, error) {
 }
 
 func (p *Policy) Enabled() bool { return p != nil && p.enabled }
-func (p *Policy) ExcludedHashes() []protocol.ID {
+func (p *Policy) ExcludedHashes() []protocol.InfoHash {
 	if p == nil {
 		return nil
 	}
-	return append([]protocol.ID(nil), p.excludedHashes...)
+	return append([]protocol.InfoHash(nil), p.excludedHashes...)
 }
-func (p *Policy) ExcludesHash(h protocol.ID) bool {
+func (p *Policy) ExcludesHash(h protocol.InfoHash) bool {
 	if !p.Enabled() {
 		return false
 	}
@@ -102,13 +102,13 @@ func (p *Policy) Fingerprint() string {
 	body, _ := json.Marshal(struct {
 		Definition Specification
 		Enabled    bool
-		Hashes     []protocol.ID
+		Hashes     []protocol.InfoHash
 	}{specification(), p.Enabled(), p.ExcludedHashes()})
 	h := sha256.Sum256(body)
 	return hex.EncodeToString(h[:])
 }
 
-func (p *Policy) Evaluate(h protocol.ID, name string) Decision {
+func (p *Policy) Evaluate(h protocol.InfoHash, name string) Decision {
 	d := Decision{Eligible: true, Reason: ReasonAllowed, Version: Version}
 	if !p.Enabled() {
 		d.Reason = ReasonDisabled
@@ -160,7 +160,7 @@ func (p *Policy) Evaluate(h protocol.ID, name string) Decision {
 
 // EvaluateClassified also uses an already known explicit adult classification;
 // it does not run a classifier or treat title/metadata origin as that fact.
-func (p *Policy) EvaluateClassified(h protocol.ID, name, contentType string) Decision {
+func (p *Policy) EvaluateClassified(h protocol.InfoHash, name, contentType string) Decision {
 	d := p.Evaluate(h, name)
 	if p.Enabled() && d.Eligible && contentType == "xxx" {
 		d.Eligible = false

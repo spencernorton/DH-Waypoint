@@ -59,7 +59,14 @@ func QBPrivacySQL(source, category, whitespace string) string {
 // root and whitespace are trusted alias/placeholder expressions, never input.
 func PublicSQL(root, whitespace string) string {
 	return root + `.private=FALSE
- AND NOT EXISTS(SELECT 1 FROM label_evidence e WHERE e.info_hash=` + root + `.info_hash AND ` + QBPrivacySQL("e.source", "e.category", whitespace) + `)
+ AND NOT EXISTS(SELECT 1 FROM label_evidence e WHERE ` + IdentityMatchSQL("e.info_hash", root+".info_hash") + ` AND ` + QBPrivacySQL("e.source", "e.category", whitespace) + `)
  AND NOT EXISTS(SELECT 1 FROM torrent_tags g WHERE g.info_hash=` + root + `.info_hash AND ` + PrivacyTagSQL("g.name", whitespace) + `)
- AND NOT EXISTS(SELECT 1 FROM torrent_canonical_labels c WHERE c.info_hash=` + root + `.info_hash AND lower(btrim(c.category,` + whitespace + `)) IN('private','bitgrab'))`
+ AND NOT EXISTS(SELECT 1 FROM torrent_canonical_labels c WHERE ` + IdentityMatchSQL("c.info_hash", root+".info_hash") + ` AND lower(btrim(c.category,` + whitespace + `)) IN('private','bitgrab'))`
+}
+
+// IdentityMatchSQL joins facts through a validated full identity association.
+// Both expressions are trusted SQL columns. No truncated-prefix lookup is used.
+// Keeping the original comparison also preserves pre-catalogue observations.
+func IdentityMatchSQL(fact, canonical string) string {
+	return "(" + fact + "=" + canonical + " OR " + fact + "=(SELECT identity_alias.info_hash_v2 FROM torrents identity_alias WHERE identity_alias.info_hash=" + canonical + "))"
 }

@@ -30,7 +30,7 @@ func TestPostgresModernNullCodecRepairFiltersIdentityAndRollback(t *testing.T) {
 			require.NoError(t, err)
 			_, err = pool.Exec(ctx, `INSERT INTO content(type,source,id,title,release_year,tsv,created_at,updated_at)VALUES('movie','tmdb','42','Amber Signal',2026,to_tsvector('simple','Amber Signal'),now(),now());UPDATE torrent_contents SET content_source='tmdb',content_id='42',video_resolution='V1080p',release_group='RETAINED',tsv=to_tsvector('simple','Amber Signal')`)
 			require.NoError(t, err)
-			plan, err := Freeze(ctx, pool, []protocol.ID{hash}, false)
+			plan, err := Freeze(ctx, pool, []protocol.InfoHash{hash}, false)
 			require.NoError(t, err)
 			expected := model.VideoCodecHEVC
 			if claim == "AV1" {
@@ -93,7 +93,7 @@ func TestPostgresCodecRepairRetainsEveryExistingValueAndRejectsForgedChanges(t *
 			ctx := context.Background()
 			_, err := pool.Exec(ctx, `UPDATE torrent_contents SET video_codec=$1`, codec.String())
 			require.NoError(t, err)
-			plan, err := Freeze(ctx, pool, []protocol.ID{hash}, false)
+			plan, err := Freeze(ctx, pool, []protocol.InfoHash{hash}, false)
 			require.NoError(t, err)
 			require.Equal(t, model.NewNullVideoCodec(codec), plan.Entries[0].After.VideoCodec)
 			_, err = Apply(ctx, pool, plan, true)
@@ -135,7 +135,7 @@ func TestPostgresCodecRepairContradictionsSidecarsAndAliases(t *testing.T) {
 				_, err = pool.Exec(ctx, `INSERT INTO torrent_files(info_hash,"index",path,size,created_at,updated_at)VALUES($1,0,$2,734003200,now(),now())`, hash.Bytes(), tc.file)
 				require.NoError(t, err)
 			}
-			plan, err := Freeze(ctx, pool, []protocol.ID{hash}, false)
+			plan, err := Freeze(ctx, pool, []protocol.InfoHash{hash}, false)
 			if tc.held {
 				require.ErrorIs(t, err, ErrChanged)
 			} else {
@@ -167,7 +167,7 @@ func TestPostgresCodecRepairRejectsFileCodecAndApplicationDriftAtomically(t *tes
 			require.NoError(t, err)
 			_, err = pool.Exec(ctx, `INSERT INTO llm_work_applications(task_key,info_hash,source_digest,policy_digest,applied_snapshot)VALUES($1,$2,$1,$1,'{"schema":"llm-application-v1","videoSource":"WEBDL","videoCodec":null}')`, task, hash.Bytes())
 			require.NoError(t, err)
-			plan, err := Freeze(ctx, pool, []protocol.ID{hash}, false)
+			plan, err := Freeze(ctx, pool, []protocol.InfoHash{hash}, false)
 			require.NoError(t, err)
 			if strings.Contains(mutation, "$1") {
 				_, err = pool.Exec(ctx, mutation, hash.Bytes())
@@ -196,7 +196,7 @@ func TestPostgresCodecRepairApplicationJournalAndConditionalRollback(t *testing.
 	require.NoError(t, err)
 	_, err = pool.Exec(ctx, `INSERT INTO llm_work_applications(task_key,info_hash,source_digest,policy_digest,applied_snapshot)VALUES($1,$2,$1,$1,$3::jsonb)`, task, hash.Bytes(), original)
 	require.NoError(t, err)
-	plan, err := Freeze(ctx, pool, []protocol.ID{hash}, false)
+	plan, err := Freeze(ctx, pool, []protocol.InfoHash{hash}, false)
 	require.NoError(t, err)
 	_, err = Apply(ctx, pool, plan, true)
 	require.NoError(t, err)
@@ -213,7 +213,7 @@ func TestPostgresCodecRepairApplicationJournalAndConditionalRollback(t *testing.
 	require.NoError(t, pool.QueryRow(ctx, `SELECT video_codec FROM torrent_contents`).Scan(&codec))
 	require.False(t, codec.Valid)
 
-	plan, err = Freeze(ctx, pool, []protocol.ID{hash}, false)
+	plan, err = Freeze(ctx, pool, []protocol.InfoHash{hash}, false)
 	require.NoError(t, err)
 	_, err = Apply(ctx, pool, plan, true)
 	require.NoError(t, err)
@@ -230,7 +230,7 @@ func TestPostgresCodecRepairHoldsUnownedSourceAndRejectsInventedCodec(t *testing
 	ctx := context.Background()
 	_, err := pool.Exec(ctx, `UPDATE torrent_contents SET video_source='WEBRip'`)
 	require.NoError(t, err)
-	plan, err := Freeze(ctx, pool, []protocol.ID{hash}, false)
+	plan, err := Freeze(ctx, pool, []protocol.InfoHash{hash}, false)
 	require.NoError(t, err)
 	require.Equal(t, model.NewNullVideoCodec(model.VideoCodecHEVC), plan.Entries[0].After.VideoCodec)
 	_, err = Apply(ctx, pool, plan, true)

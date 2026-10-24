@@ -14,9 +14,9 @@ import (
 const DoubleHashLen = sha256.Size
 
 // DoubleHash is the canonical CSAM-blocklist hash function:
-// SHA-256 of the raw 20-byte SHA-1 infohash bytes. The result is
+// SHA-256 of the raw complete torrent identity bytes (20-byte SHA-1 or 32-byte SHA-256). The result is
 // one-way — there is no algorithmically-feasible way to recover the
-// underlying SHA-1 infohash from the SHA-256 digest, which is the
+// underlying torrent infohash from the SHA-256 digest, which is the
 // privacy property that makes a public blocklist non-useful as a
 // CSAM directory.
 //
@@ -24,13 +24,13 @@ const DoubleHashLen = sha256.Size
 // MUST publish digests as the lowercase hex of this 32-byte output.
 // Any feed using a different hash function (e.g. SHA-1 of SHA-1, or
 // SHA-256 of the hex string of the infohash) will not match.
-func DoubleHash(infoHash protocol.ID) [DoubleHashLen]byte {
-	return sha256.Sum256(infoHash[:])
+func DoubleHash(infoHash protocol.InfoHash) [DoubleHashLen]byte {
+	return sha256.Sum256(infoHash.Bytes())
 }
 
 // DoubleHashHex returns the lowercase 64-character hex encoding of
 // the double-hash. This is the on-the-wire and on-disk format.
-func DoubleHashHex(infoHash protocol.ID) string {
+func DoubleHashHex(infoHash protocol.InfoHash) string {
 	d := DoubleHash(infoHash)
 	return hex.EncodeToString(d[:])
 }

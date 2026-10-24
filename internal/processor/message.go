@@ -30,8 +30,8 @@ type MessageParams struct {
 	// useful for deterministic local-only backlog passes where the operator
 	// explicitly wants no LLM calls from either the classifier or the language
 	// content filter.
-	SkipContentFilter bool          `json:"SkipContentFilter,omitempty"`
-	InfoHashes        []protocol.ID `json:"InfoHashes"`
+	SkipContentFilter bool                `json:"SkipContentFilter,omitempty"`
+	InfoHashes        []protocol.InfoHash `json:"InfoHashes"`
 }
 
 func NewQueueJob(msg MessageParams, options ...model.QueueJobOption) (model.QueueJob, error) {

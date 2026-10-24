@@ -28,6 +28,9 @@ import (
 //go:embed openapi.yaml
 var openAPISpec []byte
 
+//go:embed openapi-v2.yaml
+var openAPIV2Spec []byte
+
 type API struct {
 	search lazy.Lazy[search.ServingSearch]
 	logger *zap.SugaredLogger
@@ -41,6 +44,11 @@ func New(s lazy.Lazy[search.ServingSearch], logger *zap.SugaredLogger) *API {
 func (a *API) Key() string { return "rest_api" }
 
 func (a *API) Apply(e *gin.Engine) error {
+	v2 := e.Group("/api/v2", httpserver.QueryBudget(30*time.Second))
+	v2.GET("/search", a.handleV2Search)
+	v2.GET("/torrents/:hash", a.handleV2Detail)
+	v2.GET("/torrents/:hash/files", a.handleV2Files)
+	v2.GET("/openapi.yaml", func(c *gin.Context) { c.Data(200, "application/yaml", openAPIV2Spec) })
 	g := e.Group("/api/v1", httpserver.QueryBudget(30*time.Second))
 	g.GET("/search", a.handleSearch)
 	g.GET("/torrents/:hash", a.handleDetail)
@@ -165,7 +173,7 @@ func (a *API) runSearch(c *gin.Context, extra ...query.Option) (search.TorrentCo
 	if q := strings.TrimSpace(c.Query("q")); q != "" {
 		params.QueryString = model.NewNullString(q)
 	}
-	options := []query.Option{search.TorrentContentDefaultOption(), params.Option()}
+	options := []query.Option{search.TorrentContentDefaultOption(), params.Option(), query.Where(search.LegacyTorrentIdentityCriteria("torrent_contents"))}
 	if typeParam := strings.TrimSpace(c.Query("type")); typeParam != "" {
 		ct, err := model.ParseContentType(typeParam)
 		if err != nil {
@@ -207,13 +215,13 @@ func (a *API) handleSearch(c *gin.Context) {
 	})
 }
 
-func parseHash(c *gin.Context) (protocol.ID, bool) {
+func parseHash(c *gin.Context) (protocol.InfoHash, bool) {
 	id, err := protocol.ParseID(c.Param("hash"))
 	if err != nil {
 		c.JSON(400, gin.H{"error": "invalid_info_hash"})
-		return protocol.ID{}, false
+		return protocol.InfoHash{}, false
 	}
-	return id, true
+	return protocol.InfoHashV1(id), true
 }
 
 func (a *API) handleDetail(c *gin.Context) {
@@ -248,7 +256,7 @@ func (a *API) handleFiles(c *gin.Context) {
 		return
 	}
 	result, err := s.TorrentFiles(c.Request.Context(),
-		query.Where(search.TorrentFileInfoHashCriteria(hash)),
+		query.Where(search.TorrentFileInfoHashCriteria(hash), search.LegacyTorrentIdentityCriteria("torrent_files")),
 		query.Limit(10000))
 	if err != nil {
 		a.fail(c, err)
@@ -268,7 +276,7 @@ func (a *API) handleStats(c *gin.Context) {
 		return
 	}
 	params := query.SearchParams{Limit: model.NewNullUint(0), TotalCount: model.NewNullBool(true)}
-	result, err := s.TorrentContent(c.Request.Context(), search.TorrentContentDefaultOption(), params.Option())
+	result, err := s.TorrentContent(c.Request.Context(), search.TorrentContentDefaultOption(), params.Option(), query.Where(search.LegacyTorrentIdentityCriteria("torrent_contents")))
 	if err != nil {
 		a.fail(c, err)
 		return

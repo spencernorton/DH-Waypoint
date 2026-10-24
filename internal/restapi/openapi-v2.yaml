@@ -1,0 +1,161 @@
+openapi: 3.0.3
+info:
+  title: DH-Waypoint raw catalogue API v2
+  version: '2'
+  description: >-
+    Read-only metadata catalogue, including unclassified torrents and full
+    SHA-256 identities. The same mandatory privacy and serving policy applies
+    as other consumer APIs. No classifier or external processor is required.
+    Deploy behind the documented trusted-network or authenticated-proxy boundary.
+servers:
+  - url: /
+paths:
+  /api/v2/search:
+    get:
+      summary: Browse or search the raw catalogue
+      description: >-
+        Ordered by the complete canonical binary hash. q is a literal,
+        case-insensitive substring of the torrent name, with at least three
+        Unicode characters and at most 4096 UTF-8 bytes. Percent and underscore
+        are literal characters. Use hash for exact SHA-1 or SHA-256 lookup.
+        No expensive total count is requested. Queries have a 30-second budget.
+      parameters:
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 20}}
+        - {name: after, in: query, schema: {$ref: '#/components/schemas/InfoHash'}}
+        - {name: hash, in: query, schema: {$ref: '#/components/schemas/InfoHash'}}
+        - {name: q, in: query, schema: {type: string, minLength: 3, maxLength: 4096}}
+      responses:
+        '200':
+          description: Eligible raw catalogue records
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [contract, items, has_next_page, next_after]
+                properties:
+                  contract: {type: string, enum: [dh-waypoint.catalogue.v2]}
+                  items: {type: array, items: {$ref: '#/components/schemas/Torrent'}}
+                  has_next_page: {type: boolean}
+                  next_after: {type: string, nullable: true, description: Canonical full hash cursor; null on the last page.}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '500': {$ref: '#/components/responses/Unavailable'}
+  /api/v2/torrents/{hash}:
+    get:
+      summary: Resolve a full validated identity to its catalogue record
+      parameters:
+        - {$ref: '#/components/parameters/Hash'}
+      responses:
+        '200':
+          description: One eligible torrent, including both identities of a validated hybrid
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [contract, torrent]
+                properties:
+                  contract: {type: string, enum: [dh-waypoint.catalogue.v2]}
+                  torrent: {$ref: '#/components/schemas/Torrent'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/Unavailable'}
+  /api/v2/torrents/{hash}/files:
+    get:
+      summary: Read the retained file inventory in bounded index order
+      description: >-
+        Private and ineligible torrents are not disclosed. A single-file record
+        is described by its name and size and can have no separate file rows.
+        files_status and files_count indicate a partial or over-threshold inventory.
+      parameters:
+        - {$ref: '#/components/parameters/Hash'}
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 20}}
+        - {name: after_index, in: query, schema: {type: integer, minimum: 0, maximum: 4294967295}}
+      responses:
+        '200':
+          description: Retained file page
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [contract, info_hash, files, has_next_page, next_after_index]
+                properties:
+                  contract: {type: string, enum: [dh-waypoint.catalogue.v2]}
+                  info_hash: {$ref: '#/components/schemas/InfoHash'}
+                  files:
+                    type: array
+                    items:
+                      type: object
+                      required: [index, path, size]
+                      properties:
+                        index: {type: integer, minimum: 0}
+                        path: {type: string}
+                        size: {type: integer, format: int64, minimum: 0}
+                  has_next_page: {type: boolean}
+                  next_after_index: {type: integer, nullable: true}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/Unavailable'}
+  /import/torrent:
+    post:
+      summary: Validate and import one complete torrent file
+      description: >-
+        Uses the same operator-access boundary and eligibility gates as /import.
+        The original info bytes determine identity, name, size and privacy.
+        V2 outer piece layers are checked against their file roots. The body is
+        limited to 20 MiB; the info dictionary is limited to 10 MiB.
+      parameters:
+        - {name: hash, in: query, schema: {$ref: '#/components/schemas/InfoHash'}, description: Optional complete expected hash.}
+        - {name: X-Import-Id, in: header, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/x-bittorrent:
+            schema: {type: string, format: binary}
+      responses:
+        '200':
+          description: Validation and import processing completed; serving remains subject to policy.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [contract, info_hash]
+                properties:
+                  contract: {type: string, enum: [dh-waypoint.metainfo-import.v2]}
+                  info_hash: {$ref: '#/components/schemas/InfoHash'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '413': {description: Torrent exceeds the body limit.}
+components:
+  parameters:
+    Hash:
+      name: hash
+      in: path
+      required: true
+      schema: {$ref: '#/components/schemas/InfoHash'}
+  responses:
+    BadRequest: {description: Invalid hash, metadata or bounded query parameter.}
+    NotFound: {description: Missing or not eligible for serving.}
+    Unavailable: {description: Query failed or its resource budget expired.}
+  schemas:
+    InfoHash:
+      type: string
+      pattern: '^(?:[a-f0-9]{40}|[a-f0-9]{64})$'
+      description: Complete lowercase SHA-1 or SHA-256 digest. A truncated v2 key is never accepted as a full v2 identity.
+    Identities:
+      type: object
+      additionalProperties: false
+      anyOf:
+        - required: [v1]
+        - required: [v2]
+      properties:
+        v1: {type: string, pattern: '^[a-f0-9]{40}$'}
+        v2: {type: string, pattern: '^[a-f0-9]{64}$'}
+    Torrent:
+      type: object
+      required: [info_hash, identities, name, size, files_status, magnet]
+      properties:
+        info_hash: {$ref: '#/components/schemas/InfoHash'}
+        identities: {$ref: '#/components/schemas/Identities'}
+        name: {type: string}
+        size: {type: integer, format: int64, minimum: 0}
+        files_status: {type: string, enum: [single, multi, no_info, over_threshold]}
+        files_count: {type: integer, minimum: 0}
+        magnet: {type: string, description: Full btih/btmh exact topics; both for a validated hybrid.}

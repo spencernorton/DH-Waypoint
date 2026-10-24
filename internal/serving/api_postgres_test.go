@@ -86,7 +86,7 @@ func TestServingPostgresImpossibleAdultFacetDoesNotScan(t *testing.T) {
 	pool, q := newServingPostgresDatabase(t, ctx)
 	_, err := pool.Exec(ctx, `
 INSERT INTO torrents (info_hash, name, size, private, files_status, created_at, updated_at)
-SELECT decode(md5(i::text), 'hex'), 'Synthetic.Typed.Release.mkv', 4096, false, 'single', now(), now()
+SELECT decode(md5(i::text)||substring(md5('synthetic-'||i::text),1,8), 'hex'), 'Synthetic.Typed.Release.mkv', 4096, false, 'single', now(), now()
 FROM generate_series(1, 100) i;
 INSERT INTO torrent_contents (info_hash, content_type, created_at, updated_at)
 SELECT info_hash, 'xxx', now(), now() FROM torrents;`)
@@ -153,7 +153,7 @@ func TestServingPostgresStrongEvidenceMatchesCoreBaseNameAndBasePath(t *testing.
 	}
 	for i, c := range cases {
 		t.Run(fmt.Sprintf("context_%d", i), func(t *testing.T) {
-			var ih protocol.ID
+			var ih protocol.InfoHash
 			ih[0] = byte(i + 40)
 			status := "multi"
 			if c.single {
@@ -244,7 +244,7 @@ VALUES($1,0,$2,4096,now(),now())`, ih, name)
 		if i == 2 {
 			id = "adult"
 		}
-		tc := model.TorrentContent{InfoHash: model.Torrent{InfoHash: func() [20]byte { var x [20]byte; copy(x[:], ih); return x }()}.InfoHash, ContentType: model.NewNullContentType(ct), Size: 4096, PublishedAt: time.Now(), CreatedAt: time.Now(), UpdatedAt: time.Now()}
+		tc := model.TorrentContent{InfoHash: protocol.MustNewInfoHash(ih), ContentType: model.NewNullContentType(ct), Size: 4096, PublishedAt: time.Now(), CreatedAt: time.Now(), UpdatedAt: time.Now()}
 		if id != "" {
 			tc.ContentSource = model.NewNullString("synthetic")
 			tc.ContentID = model.NewNullString(id)

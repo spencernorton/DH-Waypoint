@@ -76,7 +76,7 @@ func (s *Store) Reprocess(ctx context.Context, origin string, w v1.ReprocessWrit
 	if err != nil {
 		return v1.ReprocessStatus{}, err
 	}
-	if digest(plan) != w.ExpectedPipelineRevision {
+	if digest(planForIdentity(plan, mustDecodeHash(export.Input.InfoHash))) != w.ExpectedPipelineRevision {
 		return v1.ReprocessStatus{}, ErrConflict
 	}
 	var total, pending int
@@ -88,7 +88,7 @@ func (s *Store) Reprocess(ctx context.Context, origin string, w v1.ReprocessWrit
 		return v1.ReprocessStatus{}, ErrCapacity
 	}
 	hash, err := hex.DecodeString(export.Input.InfoHash)
-	if err != nil || len(hash) != 20 {
+	if err != nil || (len(hash) != 20 && len(hash) != 32) {
 		return v1.ReprocessStatus{}, ErrControl
 	}
 	var busy bool
@@ -117,11 +117,11 @@ func (s *Store) Reprocess(ctx context.Context, origin string, w v1.ReprocessWrit
 	if len(before) > 2<<20 {
 		return v1.ReprocessStatus{}, errExportLimit
 	}
-	id, err := protocol.ParseID(export.Input.InfoHash)
+	id, err := protocol.ParseInfoHash(export.Input.InfoHash)
 	if err != nil {
 		return v1.ReprocessStatus{}, err
 	}
-	job, err := processor.NewQueueJob(processor.MessageParams{ReprocessRequestID: w.RequestID, InfoHashes: []protocol.ID{id}})
+	job, err := processor.NewQueueJob(processor.MessageParams{ReprocessRequestID: w.RequestID, InfoHashes: []protocol.InfoHash{id}})
 	if err != nil {
 		return v1.ReprocessStatus{}, err
 	}
@@ -211,7 +211,7 @@ func (s *Store) settleReprocessing(ctx context.Context, tx pgx.Tx, plan Plan, dr
 		return err
 	}
 	_, err = tx.Exec(ctx, `UPDATE processor_reprocess_requests SET state='stale',state_reason='pipeline_changed',updated_at=clock_timestamp()
- WHERE state='ready' AND expected_pipeline_revision<>$1`, digest(plan))
+ WHERE state='ready' AND expected_pipeline_revision<>CASE WHEN octet_length(info_hash)=32 THEN $2 ELSE $1 END`, digest(plan), digest(planForIdentity(plan, make([]byte, 32))))
 	if err != nil {
 		return err
 	}
@@ -257,7 +257,7 @@ func (s *Store) settleReprocessing(ctx context.Context, tx pgx.Tx, plan Plan, dr
 			state, reason = "failed", "core_processing_failed"
 		case x.status != "processed":
 			state, reason = "deferred", "core_processing_unavailable_or_expired"
-		case x.pipeline != digest(plan):
+		case x.pipeline != digest(planForIdentity(plan, x.hash)):
 			state, reason = "stale", "pipeline_changed"
 		case len(x.receipt) > 0:
 			var receipt struct {

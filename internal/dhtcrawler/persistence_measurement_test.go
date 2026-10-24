@@ -2,8 +2,9 @@ package dhtcrawler
 
 import (
 	"context"
-	"encoding/binary"
+	"crypto/sha1"
 	"fmt"
+	"github.com/anacrolix/torrent/bencode"
 	"os"
 	"testing"
 	"time"
@@ -77,9 +78,13 @@ func TestMeasuredCrawlerPersistence(t *testing.T) {
 	for sample := 0; sample < 5; sample++ {
 		batch := make([]infoHashWithMetaInfo, 5000)
 		for i := range batch {
-			var h protocol.ID
-			binary.BigEndian.PutUint32(h[:4], uint32(sample*5000+i+1))
-			batch[i] = infoHashWithMetaInfo{nodeHasPeersForHash: nodeHasPeersForHash{infoHash: h}, metaInfo: metainfo.Info{Name: "Synthetic.Amber.2024.1080p.WEB-DL.mkv", Length: 734003200, PieceLength: 16384, Pieces: make([]byte, 20)}}
+			info := metainfo.Info{Name: "Synthetic.Amber.2024.1080p.WEB-DL.mkv", Source: fmt.Sprintf("synthetic-%d", sample*5000+i+1), Length: 16384, PieceLength: 16384, Pieces: make([]byte, 20)}
+			raw, err := bencode.Marshal(info)
+			require.NoError(t, err)
+			h := protocol.InfoHashV1(protocol.ID(sha1.Sum(raw)))
+			verified, err := metainfo.ParseInfoBytes(h, raw)
+			require.NoError(t, err)
+			batch[i] = infoHashWithMetaInfo{nodeHasPeersForHash: nodeHasPeersForHash{infoHash: h.WireID()}, validated: verified}
 		}
 		started := time.Now()
 		batches.batches <- batch

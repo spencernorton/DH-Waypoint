@@ -311,9 +311,9 @@ func (p Params) purge(ctx *cli.Context, d *dao.Query, typeNames []string, totalT
 	return nil
 }
 
-func uniqueHashes(rows []*model.TorrentContent) []protocol.ID {
-	seen := make(map[protocol.ID]struct{}, len(rows))
-	hashes := make([]protocol.ID, 0, len(rows))
+func uniqueHashes(rows []*model.TorrentContent) []protocol.InfoHash {
+	seen := make(map[protocol.InfoHash]struct{}, len(rows))
+	hashes := make([]protocol.InfoHash, 0, len(rows))
 
 	for _, row := range rows {
 		if _, ok := seen[row.InfoHash]; ok {

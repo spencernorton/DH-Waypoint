@@ -76,6 +76,16 @@ func (p *Policy) AllowsSQL(nameColumn, hashColumn string) (string, []any) {
 			args = append(args, hash.String())
 		}
 		sql = "(" + sql + ") AND " + hashColumn + " NOT IN (" + strings.Join(marks, ",") + ")"
+		var aliases []string
+		for _, hash := range excluded {
+			if hash.IsV2() {
+				aliases = append(aliases, "decode(?,'hex')")
+				args = append(args, hash.String())
+			}
+		}
+		if len(aliases) > 0 {
+			sql += " AND NOT EXISTS(SELECT 1 FROM torrents policy_identity WHERE policy_identity.info_hash=" + hashColumn + " AND policy_identity.info_hash_v2 IN (" + strings.Join(aliases, ",") + "))"
+		}
 	}
 	return sql, args
 }

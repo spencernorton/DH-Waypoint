@@ -87,7 +87,7 @@ func TestSearchCountProvenance(t *testing.T) {
 }
 
 func TestToItemMapping(t *testing.T) {
-	hash := protocol.ID{0xab}
+	hash := protocol.InfoHash{0xab}
 	seeders := uint(12)
 	tc := model.TorrentContent{
 		InfoHash:    hash,

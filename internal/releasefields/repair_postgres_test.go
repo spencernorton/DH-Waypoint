@@ -20,7 +20,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func repairFixture(t *testing.T) (*pgxpool.Pool, protocol.ID) {
+func repairFixture(t *testing.T) (*pgxpool.Pool, protocol.InfoHash) {
 	t.Helper()
 	dsn := os.Getenv("DH_WAYPOINT_TEST_POSTGRES_DSN")
 	if dsn == "" {
@@ -54,7 +54,7 @@ func repairFixture(t *testing.T) (*pgxpool.Pool, protocol.ID) {
 			c.Close(context.Background())
 		}
 	})
-	hash := protocol.ID{31}
+	hash := protocol.InfoHash{31}
 	_, err = pool.Exec(ctx, `INSERT INTO torrents(info_hash,name,size,private,files_status,created_at,updated_at)VALUES($1,'Amber.Signal.2026.2160p.WEB-DL.HEVC.HDR10.DDP5.1.Atmos.REPACK.mkv',734003200,false,'single',now(),now())`, hash.Bytes())
 	require.NoError(t, err)
 	_, err = pool.Exec(ctx, `INSERT INTO torrent_contents(info_hash,content_type,video_source,size,is_anime,created_at,updated_at)VALUES($1,'movie','WEBDL',734003200,false,now(),now())`, hash.Bytes())
@@ -65,7 +65,7 @@ func repairFixture(t *testing.T) (*pgxpool.Pool, protocol.ID) {
 func TestPostgresFrozenNullOnlyRepairResumeAndRollback(t *testing.T) {
 	pool, hash := repairFixture(t)
 	ctx := context.Background()
-	plan, err := Freeze(ctx, pool, []protocol.ID{hash}, false)
+	plan, err := Freeze(ctx, pool, []protocol.InfoHash{hash}, false)
 	require.NoError(t, err)
 	require.Len(t, plan.Entries, 1)
 	require.Nil(t, plan.Entries[0].Before.ReleaseAttributes)
@@ -108,7 +108,7 @@ func TestPostgresRepairDeclinesSourceManualVersionAndNonNullAttributeEdits(t *te
 		t.Run(mutation, func(t *testing.T) {
 			pool, hash := repairFixture(t)
 			ctx := context.Background()
-			plan, err := Freeze(ctx, pool, []protocol.ID{hash}, false)
+			plan, err := Freeze(ctx, pool, []protocol.InfoHash{hash}, false)
 			require.NoError(t, err)
 			if strings.Contains(mutation, "$1") {
 				_, err = pool.Exec(ctx, mutation, hash.Bytes())
@@ -122,12 +122,12 @@ func TestPostgresRepairDeclinesSourceManualVersionAndNonNullAttributeEdits(t *te
 	}
 	pool, hash := repairFixture(t)
 	ctx := context.Background()
-	plan, err := Freeze(ctx, pool, []protocol.ID{hash}, false)
+	plan, err := Freeze(ctx, pool, []protocol.InfoHash{hash}, false)
 	require.NoError(t, err)
 	body, _ := json.Marshal(plan.Entries[0].After.ReleaseAttributes)
 	_, err = pool.Exec(ctx, `UPDATE torrent_contents SET release_attributes=$1::jsonb`, string(body))
 	require.NoError(t, err)
-	plan, err = Freeze(ctx, pool, []protocol.ID{hash}, false)
+	plan, err = Freeze(ctx, pool, []protocol.InfoHash{hash}, false)
 	require.NoError(t, err)
 	plan.Entries[0].After.ReleaseAttributes = &model.ReleaseAttributes{Version: 1, Parser: model.ReleaseAttributesParser, SourceNameSHA256: plan.Entries[0].SourceNameSHA256, AudioFormats: []string{"TRUEHD"}}
 	_, err = Apply(ctx, pool, plan, true)
@@ -145,7 +145,7 @@ func TestPostgresReviewedSourceCorrectionKeepsApplicationSnapshotAndRollback(t *
 	require.NoError(t, err)
 	_, err = pool.Exec(ctx, `INSERT INTO llm_work_applications(task_key,info_hash,source_digest,policy_digest,applied_snapshot)VALUES($1,$2,$1,$1,'{"schema":"llm-application-v1","videoSource":"WEBRip"}'::jsonb)`, task, hash.Bytes())
 	require.NoError(t, err)
-	plan, err := Freeze(ctx, pool, []protocol.ID{hash}, false)
+	plan, err := Freeze(ctx, pool, []protocol.InfoHash{hash}, false)
 	require.NoError(t, err)
 	_, err = Apply(ctx, pool, plan, true)
 	require.ErrorIs(t, err, ErrChanged, "a non-null old source is not assumed parser-owned")
@@ -173,7 +173,7 @@ func TestPostgresReviewedSourceCorrectionKeepsApplicationSnapshotAndRollback(t *
 func TestPostgresRepairJournalFailureRollsBackFields(t *testing.T) {
 	pool, hash := repairFixture(t)
 	ctx := context.Background()
-	plan, err := Freeze(ctx, pool, []protocol.ID{hash}, false)
+	plan, err := Freeze(ctx, pool, []protocol.InfoHash{hash}, false)
 	require.NoError(t, err)
 	_, err = pool.Exec(ctx, `CREATE FUNCTION reject_repair_journal() RETURNS trigger LANGUAGE plpgsql AS $$BEGIN RAISE EXCEPTION 'synthetic journal failure';END$$;CREATE TRIGGER reject_repair_journal BEFORE INSERT ON release_field_repair_journal FOR EACH ROW EXECUTE FUNCTION reject_repair_journal()`)
 	require.NoError(t, err)
@@ -190,7 +190,7 @@ func TestPostgresRepairJournalFailureRollsBackFields(t *testing.T) {
 func TestPostgresRepairQualifiedProtectionRefusesFreezeAndInterveningApply(t *testing.T) {
 	pool, hash := repairFixture(t)
 	ctx := context.Background()
-	plan, err := Freeze(ctx, pool, []protocol.ID{hash}, false)
+	plan, err := Freeze(ctx, pool, []protocol.InfoHash{hash}, false)
 	require.NoError(t, err)
 	snapshot := func() map[string]string {
 		out := map[string]string{}
@@ -207,7 +207,7 @@ func TestPostgresRepairQualifiedProtectionRefusesFreezeAndInterveningApply(t *te
 		_, err := pool.Exec(ctx, `insert into torrent_tags(info_hash,name,created_at,updated_at) values($1,$2,now(),now())`, hash.Bytes(), name)
 		require.NoError(t, err)
 		before := snapshot()
-		_, err = Freeze(ctx, pool, []protocol.ID{hash}, false)
+		_, err = Freeze(ctx, pool, []protocol.InfoHash{hash}, false)
 		require.ErrorIs(t, err, ErrChanged)
 		_, err = Apply(ctx, pool, plan, true)
 		require.ErrorIs(t, err, ErrChanged)
@@ -226,7 +226,7 @@ func TestPostgresRepairQualifiedProtectionRefusesFreezeAndInterveningApply(t *te
 				_, err := pool.Exec(ctx, `insert into torrent_tags(info_hash,name,created_at,updated_at) values($1,$2,now(),now())`, hash.Bytes(), name)
 				require.NoError(t, err)
 				before := snapshot()
-				_, err = Freeze(ctx, pool, []protocol.ID{hash}, false)
+				_, err = Freeze(ctx, pool, []protocol.InfoHash{hash}, false)
 				require.ErrorIs(t, err, ErrChanged)
 				for _, write := range []bool{false, true} {
 					_, err = Apply(ctx, pool, plan, write)

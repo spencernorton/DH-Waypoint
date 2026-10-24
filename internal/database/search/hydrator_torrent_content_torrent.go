@@ -28,7 +28,7 @@ func HydrateTorrentContentTorrent(options ...HydrateTorrentContentTorrentOption)
 		option(&config)
 	}
 
-	return query.HydrateHasOne[TorrentContentResultItem, model.Torrent, protocol.ID](
+	return query.HydrateHasOne[TorrentContentResultItem, model.Torrent, protocol.InfoHash](
 		torrentContentTorrentHydrator{config},
 	)
 }
@@ -37,14 +37,14 @@ type torrentContentTorrentHydrator struct {
 	torrentContentTorrentHydratorConfig
 }
 
-func (torrentContentTorrentHydrator) RootToSubID(root TorrentContentResultItem) (protocol.ID, bool) {
+func (torrentContentTorrentHydrator) RootToSubID(root TorrentContentResultItem) (protocol.InfoHash, bool) {
 	return root.InfoHash, true
 }
 
 func (h torrentContentTorrentHydrator) GetSubs(
 	ctx context.Context,
 	dbCtx query.DBContext,
-	ids []protocol.ID,
+	ids []protocol.InfoHash,
 ) ([]model.Torrent, error) {
 	result, err := search{q: dbCtx.Query()}.
 		Torrents(ctx,
@@ -69,7 +69,7 @@ func (h torrentContentTorrentHydrator) GetSubs(
 	return result.Items, nil
 }
 
-func (torrentContentTorrentHydrator) SubID(item model.Torrent) protocol.ID {
+func (torrentContentTorrentHydrator) SubID(item model.Torrent) protocol.InfoHash {
 	return item.InfoHash
 }
 
