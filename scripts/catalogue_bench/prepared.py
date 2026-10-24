@@ -41,7 +41,9 @@ bench.emit(args.out,{"kind":"prepared_manifest","source_sha256":hashlib.sha256(P
 for mode in ["force_custom_plan","force_generic_plan"]:
     for name,(query,params) in cases.items():
         with bench.connect(os.environ['CATALOGUE_BENCH_DSN']) as conn:
+            conn.execute("SET statement_timeout=180000")
             rows=conn.execute("SELECT count(*) FROM torrents").fetchone()[0]
+            conn.execute("SET statement_timeout=5000")
             conn.execute("SET plan_cache_mode="+mode)
             conn.execute("PREPARE catalogue_probe ("+','.join(['text']*len(params))+") AS "+query)
             execute=sql.SQL("EXECUTE catalogue_probe ({})").format(sql.SQL(',').join(sql.Literal(x) for x in params))
