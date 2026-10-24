@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Bound GraphQL body/document/parser work, expanded selections and aliases,
+  page sizes, input lists and caller-selected count budgets before resolvers
+  run, including cached/persisted operations. GraphQL accepts JSON POST only.
+  GraphQL and REST catalogue work now inherits a 30-second context deadline
+  with bounded socket reads/writes; header and idle timeouts protect the HTTP
+  listener while separate streaming imports retain their existing behavior.
+
 - Streaming NDJSON imports cap each line at 1 MiB, detect body read errors,
   propagate client cancellation through the real HTTP request context and
   always drain/close the importer. Failed streams never report `import complete`;
@@ -10,23 +17,16 @@
   unblocks an importer waiting to dispatch and balances undispatched items so
   draining cannot deadlock.
 
+- REST search returns `total_count_is_estimate` alongside `total_count`, so
+  clients can distinguish an approximate total from an exact count. The flag
+  is always present, including `false`, and documented in OpenAPI. REST stats
+  likewise returns `torrent_contents_is_estimate` with its catalogue total.
+
 - Metadata peer requests can dial IPv4 and IPv6 addresses and close connected
   sockets promptly on context cancellation, retaining their overall deadline
   and existing metadata checks. Synthetic peers exercise the complete exchange
   on both families. The protocol applicability ledger distinguishes this
   transport support from remaining IPv6 DHT, uTP, MSE/PE and holepunch work.
-
-- Bound GraphQL body/document/parser work, expanded selections and aliases,
-  page sizes, input lists and caller-selected count budgets before resolvers
-  run, including cached/persisted operations. GraphQL accepts JSON POST only.
-  GraphQL and REST catalogue work now inherits a 30-second context deadline
-  with bounded socket reads/writes; header and idle timeouts protect the HTTP
-  listener while separate streaming imports retain their existing behavior.
-
-- REST search returns `total_count_is_estimate` alongside `total_count`, so
-  clients can distinguish an approximate total from an exact count. The flag
-  is always present, including `false`, and documented in OpenAPI. REST stats
-  likewise returns `torrent_contents_is_estimate` with its catalogue total.
 
 ## 5.7.0 — 2026-10-24
 

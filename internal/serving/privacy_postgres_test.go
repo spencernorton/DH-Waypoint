@@ -91,7 +91,9 @@ INSERT INTO torrent_canonical_labels(info_hash,category,resolved_source,resolved
 			require.NoError(t, torznabhttp.New(lazy.New(func() (torznab.Client, error) {
 				return adapter.NewWithFilters(s, nil, false, nil, adapter.FreshnessConfig{}), nil
 			}), torznab.NewDefaultConfig(), nil).Apply(engine))
-			body, _ := json.Marshal(map[string]string{"query": `{torrentContent{search(input:{limit:32,totalCount:true,aggregationBudget:0}){totalCount items{infoHash torrent{name}}}}}`})
+			// Public requests retain their planner budget; exact internal
+			// count assertions above still exercise the unbudgeted Go path.
+			body, _ := json.Marshal(map[string]string{"query": `{torrentContent{search(input:{limit:32,totalCount:true,aggregationBudget:5000}){totalCount items{infoHash torrent{name}}}}}`})
 			req := httptest.NewRequest(http.MethodPost, "/graphql", bytes.NewReader(body))
 			req.Header.Set("Content-Type", "application/json")
 			w := httptest.NewRecorder()
