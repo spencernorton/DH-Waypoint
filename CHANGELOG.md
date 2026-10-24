@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Metadata peer requests can dial IPv4 and IPv6 addresses and close connected
+  sockets promptly on context cancellation, retaining their overall deadline
+  and existing metadata checks. Synthetic peers exercise the complete exchange
+  on both families. The protocol applicability ledger distinguishes this
+  transport support from remaining IPv6 DHT, uTP, MSE/PE and holepunch work.
+
 ## 5.7.0 — 2026-10-24
 
 - GraphQL torrent search accepts `contentIdentity: {type, source, id}` to
