@@ -6,6 +6,11 @@
   clients can distinguish an approximate total from an exact count. The flag
   is always present, including `false`, and documented in OpenAPI. REST stats
   likewise returns `torrent_contents_is_estimate` with its catalogue total.
+- Torznab uses the indexed canonical identity for TMDB searches and resolves
+  external IDs through complete catalogue keys. Multiple IDs are alternatives,
+  so an unmapped ID no longer rejects a match on another supplied ID. TV searches
+  advertise and accept `tvdbid`. Only `id` attributes establish external identity;
+  text search and the existing serving-policy checks remain available.
 
 ### Breaking changes
 
