@@ -207,15 +207,31 @@ func (c *crawler) doRequestMetaInfo(
 		if res.Validated.Identities.V1 == nil && res.Validated.Identities.V2 == nil {
 			return metainforequester.Response{}, errors.New("requester returned no verified torrent identity")
 		}
+		var identities []protocol.InfoHash
 		for _, h := range []*protocol.InfoHash{res.Validated.Identities.V1, res.Validated.Identities.V2} {
 			if h != nil && (c.namePolicy.ExcludesHash(*h) || c.csamBlocklist.IsBlocked(*h)) {
 				return metainforequester.Response{}, namepolicy.ErrExcluded
+			}
+			if h != nil {
+				identities = append(identities, *h)
 			}
 		}
 		decision := c.namePolicy.Evaluate(identity, res.Info.BestName())
 		if !decision.Eligible {
 			c.namePolicy.Observe("crawler_acquisition", decision)
 			return metainforequester.Response{}, namepolicy.ErrExcluded
+		}
+		// Discovery triage knows only the 160-bit wire key. Recheck complete
+		// verified identities so a pure-v2 block or either hybrid side cannot
+		// be bypassed by entering through the other wire key.
+		if c.blockingManager != nil {
+			kept, err := c.blockingManager.Filter(ctx, identities)
+			if err != nil {
+				return metainforequester.Response{}, err
+			}
+			if len(kept) != len(identities) {
+				return metainforequester.Response{}, namepolicy.ErrExcluded
+			}
 		}
 		if banErr := c.banningChecker.Check(res.Info); banErr != nil {
 			_ = c.blockingManager.Block(ctx, []protocol.InfoHash{identity}, "csam", "csam_crawler", false)

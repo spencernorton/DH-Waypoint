@@ -104,7 +104,7 @@ func (s *Store) Reprocess(ctx context.Context, origin string, w v1.ReprocessWrit
 	if err != nil {
 		return v1.ReprocessStatus{}, err
 	}
-	if !src.admitted() || s.names != nil && !s.names.Evaluate(src.torrent(export.Input.InfoHash).InfoHash, src.Name).Eligible {
+	if !src.admitted() || !src.admittedByNames(s.names, hash) {
 		return v1.ReprocessStatus{}, ErrStale
 	}
 	var before []byte
@@ -273,7 +273,7 @@ func (s *Store) settleReprocessing(ctx context.Context, tx pgx.Tx, plan Plan, dr
 				state, reason = "held", "source_unavailable"
 			} else if readErr != nil {
 				return readErr
-			} else if !src.admitted() || s.names != nil && !s.names.Evaluate(src.torrent(hex.EncodeToString(x.hash)).InfoHash, src.Name).Eligible {
+			} else if !src.admitted() || !src.admittedByNames(s.names, x.hash) {
 				state, reason = "held", "current_authority_denied"
 			} else if receipt.Policy != s.policy || receipt.Digest != `\x`+hex.EncodeToString(llmwork.SourceDigest(src.torrent(hex.EncodeToString(x.hash)))) {
 				state, reason = "stale", "core_receipt_source_changed"
