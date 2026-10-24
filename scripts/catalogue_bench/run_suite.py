@@ -24,6 +24,7 @@ p.add_argument("--sizes",default="2400000,10000000,32000000")
 p.add_argument("--samples",type=int,default=30)
 p.add_argument("--cold-samples",type=int,default=10)
 p.add_argument("--skip-seed",action="store_true")
+p.add_argument('--keep-current-indexes',action='store_true',help='change an already loaded index set without first resetting to baseline')
 p.add_argument("--variants",default="baseline,candidate")
 p.add_argument("--disk-path",default=".")
 p.add_argument("--cold-only",action="store_true")
@@ -31,6 +32,8 @@ p.add_argument("--cold-cases",default="hash,identity_rare,external_keyset,type_b
 args=p.parse_args()
 if args.cold_only and not args.skip_seed:
     p.error('--cold-only requires --skip-seed and an already qualified fixture')
+if args.keep_current_indexes and not args.skip_seed:
+    p.error('--keep-current-indexes requires --skip-seed')
 out=Path(args.out).resolve()
 out.mkdir(parents=True,exist_ok=True)
 root=Path(__file__).resolve().parent
@@ -84,7 +87,7 @@ def start_database():
 for size in [int(x) for x in args.sizes.split(',')]:
     if size>32000000:
         raise SystemExit("size outside qualified workload bounds")
-    if not args.cold_only:
+    if not args.cold_only and not args.keep_current_indexes:
         run(f"{size}-remove-candidates","indexes","--variant","baseline")
     if not args.skip_seed:
         run(f"{size}-seed","seed","--rows",str(size),"--workers","4","--disposable")
@@ -93,7 +96,7 @@ for size in [int(x) for x in args.sizes.split(',')]:
         if conn.execute("SELECT count(*) FROM torrents").fetchone()[0]!=size:
             raise SystemExit("fixture row count does not equal requested scale")
     for variant in args.variants.split(','):
-        if variant not in ["baseline","candidate","selected"]:
+        if variant not in ["baseline","candidate","selected","retained"]:
             raise SystemExit("invalid variant")
         if not args.cold_only:
             run(f"{size}-{variant}-indexes","indexes","--variant",variant)
