@@ -40,14 +40,14 @@ func TestCatalogueSearchIndexesUpDown(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
 	_, err = db.ExecContext(ctx, `
 CREATE TABLE torrent_contents (id text PRIMARY KEY, info_hash bytea NOT NULL,
- content_type text, published_at timestamptz NOT NULL);
+ content_type text, content_source text, content_id text, published_at timestamptz NOT NULL);
 CREATE INDEX existing_published_idx ON torrent_contents(published_at);
 CREATE TABLE torrents (info_hash bytea PRIMARY KEY, name text NOT NULL,
  tsv tsvector GENERATED ALWAYS AS (to_tsvector('simple',name)) STORED);
 CREATE INDEX torrents_tsv_idx ON torrents(tsv);
 CREATE TABLE content_attributes (source text, value text, content_type text,
  content_source text, content_id text, key text);
-INSERT INTO torrent_contents VALUES ('synthetic',decode(repeat('ab',32),'hex'),'movie',now());
+INSERT INTO torrent_contents VALUES ('synthetic',decode(repeat('ab',32),'hex'),'movie','synthetic','123',now());
 INSERT INTO torrents(info_hash,name) VALUES (decode(repeat('ab',32),'hex'),'Synthetic title');
 INSERT INTO content_attributes VALUES ('imdb','tt123','movie','synthetic','123','id');`)
 	require.NoError(t, err)
@@ -64,10 +64,10 @@ INSERT INTO content_attributes VALUES ('imdb','tt123','movie','synthetic','123',
 		err = db.QueryRowContext(ctx, `SELECT count(*) FROM pg_index i
  JOIN pg_class c ON c.oid=i.indexrelid JOIN pg_namespace n ON n.oid=c.relnamespace
  WHERE n.nspname=current_schema() AND i.indisvalid AND i.indisready AND
- c.relname IN ('torrent_contents_published_page_idx',
- 'torrent_contents_type_published_page_idx','content_attributes_identifier_lookup_idx')`).Scan(&valid)
+ c.relname IN ('torrent_contents_identity_published_page_idx',
+ 'content_attributes_identifier_lookup_idx')`).Scan(&valid)
 		require.NoError(t, err)
-		require.Equal(t, 3, valid)
+		require.Equal(t, 2, valid)
 		var removed bool
 		err = db.QueryRowContext(ctx, `SELECT to_regclass('torrents_tsv_idx') IS NULL`).Scan(&removed)
 		require.NoError(t, err)

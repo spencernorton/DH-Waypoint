@@ -2,12 +2,14 @@ package search
 
 import (
 	"context"
+	"database/sql"
 
 	"github.com/spencernorton/DH-Waypoint/internal/database/dao"
 	"github.com/spencernorton/DH-Waypoint/internal/database/query"
 	"github.com/spencernorton/DH-Waypoint/internal/model"
 	"gorm.io/gen"
 	"gorm.io/gen/field"
+	"gorm.io/gorm"
 )
 
 type TorrentContentResultItem struct {
@@ -21,12 +23,44 @@ type TorrentContentSearch interface {
 	TorrentContent(ctx context.Context, options ...query.Option) (TorrentContentResult, error)
 }
 
+// IdentifierTorrentContentSearch is an optional optimized consumer search.
+// Other Search implementations retain the ordinary identifier criterion.
+type IdentifierTorrentContentSearch interface {
+	TorrentContentByIdentifiers(context.Context, []model.ContentRef, ...query.Option) (TorrentContentResult, error)
+}
+
+func (s search) TorrentContentByIdentifiers(ctx context.Context, refs []model.ContentRef, options ...query.Option) (result TorrentContentResult, err error) {
+	options = append(append([]query.Option(nil), options...), query.Where(torrentContentResolvedIdentifiersCriteria(ctx, refs)))
+	if len(refs) == 0 || len(refs) == 1 && refs[0].Source == model.SourceTmdb {
+		return s.TorrentContent(ctx, options...)
+	}
+	// The lookup and page share one bounded snapshot. Concurrent alias changes
+	// cannot turn a pre-resolved key into an omitted or misidentified result.
+	db := s.q.TorrentContent.WithContext(ctx).UnderlyingDB().Session(&gorm.Session{NewDB: true})
+	err = db.Transaction(func(tx *gorm.DB) error {
+		snapshot := s
+		snapshot.q = dao.Use(tx)
+		var queryErr error
+		result, queryErr = snapshot.torrentContent(ctx, true, options...)
+		return queryErr
+	}, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
+	return result, err
+}
+
 func (s search) TorrentContent(ctx context.Context, options ...query.Option) (TorrentContentResult, error) {
+	return s.torrentContent(ctx, false, options...)
+}
+
+func (s search) torrentContent(ctx context.Context, serial bool, options ...query.Option) (TorrentContentResult, error) {
 	options = append([]query.Option{query.SelectAll()}, options...)
 	if s.adultPolicy != nil && s.adultPolicy.ExcludesAdult() {
 		options = append(options, query.WithFacetExcludedValues(TorrentContentTypeFacetKey, "xxx"))
 	}
-	return query.GenericQuery[TorrentContentResultItem](
+	execute := query.GenericQuery[TorrentContentResultItem]
+	if serial {
+		execute = query.GenericQuerySerial[TorrentContentResultItem]
+	}
+	return execute(
 		ctx,
 		s.q,
 		query.Options(options...),

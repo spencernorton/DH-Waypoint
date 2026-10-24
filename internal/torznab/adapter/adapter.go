@@ -177,14 +177,24 @@ type Adapter struct {
 func (a Adapter) Search(ctx context.Context, req torznab.SearchRequest) (torznab.SearchResult, error) {
 	options := []query.Option{search.TorrentContentDefaultOption(), query.WithTotalCount(false), query.Where(search.LegacyTorrentIdentityCriteria("torrent_contents"))}
 
-	reqOptions, reqErr := searchRequestToQueryOptions(req)
+	identifiers := requestIdentifierRefs(req)
+	identifierSearch, supportsIdentifiers := a.search.(search.IdentifierTorrentContentSearch)
+	resolveIdentifiers := supportsIdentifiers && len(identifiers) > 0 &&
+		!(len(identifiers) == 1 && identifiers[0].Source == model.SourceTmdb)
+	reqOptions, reqErr := searchRequestToQueryOptionsWithIdentifiers(req, !resolveIdentifiers)
 	if reqErr != nil {
 		return torznab.SearchResult{}, reqErr
 	}
 
 	options = append(options, reqOptions...)
 
-	searchResult, searchErr := a.search.TorrentContent(ctx, options...)
+	var searchResult search.TorrentContentResult
+	var searchErr error
+	if resolveIdentifiers {
+		searchResult, searchErr = identifierSearch.TorrentContentByIdentifiers(ctx, identifiers, options...)
+	} else {
+		searchResult, searchErr = a.search.TorrentContent(ctx, options...)
+	}
 	if searchErr != nil {
 		return torznab.SearchResult{}, searchErr
 	}

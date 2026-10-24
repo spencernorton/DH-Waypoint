@@ -42,9 +42,20 @@ func GenericQuery[T interface{}](
 	tableName string,
 	factory SubQueryFactory,
 ) (GenericResult[T], error) {
+	return genericQueryWithExecution[T](_ctx, daoQ, option, tableName, factory, false)
+}
+
+// GenericQuerySerial keeps all reads on a caller-owned snapshot transaction.
+// Speculative strategies must not race or cancel each other on one connection.
+func GenericQuerySerial[T interface{}](ctx context.Context, daoQ *dao.Query, option Option, tableName string, factory SubQueryFactory) (GenericResult[T], error) {
+	return genericQueryWithExecution[T](ctx, daoQ, option, tableName, factory, true)
+}
+
+func genericQueryWithExecution[T interface{}](_ctx context.Context, daoQ *dao.Query, option Option, tableName string, factory SubQueryFactory, serial bool) (GenericResult[T], error) {
 	gq := genericQuery[T]{
 		daoQ:    daoQ,
 		factory: factory,
+		serial:  serial,
 	}
 	builder, optionErr := option(newQueryContext(dbContext{
 		q:         daoQ,
@@ -58,6 +69,20 @@ func GenericQuery[T interface{}](
 
 	gq.ctx = builder.createContext(_ctx)
 	gq.builder = builder
+	if serial {
+		gq.doItems()
+		if len(gq.errs) == 0 {
+			gq.doCount()
+		}
+		if len(gq.errs) == 0 {
+			if aggs, err := gq.builder.calculateAggregations(gq.ctx); err != nil {
+				gq.addError(err)
+			} else {
+				gq.result.Aggregations = aggs
+			}
+		}
+		return gq.result, errors.Join(gq.errs...)
+	}
 	wg := sync.WaitGroup{}
 	wg.Add(3)
 
@@ -89,6 +114,7 @@ type genericQuery[T interface{}] struct {
 	daoQ    *dao.Query
 	factory SubQueryFactory
 	builder OptionBuilder
+	serial  bool
 	mtx     sync.Mutex
 	errs    []error
 	result  GenericResult[T]
@@ -165,6 +191,10 @@ func (gq *genericQuery[T]) doItems() {
 			// CTE strategies below build flat (ungrouped) queries and would return
 			// torrent-level rows. Never race them here.
 			gq.doItemsGrouped()
+			return
+		}
+		if gq.serial {
+			gq.doItemsSerial()
 			return
 		}
 
@@ -288,6 +318,34 @@ func (gq *genericQuery[T]) doItems() {
 
 		gq.result.Items = finalItems
 	}
+}
+
+func (gq *genericQuery[T]) doItemsSerial() {
+	sq, err := gq.newSubQuery(gq.ctx, true)
+	if err != nil {
+		gq.addError(err)
+		return
+	}
+	if err = gq.builder.applyPost(sq.UnderlyingDB()); err != nil {
+		gq.addError(err)
+		return
+	}
+	var items []T
+	if err = sq.UnderlyingDB().Find(&items).Error; err != nil {
+		gq.addError(err)
+		return
+	}
+	if gq.builder.hasNextPage(len(items)) {
+		gq.result.HasNextPage = true
+		items = items[:len(items)-1]
+	}
+	if len(items) > 0 {
+		if err = gq.builder.applyCallbacks(gq.ctx, items); err != nil {
+			gq.addError(err)
+			return
+		}
+	}
+	gq.result.Items = items
 }
 
 // doItemsGrouped executes the grouped (DISTINCT ON per key) item query as an

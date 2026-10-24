@@ -12,8 +12,10 @@
   order, including several content rows belonging to one torrent. Add a disposable
   catalogue SQL harness for deterministic scale, correctness, concurrent writes,
   cold/warm queries, index bytes, reindexing and recovery qualification.
-- Add concurrent indexes for complete published pages, typed published pages and
-  reverse external-ID lookup. Keep serving checks before pagination; raw v2
+- Add concurrent indexes for ordered canonical identities and reverse external-ID
+  lookup, selected after 2.4M/10M/32M synthetic qualification. Resolve singleton
+  external aliases and read their pages in one read-only snapshot, preserving
+  multiple-ID alternatives, caller cancellation and serving checks before pagination; raw v2
   substring indexing remains in migration 00071. Remove the unused historical
   raw tsvector B-tree; rollback restores it.
 
