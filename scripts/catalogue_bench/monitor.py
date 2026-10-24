@@ -18,6 +18,19 @@ while True:
     try:
         data = json.loads(subprocess.check_output(["docker", "stats", "--no-stream", "--format", "{{json .}}", args.container]))
         row = {key: data[key] for key in ["CPUPerc", "MemUsage", "MemPerc", "BlockIO", "PIDs"]}
+        current=json.loads(subprocess.check_output(["docker","inspect",args.container]))[0]
+        if current['State']['Running']:
+            pid=current['State']['Pid']
+            try:
+                relative=next(line.split(':',2)[2] for line in Path(f'/proc/{pid}/cgroup').read_text().splitlines() if line.startswith('0::'))
+                cgroup=Path('/sys/fs/cgroup')/relative.lstrip('/')
+                row['container_started_at']=current['State']['StartedAt']
+                for name in ['memory.current','memory.peak']:
+                    row[name]=int((cgroup/name).read_text())
+                for name in ['memory.stat','cpu.stat','io.stat']:
+                    row[name]=(cgroup/name).read_text()
+            except (OSError,StopIteration,ValueError):
+                row['cgroup_counters_unavailable']=True
         row["at"] = time.time()
         with open(args.out, "a") as f:
             f.write(json.dumps(row, sort_keys=True) + "\n")
