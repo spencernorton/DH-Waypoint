@@ -43,3 +43,38 @@ func TestContentIdentityFiltersBeforePagingAndRetainsServingPolicy(t *testing.T)
 	require.Empty(t, result.Items, "identity values must remain bound SQL parameters")
 	require.Equal(t, before, f.snapshot(t))
 }
+
+func TestExternalIdentityUsesOnlyIdentifierAttributesAndServingPolicy(t *testing.T) {
+	f := newAdultServingPostgresFixture(t)
+	ctx := context.Background()
+	_, err := f.pool.Exec(ctx, `INSERT INTO content_attributes
+ (content_type,content_source,content_id,source,key,value) VALUES
+ ('movie','synthetic','ordinary','imdb','id','tt123456'),
+ ('movie','synthetic','adult','imdb','id','tt123456'),
+ ('movie','synthetic','ordinary','tvdb','id','123456'),
+ ('movie','synthetic','ordinary','imdb','alt_title:0','tt999999')`)
+	require.NoError(t, err)
+	s := f.serving(t, true)
+	for _, tt := range []struct {
+		source, id string
+		kind       model.ContentType
+		want       int
+	}{
+		{"imdb", "tt123456", model.ContentTypeMovie, 1},
+		{"imdb", "tt123456", model.ContentTypeTvShow, 0},
+		{"imdb", "tt999999", model.ContentTypeMovie, 0},
+		{"tvdb", "tt123456", model.ContentTypeMovie, 0},
+		{"imdb", "' OR true --", model.ContentTypeMovie, 0},
+	} {
+		options := append(adultServingExactOptions(model.TableNameTorrentContent),
+			query.Where(TorrentContentIdentifiersCriteria(model.ContentRef{
+				Type: tt.kind, Source: tt.source, ID: tt.id,
+			})), query.Limit(1), query.WithHasNextPage(true))
+		result, err := s.TorrentContent(ctx, options...)
+		require.NoError(t, err)
+		require.Len(t, result.Items, tt.want)
+		if tt.want > 0 {
+			require.Equal(t, f.hashes[4:5], adultServingContentHashes(result.Items))
+		}
+	}
+}

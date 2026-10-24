@@ -11,6 +11,7 @@ type SearchRequest struct {
 	Cats    []int
 	IMDBID  model.NullString
 	TMDBID  model.NullString
+	TVDBID  model.NullString
 	Season  model.NullInt
 	Episode model.NullInt
 	// AirDate is the daily-show form of an episode request: Torznab
