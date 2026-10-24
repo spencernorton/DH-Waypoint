@@ -1,9 +1,15 @@
 # Benchmarks
 
-Measured results for DH-Waypoint's matching pipeline, each dated, with the exact
-commands and the population they describe. A number here is a statement about
-one corpus at one point in time — read the **Population** and **Limits** of a
-run before quoting it.
+Measured results for matching and catalogue retrieval, each dated, with commands
+and the population they describe. Read a run's population and limits before
+quoting it.
+
+## 2026-10-24 — synthetic catalogue SQL and index qualification
+
+The [catalogue record](catalogue-2026-10-24/README.md) separates SQL retrieval,
+index/write costs, correctness, cold-cache method and recovery from HTTP latency,
+classifier accuracy and an unrun engine head-to-head. Read its declared
+population and limits before using a result as a capacity claim.
 
 ## 2026-09-22 — identity matching against your \*arrs' own labels
 

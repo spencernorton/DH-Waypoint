@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/spencernorton/DH-Waypoint/internal/lazy"
@@ -203,7 +204,7 @@ func TestSearch(t *testing.T) {
 
 			result := torznab.SearchResult{}
 			h.clientMock.EXPECT().Search(
-				mock.IsType(&gin.Context{}),
+				mock.Anything,
 				testCase.expectedRequest,
 			).Return(result, nil).Times(1)
 
@@ -217,6 +218,30 @@ func TestSearch(t *testing.T) {
 			resultXML, err := result.XML()
 			require.NoError(t, err)
 			assert.Equal(t, string(resultXML), h.responseRecorder.Body.String())
+		})
+	}
+}
+
+func TestSearchPropagatesRequestCancellationAndDeadline(t *testing.T) {
+	for _, cancelled := range []bool{false, true} {
+		t.Run(fmt.Sprint(cancelled), func(t *testing.T) {
+			h := newTestHarness(t)
+			type requestKey struct{}
+			requestCtx, cancel := context.WithTimeout(context.WithValue(context.Background(), requestKey{}, "caller"), time.Minute)
+			defer cancel()
+			if cancelled {
+				cancel()
+			}
+			expectedDeadline, _ := requestCtx.Deadline()
+			h.clientMock.EXPECT().Search(mock.Anything, mock.Anything).Run(func(actual context.Context, _ torznab.SearchRequest) {
+				deadline, ok := actual.Deadline()
+				require.True(t, ok, "the database search must inherit the HTTP request deadline")
+				require.Equal(t, expectedDeadline, deadline)
+				require.Equal(t, "caller", actual.Value(requestKey{}))
+				require.Equal(t, requestCtx.Err(), actual.Err(), "HTTP cancellation must reach identifier lookup and hydration")
+			}).Return(torznab.SearchResult{}, requestCtx.Err()).Once()
+			req := httptest.NewRequest(http.MethodGet, "/torznab/?t=movie&imdbid=tt123", nil).WithContext(requestCtx)
+			h.engine.ServeHTTP(h.responseRecorder, req)
 		})
 	}
 }

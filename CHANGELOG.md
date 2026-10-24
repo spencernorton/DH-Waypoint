@@ -13,6 +13,18 @@
   GraphQL and REST catalogue work now inherits a 30-second context deadline
   with bounded socket reads/writes; header and idle timeouts protect the HTTP
   listener while separate streaming imports retain their existing behavior.
+- Published content pages use `(published_at, info_hash, id)` for a complete
+  order, including several content rows belonging to one torrent. Add a disposable
+  catalogue SQL harness for deterministic scale, correctness, concurrent writes,
+  cold/warm queries, index bytes, reindexing and recovery qualification.
+- Add concurrent indexes for ordered canonical identities and reverse external-ID
+  lookup, selected after 2.4M/10M/32M synthetic qualification. Resolve singleton
+  external aliases and read their pages in one read-only snapshot, preserving
+  multiple-ID alternatives, caller cancellation and serving checks before pagination; raw v2
+  substring indexing remains in migration 00071. Rollback removes only the two
+  new indexes and preserves the current raw schema and existing downgrade holds.
+- Torznab forwards HTTP request cancellation and deadlines to catalogue search,
+  including external-identifier lookup and nested result hydration.
 
 - REST search returns `total_count_is_estimate` alongside `total_count`, so
   clients can distinguish an approximate total from an exact count. The flag

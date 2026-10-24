@@ -286,6 +286,14 @@ func withCurrentFacet(facetKey string) Option {
 }
 
 func (b optionBuilder) calculateAggregations(ctx context.Context) (Aggregations, error) {
+	return b.calculateAggregationsWithExecution(ctx, false)
+}
+
+func (b optionBuilder) calculateAggregationsSerial(ctx context.Context) (Aggregations, error) {
+	return b.calculateAggregationsWithExecution(ctx, true)
+}
+
+func (b optionBuilder) calculateAggregationsWithExecution(ctx context.Context, serial bool) (Aggregations, error) {
 	aggregations := make(Aggregations, len(b.facets))
 	wgOuter := sync.WaitGroup{}
 	wgOuter.Add(len(b.facets))
@@ -308,7 +316,7 @@ func (b optionBuilder) calculateAggregations(ctx context.Context) (Aggregations,
 	}
 
 	for _, facet := range b.facets {
-		go (func(facet Facet) {
+		runFacet := func(facet Facet) {
 			defer wgOuter.Done()
 			if !facet.IsAggregated() {
 				return
@@ -333,7 +341,7 @@ func (b optionBuilder) calculateAggregations(ctx context.Context) (Aggregations,
 			wgInner := sync.WaitGroup{}
 			wgInner.Add(len(values))
 			for key, label := range values {
-				go func(key, label string) {
+				runValue := func(key, label string) {
 					defer wgInner.Done()
 					criterias := facet.Criteria(FacetFilter{key: struct{}{}})
 					var criteria Criteria
@@ -372,7 +380,12 @@ func (b optionBuilder) calculateAggregations(ctx context.Context) (Aggregations,
 							IsEstimate: countResult.BudgetExceeded,
 						})
 					}
-				}(key, label)
+				}
+				if serial {
+					runValue(key, label)
+				} else {
+					go runValue(key, label)
+				}
 			}
 			wgInner.Wait()
 			addAggregation(facet.Key(), AggregationGroup{
@@ -380,7 +393,12 @@ func (b optionBuilder) calculateAggregations(ctx context.Context) (Aggregations,
 				Logic: facet.Logic(),
 				Items: items,
 			})
-		})(facet)
+		}
+		if serial {
+			runFacet(facet)
+		} else {
+			go runFacet(facet)
+		}
 	}
 
 	wgOuter.Wait()

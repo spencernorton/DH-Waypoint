@@ -41,6 +41,11 @@ func (ob TorrentContentOrderBy) Clauses(direction OrderDirection) []query.OrderB
 				},
 				Desc: desc,
 			},
+		}, {
+			OrderByColumn: clause.OrderByColumn{
+				Column: clause.Column{Table: model.TableNameTorrentContent, Name: "id"},
+				Desc:   desc,
+			},
 		}}
 	case TorrentContentOrderByUpdatedAt:
 		return []query.OrderByColumn{{

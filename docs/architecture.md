@@ -158,7 +158,7 @@ Once persisted or queued into `queue_jobs`, torrents pass through DH-Waypoint's 
 
 ## 5. PostgreSQL 16 + `pg_trgm` Schema Architecture
 
-DH-Waypoint uses PostgreSQL 16 (`internal/database`, `migrations/00001` through `00069`) with the `pg_trgm` extension for trigram similarity and GIN full-text `tsvector` indexes for sub-10ms Torznab queries.
+DH-Waypoint uses PostgreSQL 16 (`internal/database`, `migrations/00001` through `00069`) with the `pg_trgm` extension for trigram similarity and GIN full-text `tsvector` indexes. Latency depends on corpus, query, serving policy and deployment. See the [catalogue search design](design/catalogue-search.md) and [dated benchmark evidence](project/benchmarks.md); SQL measurements are separate from end-to-end Torznab latency.
 
 ### Core Catalogue & Recovery Tables
 - `torrents`: Primary entity keyed by 20-byte `info_hash` (`bytea`), storing `name`, `size`, `files_status` (`no_info`, `single`, `multi`, `over_threshold`), `files_count`, `piece_length`, `pieces`, and `private` flag (`00068_private_tracker.sql`).

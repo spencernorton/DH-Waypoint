@@ -129,7 +129,7 @@ func (h handler) handleSearch(ctx *gin.Context, profile torznab.Profile, tp stri
 	}
 
 	t0 := time.Now()
-	result, searchErr := h.client.Search(ctx, torznab.SearchRequest{
+	result, searchErr := h.client.Search(ctx.Request.Context(), torznab.SearchRequest{
 		Profile: profile,
 		Query:   ctx.Query(torznab.ParamQuery),
 		Type:    tp,

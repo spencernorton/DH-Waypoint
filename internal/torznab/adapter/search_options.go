@@ -11,6 +11,10 @@ import (
 )
 
 func searchRequestToQueryOptions(r torznab.SearchRequest) ([]query.Option, error) {
+	return searchRequestToQueryOptionsWithIdentifiers(r, true)
+}
+
+func searchRequestToQueryOptionsWithIdentifiers(r torznab.SearchRequest, includeIdentifiers bool) ([]query.Option, error) {
 	var options []query.Option
 
 	switch r.Type {
@@ -161,27 +165,10 @@ func searchRequestToQueryOptions(r torznab.SearchRequest) ([]query.Option, error
 		options = append(options, query.Where(query.Or(catsCriteria...)))
 	}
 
-	// The supportedParams protocol combines alternative ID systems with OR.
-	// A client may know an ID that this catalogue has not mapped yet.
-	var identifiers []model.ContentRef
-	if r.IMDBID.Valid {
-		imdbID := r.IMDBID.String
-		if !strings.HasPrefix(imdbID, "tt") {
-			imdbID = "tt" + imdbID
+	if includeIdentifiers {
+		if identifiers := requestIdentifierRefs(r); len(identifiers) > 0 {
+			options = append(options, query.Where(search.TorrentContentIdentifiersCriteria(identifiers...)))
 		}
-
-		identifiers = append(identifiers, identifierRefs(r.Type, "imdb", imdbID)...)
-	}
-
-	if r.TMDBID.Valid {
-		identifiers = append(identifiers, identifierRefs(r.Type, "tmdb", r.TMDBID.String)...)
-	}
-
-	if r.TVDBID.Valid {
-		identifiers = append(identifiers, identifierRefs(torznab.FunctionTV, "tvdb", r.TVDBID.String)...)
-	}
-	if len(identifiers) > 0 {
-		options = append(options, query.Where(search.TorrentContentIdentifiersCriteria(identifiers...)))
 	}
 
 	limit := r.Profile.DefaultLimit
@@ -202,6 +189,25 @@ func searchRequestToQueryOptions(r torznab.SearchRequest) ([]query.Option, error
 	}
 
 	return options, nil
+}
+
+func requestIdentifierRefs(r torznab.SearchRequest) []model.ContentRef {
+	// supportedParams combines ID systems with OR, including unmapped IDs.
+	var identifiers []model.ContentRef
+	if r.IMDBID.Valid {
+		id := r.IMDBID.String
+		if !strings.HasPrefix(id, "tt") {
+			id = "tt" + id
+		}
+		identifiers = append(identifiers, identifierRefs(r.Type, "imdb", id)...)
+	}
+	if r.TMDBID.Valid {
+		identifiers = append(identifiers, identifierRefs(r.Type, "tmdb", r.TMDBID.String)...)
+	}
+	if r.TVDBID.Valid {
+		identifiers = append(identifiers, identifierRefs(torznab.FunctionTV, "tvdb", r.TVDBID.String)...)
+	}
+	return identifiers
 }
 
 func identifierRefs(function, source, id string) []model.ContentRef {

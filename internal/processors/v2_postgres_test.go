@@ -114,9 +114,8 @@ func TestPostgresIdentityMigrationPreservesV1AndGuardsDowngrade(t *testing.T) {
 	require.NoError(t, p.QueryRow(testContext, "SELECT octet_length(info_hash),info_hash_v2 FROM torrents WHERE info_hash=$1", h).Scan(&length, &alias))
 	require.Equal(t, 20, length)
 	require.Nil(t, alias)
-	_, err = provider.Down(testContext)
-	require.NoError(t, err) // concurrent name index
-	_, err = provider.Down(testContext)
+	// Exercise the identity boundary, including any later additive indexes.
+	_, err = provider.DownTo(testContext, 69)
 	require.NoError(t, err) // identity schema, v1-only data
 	require.NoError(t, p.QueryRow(testContext, "SELECT octet_length(info_hash) FROM torrents WHERE info_hash=$1", h).Scan(&length))
 	require.Equal(t, 20, length)
@@ -125,9 +124,7 @@ func TestPostgresIdentityMigrationPreservesV1AndGuardsDowngrade(t *testing.T) {
 	v2hash := protocol.InfoHashV2(sha256.Sum256([]byte("synthetic hybrid alias")))
 	_, err = p.Exec(testContext, "UPDATE torrents SET info_hash_v2=$2 WHERE info_hash=$1", h, v2hash.Bytes())
 	require.NoError(t, err)
-	_, err = provider.Down(testContext)
-	require.NoError(t, err)
-	_, err = provider.Down(testContext)
+	_, err = provider.DownTo(testContext, 69)
 	require.ErrorContains(t, err, "v2 identities prevent downgrade")
 	require.NoError(t, p.QueryRow(testContext, "SELECT info_hash_v2 FROM torrents WHERE info_hash=$1", h).Scan(&alias))
 	require.Equal(t, v2hash.Bytes(), alias)
@@ -136,7 +133,7 @@ func TestPostgresIdentityMigrationPreservesV1AndGuardsDowngrade(t *testing.T) {
 	_, err = p.Exec(testContext, `INSERT INTO processor_core_receipts(info_hash,source_digest,content_id,core_policy,processing_outcome,outcome)
  VALUES($1,$2,'synthetic','synthetic','not_attempted','not_attempted')`, v2hash.Bytes(), make([]byte, 32))
 	require.NoError(t, err)
-	_, err = provider.Down(testContext)
+	_, err = provider.DownTo(testContext, 69)
 	require.ErrorContains(t, err, "v2 evidence")
 }
 
@@ -150,9 +147,7 @@ func TestPostgresRemovedHybridRetainsAliasAndPreventsUnsafeDowngrade(t *testing.
 	require.NoError(t, err)
 	snapshot, err := recovery.Remove(testContext, h, "blocking", "synthetic", time.Now())
 	require.NoError(t, err)
-	_, err = m.Down(testContext)
-	require.NoError(t, err)
-	_, err = m.Down(testContext)
+	_, err = m.DownTo(testContext, 69)
 	require.ErrorContains(t, err, "v2 evidence in retained snapshots")
 	restored, err := recovery.Restore(testContext, snapshot.ID, time.Now())
 	require.NoError(t, err)

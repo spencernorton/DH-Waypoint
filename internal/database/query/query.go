@@ -34,6 +34,13 @@ type GenericResult[T interface{}] struct {
 
 type SubQueryFactory = func(context.Context, *dao.Query) SubQuery
 
+type serialExecutionKey struct{}
+
+func isSerialExecution(ctx context.Context) bool {
+	serial, _ := ctx.Value(serialExecutionKey{}).(bool)
+	return serial
+}
+
 // GenericQuery executes queries for any type of search and returns a GenericResult
 func GenericQuery[T interface{}](
 	_ctx context.Context,
@@ -42,9 +49,23 @@ func GenericQuery[T interface{}](
 	tableName string,
 	factory SubQueryFactory,
 ) (GenericResult[T], error) {
+	return genericQueryWithExecution[T](_ctx, daoQ, option, tableName, factory, isSerialExecution(_ctx))
+}
+
+// GenericQuerySerial keeps all reads on a caller-owned snapshot transaction.
+// Speculative strategies must not race or cancel each other on one connection.
+func GenericQuerySerial[T interface{}](ctx context.Context, daoQ *dao.Query, option Option, tableName string, factory SubQueryFactory) (GenericResult[T], error) {
+	// Hydrators issue nested GenericQuery calls using this context. They must
+	// inherit the same execution mode while sharing the transaction connection.
+	ctx = context.WithValue(ctx, serialExecutionKey{}, true)
+	return genericQueryWithExecution[T](ctx, daoQ, option, tableName, factory, true)
+}
+
+func genericQueryWithExecution[T interface{}](_ctx context.Context, daoQ *dao.Query, option Option, tableName string, factory SubQueryFactory, serial bool) (GenericResult[T], error) {
 	gq := genericQuery[T]{
 		daoQ:    daoQ,
 		factory: factory,
+		serial:  serial,
 	}
 	builder, optionErr := option(newQueryContext(dbContext{
 		q:         daoQ,
@@ -58,6 +79,20 @@ func GenericQuery[T interface{}](
 
 	gq.ctx = builder.createContext(_ctx)
 	gq.builder = builder
+	if serial {
+		gq.doItems()
+		if len(gq.errs) == 0 {
+			gq.doCount()
+		}
+		if len(gq.errs) == 0 {
+			if aggs, err := gq.builder.calculateAggregationsSerial(gq.ctx); err != nil {
+				gq.addError(err)
+			} else {
+				gq.result.Aggregations = aggs
+			}
+		}
+		return gq.result, errors.Join(gq.errs...)
+	}
 	wg := sync.WaitGroup{}
 	wg.Add(3)
 
@@ -89,6 +124,7 @@ type genericQuery[T interface{}] struct {
 	daoQ    *dao.Query
 	factory SubQueryFactory
 	builder OptionBuilder
+	serial  bool
 	mtx     sync.Mutex
 	errs    []error
 	result  GenericResult[T]
@@ -165,6 +201,10 @@ func (gq *genericQuery[T]) doItems() {
 			// CTE strategies below build flat (ungrouped) queries and would return
 			// torrent-level rows. Never race them here.
 			gq.doItemsGrouped()
+			return
+		}
+		if gq.serial {
+			gq.doItemsSerial()
 			return
 		}
 
@@ -288,6 +328,34 @@ func (gq *genericQuery[T]) doItems() {
 
 		gq.result.Items = finalItems
 	}
+}
+
+func (gq *genericQuery[T]) doItemsSerial() {
+	sq, err := gq.newSubQuery(gq.ctx, true)
+	if err != nil {
+		gq.addError(err)
+		return
+	}
+	if err = gq.builder.applyPost(sq.UnderlyingDB()); err != nil {
+		gq.addError(err)
+		return
+	}
+	var items []T
+	if err = sq.UnderlyingDB().Find(&items).Error; err != nil {
+		gq.addError(err)
+		return
+	}
+	if gq.builder.hasNextPage(len(items)) {
+		gq.result.HasNextPage = true
+		items = items[:len(items)-1]
+	}
+	if len(items) > 0 {
+		if err = gq.builder.applyCallbacks(gq.ctx, items); err != nil {
+			gq.addError(err)
+			return
+		}
+	}
+	gq.result.Items = items
 }
 
 // doItemsGrouped executes the grouped (DISTINCT ON per key) item query as an
@@ -476,6 +544,7 @@ type OptionBuilder interface {
 	applyPost(*gorm.DB) error
 	createFacetsFilterCriteria() (Criteria, error)
 	calculateAggregations(context.Context) (Aggregations, error)
+	calculateAggregationsSerial(context.Context) (Aggregations, error)
 	WithTotalCount(bool) OptionBuilder
 	WithHasNextPage(bool) OptionBuilder
 	WithAggregationBudget(float64) OptionBuilder
@@ -939,14 +1008,19 @@ func (b optionBuilder) applyCallbacks(ctx context.Context, results any) error {
 	wg.Add(len(b.callbacks))
 
 	for _, cb := range b.callbacks {
-		go (func(cb Callback) {
+		run := func(cb Callback) {
 			defer wg.Done()
 			if err := cb(ctx, cbCtx, results); err != nil {
 				cbCtx.Lock()
 				defer cbCtx.Unlock()
 				errs = append(errs, err)
 			}
-		})(cb)
+		}
+		if isSerialExecution(ctx) {
+			run(cb)
+		} else {
+			go run(cb)
+		}
 	}
 
 	wg.Wait()
