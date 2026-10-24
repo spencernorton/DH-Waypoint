@@ -20,6 +20,7 @@ The public distribution is MIT-licensed and runs independently of a browser site
 - [Core Architecture Guide](architecture.md) and [Backend Overview](concepts/architecture.md)
 - [External Processor HTTP Webhook Contract](processor-contract.md) and [Armiger & Armiger Ultra Integration](armiger-integration.md)
 - [DHT crawler](concepts/dht-crawler.md)
+- [BitTorrent v2](bittorrent-v2.md): complete identities, raw REST v2 and processor compatibility
 - [Classification](concepts/classification.md)
 - [Evidence](evidence.md) and [compatibility](concepts/compatibility.md)
 - [Swarm health](concepts/swarm-health.md) and [wantbridge](concepts/wantbridge.md)

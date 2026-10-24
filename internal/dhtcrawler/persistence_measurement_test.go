@@ -3,6 +3,7 @@ package dhtcrawler
 import (
 	"context"
 	"crypto/sha1"
+	"crypto/sha256"
 	"fmt"
 	"github.com/anacrolix/torrent/bencode"
 	"os"
@@ -102,5 +103,62 @@ func TestMeasuredCrawlerPersistence(t *testing.T) {
 		var n int
 		require.NoError(t, pool.QueryRow(ctx, "SELECT count(*) FROM "+table).Scan(&n))
 		require.Equal(t, want, n, table)
+	}
+	// Exercise the same real transaction with full v2 keys and hybrid aliases.
+	// Acquisition has already validated the original info bytes; the wire key
+	// must never become a fabricated SHA-1 catalogue row for pure v2.
+	var mixed []infoHashWithMetaInfo
+	for _, kind := range []string{"v1", "v2", "hybrid"} {
+		data := []byte("synthetic data")
+		piece := sha1.Sum(data)
+		root := sha256.Sum256(data)
+		fields := map[string]any{"name": "Synthetic.Mixed." + kind, "piece length": 16384}
+		if kind != "v2" {
+			fields["pieces"] = piece[:]
+			fields["files"] = []any{map[string]any{"length": len(data), "path": []string{"dir", "a.txt"}}}
+		}
+		if kind != "v1" {
+			fields["meta version"] = 2
+			fields["file tree"] = map[string]any{"dir": map[string]any{"a.txt": map[string]any{"": map[string]any{"length": len(data), "pieces root": root[:]}}}}
+		}
+		raw, err := bencode.Marshal(fields)
+		require.NoError(t, err)
+		h := protocol.InfoHashV1(protocol.ID(sha1.Sum(raw)))
+		if kind == "v2" {
+			h = protocol.InfoHashV2(sha256.Sum256(raw))
+		}
+		validated, err := metainfo.ParseDiscoveredInfo(h.WireID(), raw)
+		require.NoError(t, err)
+		mixed = append(mixed, infoHashWithMetaInfo{nodeHasPeersForHash: nodeHasPeersForHash{infoHash: h.WireID()}, validated: validated})
+	}
+	batches.batches <- mixed
+	for range mixed {
+		select {
+		case received := <-scrapes.done:
+			require.NotNil(t, received.identity)
+		case <-time.After(10 * time.Second):
+			t.Fatal("mixed identity transaction did not complete")
+		}
+	}
+	for _, entry := range mixed {
+		h := entry.validated.Identities.Canonical()
+		var stored, alias []byte
+		require.NoError(t, pool.QueryRow(ctx, `SELECT info_hash,info_hash_v2 FROM torrents WHERE info_hash=$1`, h.Bytes()).Scan(&stored, &alias))
+		require.Equal(t, h.Bytes(), stored)
+		if v2 := entry.validated.Identities.V2; v2 != nil {
+			require.Equal(t, v2.Bytes(), alias)
+		} else {
+			require.Nil(t, alias)
+		}
+		var path string
+		require.NoError(t, pool.QueryRow(ctx, `SELECT path FROM torrent_files WHERE info_hash=$1`, h.Bytes()).Scan(&path))
+		require.Equal(t, "dir/a.txt", path)
+		var pieces int
+		require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM torrent_pieces WHERE info_hash=$1`, h.Bytes()).Scan(&pieces))
+		if h.IsV2() {
+			require.Zero(t, pieces)
+		} else {
+			require.Equal(t, 1, pieces)
+		}
 	}
 }

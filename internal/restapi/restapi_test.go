@@ -113,4 +113,7 @@ func TestOpenAPIDocsCopyMatchesEmbedded(t *testing.T) {
 	doc, err := os.ReadFile(filepath.Join("..", "..", "docs", "reference", "openapi.yaml"))
 	require.NoError(t, err)
 	require.Equal(t, openAPISpec, doc)
+	v2, err := os.ReadFile(filepath.Join("..", "..", "docs", "reference", "openapi-v2.yaml"))
+	require.NoError(t, err)
+	require.Equal(t, openAPIV2Spec, v2)
 }

@@ -45,7 +45,7 @@ control-character restrictions apply to v2 paths too.
 
 BEP 9 transfers only the info dictionary. The validation result separately
 records whether outer piece layers were available and verified. Large-file
-BEP 9 acquisition indexes authenticated roots and file metadata; it does not
+BEP 9 acquisition checks root fields and indexes file metadata; it does not
 claim to have verified unavailable layers or file data. `ParseTorrentBytes`
 and complete-file import validate every required outer piece layer against
 its Merkle root, including zero hashes that balance an incomplete tree.
@@ -68,7 +68,8 @@ their relationship.
   and `after_index`. An over-threshold inventory is explicitly partial.
 - `POST /import/torrent`: one complete torrent file, with optional `hash`
   expectation. Validation derives identity, name, size and private status from
-  original bytes. The body is capped at 20 MiB. Existing import/serving policy
+  original bytes. The body is capped at 20 MiB with bounded socket reads and a 30-second
+  request budget. Existing import/serving policy
   still applies; this endpoint shares the operator access boundary of `/import`.
 - `GET /api/v2/openapi.yaml`: [v2 contract](reference/openapi-v2.yaml).
 
