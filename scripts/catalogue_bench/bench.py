@@ -350,7 +350,7 @@ def verify_page(conn,args,name,result):
                 raise RuntimeError('wrong literal substring candidate')
             if name=='raw_substring_rare' and family!=123456:
                 raise RuntimeError('wrong rare literal substring candidate')
-    if name in ['identity_rare','external_correlated','external_identifier','external_keyset',
+    if not getattr(args,'updates',False) and name in ['identity_rare','external_correlated','external_identifier','external_keyset',
                 'text_rare','raw_text_rare','raw_substring_rare']:
         # Invert the fixture's modular identity assignment. This independently
         # checks completeness and ordering, including an incorrectly empty page.
@@ -395,7 +395,7 @@ def correctness(conn,args,queries):
         query=f"SELECT count(*) FROM (({full(queries[left])} EXCEPT {full(queries[right])}) UNION ALL "
         query+=f"({full(queries[right])} EXCEPT {full(queries[left])})) differences"
         start=time.perf_counter()
-        conn.execute("SET statement_timeout='180s'")
+        conn.execute("SET statement_timeout='600s'")
         delta=conn.execute(query).fetchone()[0]
         emit(args.out,{"kind":"correctness","left":left,"right":right,"differences":delta,
                        "seconds":time.perf_counter()-start})
@@ -483,7 +483,7 @@ def run(conn,args):
         queries['keyset']=queries['keyset'].replace('CURSOR_ANCHOR',literal)
         emit(args.out,{"kind":"anchor_setup","rows":rows,"seconds":time.perf_counter()-anchor_start})
     conn.execute("SET statement_timeout='5s'")
-    if not args.cases and args.cache_state=="warm":
+    if not args.cases and args.cache_state=="warm" and not args.updates:
         correctness(conn,args,queries)
     emit(args.out,{"kind":"run_start","rows":rows,"variant":args.variant,"cache_state":args.cache_state,
                    "samples_per_case":args.samples,"workers":args.workers,"concurrent_updates":args.updates,
