@@ -68,9 +68,12 @@ func TestRawResultOnlyAppliesHint(t *testing.T) {
 	}
 }
 
-func TestNormalizeModeDefaultsToFull(t *testing.T) {
-	if got := Mode("").Normalize(); got != ModeFull {
-		t.Fatalf("empty mode normalized to %q, want %q", got, ModeFull)
+func TestNormalizeModeDefaultsToBasic(t *testing.T) {
+	if got := NewDefaultConfig().Mode; got != ModeBasic {
+		t.Fatalf("configured default = %q, want basic", got)
+	}
+	if got := Mode("").Normalize(); got != ModeBasic {
+		t.Fatalf("empty mode normalized to %q, want %q", got, ModeBasic)
 	}
 	for _, m := range []Mode{ModeFull, ModeBasic, ModeRaw} {
 		if !m.Valid() {
@@ -79,6 +82,28 @@ func TestNormalizeModeDefaultsToFull(t *testing.T) {
 	}
 	if Mode("turbo").Valid() {
 		t.Fatal("mode turbo should be invalid")
+	}
+}
+
+func TestDefaultModeNeedsNoClassifierOrPlugin(t *testing.T) {
+	hash := processTestHash(3)
+	p, mock, blocker := newProcessTestProcessor(t,
+		[]model.Torrent{processTestTorrent(hash, "kept movie 2026", "mkv")},
+		processRunnerStub{run: func(model.Torrent) (classification.Result, error) {
+			t.Fatal("default mode invoked the optional classifier")
+			return classification.Result{}, nil
+		}},
+	)
+	p.mode = NewDefaultConfig().Mode
+	expectTorrentContentInsert(mock)
+	if err := p.Process(context.Background(), MessageParams{InfoHashes: []protocol.ID{hash}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := blocker.blockedHashes(); len(got) != 0 {
+		t.Fatalf("default mode blocked metadata: %v", got)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
 	}
 }
 

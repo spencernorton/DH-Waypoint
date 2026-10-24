@@ -6,6 +6,7 @@ const (
 	ParamCat     = "cat"
 	ParamIMDBID  = "imdbid"
 	ParamTMDBID  = "tmdbid"
+	ParamTVDBID  = "tvdbid"
 	ParamSeason  = "season"
 	ParamEpisode = "ep"
 	ParamLimit   = "limit"

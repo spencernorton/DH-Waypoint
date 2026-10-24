@@ -13,6 +13,30 @@
   clients can distinguish an approximate total from an exact count. The flag
   is always present, including `false`, and documented in OpenAPI. REST stats
   likewise returns `torrent_contents_is_estimate` with its catalogue total.
+- Torznab uses the indexed canonical identity for TMDB searches and resolves
+  external IDs through complete catalogue keys. Multiple IDs are alternatives,
+  so an unmapped ID no longer rejects a match on another supplied ID. TV searches
+  advertise and accept `tvdbid`. Only `id` attributes establish external identity;
+  text search and the existing serving-policy checks remain available.
+
+### Breaking changes
+
+- Retire `builtin/llm` and built-in online calibration. Inference, prompts,
+  provider credentials and budgets now live in a separately runnable HTTP
+  processor adapter (`plugins/llm`). Existing registrations fail closed with
+  migration reason codes; retain history and replace them using the documented
+  migration. Static regex weights no longer consume retained learned state.
+- Default native processing to `basic`, matching Compose. Explicit
+  `PROCESSING_MODE=full` retains the optional deterministic classifier.
+
+### Added
+
+- Standalone OpenAI-compatible LLM processor with local/hosted examples,
+  two-stage inference opt-in, strict proposal validation, bounded calls and
+  feedback receipts. GPT-5 family requests omit temperature.
+- Check active Go syntax for direct provider HTTP calls and learning in core,
+  as well as dependency names; enforce the adapter's public-contract boundary.
+
 
 - Metadata peer requests can dial IPv4 and IPv6 addresses and close connected
   sockets promptly on context cancellation, retaining their overall deadline

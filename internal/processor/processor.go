@@ -36,7 +36,7 @@ type processor struct {
 	coreRecorder processingstate.Recorder
 	namePolicy   *namepolicy.Policy
 	// mode selects how much deterministic processing runs (see Mode).
-	// The empty value behaves as ModeFull for directly constructed
+	// The empty value behaves as ModeBasic for directly constructed
 	// processors (tests, narrow wiring).
 	mode            Mode
 	defaultWorkflow string

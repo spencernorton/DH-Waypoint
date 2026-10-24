@@ -123,6 +123,16 @@ func TestSearch(t *testing.T) {
 		expectedRequest torznab.SearchRequest
 	}{
 		{
+			url: "/torznab/?t=tvsearch&tvdbid=123456&season=2&ep=3",
+			expectedRequest: torznab.SearchRequest{
+				Profile: torznab.ProfileDefault,
+				Type:    torznab.FunctionTV,
+				TVDBID:  model.NewNullString("123456"),
+				Season:  model.NullInt{Valid: true, Int: 2},
+				Episode: model.NullInt{Valid: true, Int: 3},
+			},
+		},
+		{
 			url: fmt.Sprintf("/torznab/?%s", url.Values{
 				torznab.ParamType: []string{torznab.FunctionSearch},
 			}.Encode()),

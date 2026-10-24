@@ -39,7 +39,7 @@ docker compose up -d              # root compose pulls ghcr.io/spencernorton/dh-
 curl -s localhost:3333/metrics | grep dht_crawler_persisted   # climbing within a minute
 ```
 
-The root stack defaults to `PROCESSING_MODE=basic` (coarse categories in core; classification and filtering belong to [plugins](docs/processors/plugin-files.md) — drop a `*.plugin.yml` into `./plugins/`). Set `PROCESSING_MODE=full` for the built-in classifier, or use `examples/docker-compose.public.yml` to build from source. New to the APIs? Start with the [API guide](docs/api-guide.md).
+The binary and root stack default to `PROCESSING_MODE=basic` (coarse categories in core; classification and filtering belong to [plugins](docs/processors/plugin-files.md) — drop a `*.plugin.yml` into `./plugins/`). Set `PROCESSING_MODE=full` for the built-in classifier, or use `examples/docker-compose.public.yml` to build from source. New to the APIs? Start with the [API guide](docs/api-guide.md).
 
 Then add `http://<host>:3333/torznab/` as a Torznab indexer in Prowlarr (or in each \*arr directly — [per-app guides](docs/integrations/sonarr.md)), and set the \*arr webhook URL to `http://<host>:3333/evidence/arr/<instance>` so the evidence loop closes ([`docs/evidence.md`](docs/evidence.md)). GraphQL accepts JSON `POST` requests at `/graphql`, and Prometheus metrics are available at `/metrics`. Set a Torznab key and protect the remaining APIs before exposing them beyond a trusted network. [`examples/README.md`](examples/README.md) covers the stack in detail.
 

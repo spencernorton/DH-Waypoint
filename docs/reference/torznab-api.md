@@ -47,18 +47,33 @@ Each function accepts a different parameter set.
 
 | Function | Common params | Identifier params |
 |---|---|---|
-| `search` | `q`, `cat`, `limit`, `offset` | — |
-| `tvsearch` | `q`, `season`, `ep`, `cat`, `limit`, `offset` | `tvdbid`, `imdbid`, `tvmazeid`, `traktid` |
+| `search` | `q`, `cat`, `limit`, `offset` | `imdbid`, `tmdbid` |
+| `tvsearch` | `q`, `season`, `ep`, `cat`, `limit`, `offset` | `tvdbid`, `imdbid`, `tmdbid` |
 | `movie` | `q`, `cat`, `limit`, `offset` | `imdbid`, `tmdbid` |
-| `music` | `q`, `artist`, `album`, `cat`, `limit`, `offset` | — |
-| `book` | `q`, `author`, `title`, `cat`, `limit`, `offset` | — |
+| `music` | `q`, `cat`, `limit`, `offset` | — |
+| `book` | `q`, `cat`, `limit`, `offset` | — |
 
 Notes:
 
 - `cat` is a comma-separated list of Newznab category IDs.
-- `limit` defaults to 50; clients should not set it above 200.
+- The default profile returns at most 100 items, with a default limit of 100.
+  Other profiles advertise their own limits in `t=caps`.
 - `offset` is for pagination.
-- Identifier params take precedence over `q`. A `tvdbid` lookup is more reliable than a free-text query.
+- Multiple supplied identifiers are alternatives (OR), following the
+  [supportedParams revision](https://torznab.github.io/spec-1.3-draft/revisions/1.1-Newznab-supportedParams.html).
+  A missing IMDb mapping therefore does not veto a known TMDB or TVDB mapping.
+  The function's content type, categories, episode/date and any `q` text still
+  constrain those matches. Movie and TV numeric IDs occupy separate namespaces.
+- ID queries use accepted canonical identities and catalogue attributes whose
+  key is `id`. Plugin proposals, alternate titles and unverified annotations
+  cannot establish an ID or grant serving eligibility.
+- An unmapped torrent remains available to ordinary text search. An ID-only
+  request cannot prove its identity; clients can use their text-search fallback.
+  Search does not call a classifier or depend on a plugin being online.
+- Category subtypes can constrain resolution. There is no generic `quality=`
+  parameter; clients also evaluate release names and returned attributes.
+  `tvmazeid`, `traktid`, `artist`, `album`, `author` and `title` are not advertised
+  or implemented search parameters.
 
 ## Newznab categories
 
