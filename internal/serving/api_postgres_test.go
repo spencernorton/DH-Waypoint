@@ -295,7 +295,7 @@ FROM torrents t WHERE info_hash=decode($1,'hex')`, hashes[4])
 	for _, enabled := range []bool{false, true} {
 		t.Run(fmt.Sprintf("adult_option_%t", enabled), func(t *testing.T) {
 			engine := router(enabled)
-			data := graphqlRequest(engine, `{torrentContent{search(input:{limit:20,totalCount:true,aggregationBudget:0}){totalCount items{infoHash torrent{name} content{adult}}}}}`)
+			data := graphqlRequest(engine, `{torrentContent{search(input:{limit:20,totalCount:true,aggregationBudget:5000}){totalCount items{infoHash torrent{name} content{adult}}}}}`)
 			found := data["torrentContent"].(map[string]any)["search"].(map[string]any)
 			want := 4
 			if enabled {
@@ -307,7 +307,7 @@ FROM torrents t WHERE info_hash=decode($1,'hex')`, hashes[4])
 				require.NotEqual(t, hashes[4], item.(map[string]any)["infoHash"])
 			}
 			for _, i := range []int{1, 2, 3, 4} {
-				data = graphqlRequest(engine, fmt.Sprintf(`{torrent{files(input:{infoHashes:["%s"],totalCount:true}){totalCount items{path}}} torrentContent{search(input:{infoHashes:["%s"],totalCount:true,aggregationBudget:0}){totalCount items{infoHash}}}}`, hashes[i], hashes[i]))
+				data = graphqlRequest(engine, fmt.Sprintf(`{torrent{files(input:{infoHashes:["%s"],totalCount:true}){totalCount items{path}}} torrentContent{search(input:{infoHashes:["%s"],totalCount:true,aggregationBudget:5000}){totalCount items{infoHash}}}}`, hashes[i], hashes[i]))
 				wantVisible := !enabled && i != 4
 				n := float64(0)
 				if wantVisible {
@@ -338,7 +338,7 @@ FROM torrents t WHERE info_hash=decode($1,'hex')`, hashes[4])
 	require.Zero(t, quarantines)
 	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM queue_jobs WHERE queue='process_torrent'`).Scan(&queued))
 	require.Equal(t, 1, queued)
-	data := graphqlRequest(engine, fmt.Sprintf(`{torrentContent{search(input:{infoHashes:["%s"],totalCount:true,aggregationBudget:0}){totalCount items{infoHash torrent{name}}}}}`, hashes[4]))
+	data := graphqlRequest(engine, fmt.Sprintf(`{torrentContent{search(input:{infoHashes:["%s"],totalCount:true,aggregationBudget:5000}){totalCount items{infoHash torrent{name}}}}}`, hashes[4]))
 	require.Equal(t, float64(1), data["torrentContent"].(map[string]any)["search"].(map[string]any)["totalCount"])
 	require.True(t, strings.HasPrefix(data["torrentContent"].(map[string]any)["search"].(map[string]any)["items"].([]any)[0].(map[string]any)["torrent"].(map[string]any)["name"].(string), "NativeRecrawledFixture"))
 }

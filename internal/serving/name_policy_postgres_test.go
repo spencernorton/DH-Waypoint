@@ -82,7 +82,7 @@ INSERT INTO torrent_tags(info_hash,name,created_at,updated_at) VALUES($1,$3,now(
 	require.NoError(t, gqlhttp.New(gqlhttp.Params{Schema: lazy.New(func() (graphql.ExecutableSchema, error) { return es, nil })}).Option.Apply(engine))
 	client := adapter.NewWithFilters(consumer, nil, false, nil, adapter.FreshnessConfig{})
 	require.NoError(t, torznabhttp.New(lazy.New(func() (torznab.Client, error) { return client, nil }), torznab.NewDefaultConfig(), nil).Apply(engine))
-	body, _ := json.Marshal(map[string]string{"query": `{torrentContent{search(input:{limit:32,totalCount:true,aggregationBudget:0}){totalCount items{infoHash torrent{name}}}}}`})
+	body, _ := json.Marshal(map[string]string{"query": `{torrentContent{search(input:{limit:32,totalCount:true,aggregationBudget:5000}){totalCount items{infoHash torrent{name}}}}}`})
 	req := httptest.NewRequest(http.MethodPost, "/graphql", bytes.NewReader(body)).WithContext(ctx)
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
