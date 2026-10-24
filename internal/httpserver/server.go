@@ -49,8 +49,10 @@ func New(p Params) Result {
 						}
 					}
 					s = &http.Server{
-						Addr:    p.Config.LocalAddress,
-						Handler: g.Handler(),
+						Addr:              p.Config.LocalAddress,
+						Handler:           g.Handler(),
+						ReadHeaderTimeout: 10 * time.Second,
+						IdleTimeout:       60 * time.Second,
 					}
 					ln, listenErr := net.Listen("tcp", s.Addr)
 					if listenErr != nil {

@@ -13,6 +13,28 @@ DH-Waypoint exposes a GraphQL endpoint at `:3333/graphql`. The schema is generat
 
 Use curl or a separate GraphQL client with JSON POST requests.
 
+Requests require `Content-Type: application/json`; multipart forms and WebSocket
+upgrades are unsupported. The endpoint has a 1 MiB body limit, a 64 KiB query
+document limit and a 10,000-token parser limit. Operations allow at most 1,000
+expanded selections, 20 levels of selection/fragment nesting and 32 fields on
+query or mutation service objects. Repeated fragment spreads count toward the
+same budget, including for cached and persisted operations.
+
+Paged inputs accept `limit` from 0 to 1,000. Input lists contain at most 1,000
+entries, `queryString` is at most 4,096 bytes and an explicit
+`aggregationBudget` is from 1 to 5,000 planner-cost units. Split larger bulk
+operations and paginate results. Rejected operations return an error with code
+`OPERATION_LIMIT_EXCEEDED` before any resolver runs; parser/schema failures
+retain their normal GraphQL errors. An oversized body returns HTTP 413 and an
+unsupported content type returns HTTP 415.
+
+GraphQL and REST v1 catalogue requests give downstream work a 30-second context
+deadline, with up to 10 seconds to read the body and 5 additional seconds to
+write the response. Disconnects and earlier client-context deadlines still
+cancel cooperative database work. These are per-request limits; operators
+should also bound concurrent requests at their proxy. The separate streaming
+import endpoint retains its streaming behavior.
+
 ## Top-level Query fields
 
 | Field | Type | Purpose |

@@ -1,6 +1,9 @@
 # Security model and hardening
 
-DH-Waypoint's HTTP server has no opinion about authentication. It trusts whoever connects. Every security control in this document is either an env var that DH-Waypoint does honour, or a network/proxy layer that you put in front of it.
+DH-Waypoint offers optional API keys and independently authenticated processor,
+private-torrent and evidence endpoints. When the general HTTP key is unset,
+GraphQL (including mutations), REST, import and metrics trust their network.
+Use the built-in credentials and network/proxy controls described below.
 
 This page is the operator's reference for how to deploy DH-Waypoint without making yourself the next obvious target.
 
@@ -39,6 +42,18 @@ Use only on a tailnet, ZeroTier, LAN, or container-network-only deployment. DH-W
 - `HTTP_SERVER_API_KEY` — gates `/graphql`, `/import`, `/metrics` and `/api/v1/*` (`Authorization: Bearer` or `X-API-Key`, constant-time compare). Surfaces with their own credentials (Torznab, tracker, processors, private API, evidence) are not double-gated; `/status` stays public.
 - `TORZNAB_API_KEY` — gates `/torznab/api` (constant-time compare; timing-safe). Required when the `*arr` clients are on a different host or network than DH-Waypoint.
 - `EVIDENCE_WEBHOOK_SECRET` — gates `/evidence/arr/*` (compared against the `X-Evidence-Token` header on each webhook).
+
+The general HTTP key grants the full GraphQL mutation surface. It is an
+operator credential; do not distribute it as a read-only or processor-specific
+credential. Processor administration has its own token. No per-plugin
+authorization scopes are implied by a plugin registration.
+
+GraphQL accepts only JSON POST bodies. Its byte, parser, selection, paging and
+input-list bounds are documented in the [GraphQL reference](../reference/graphql-api.md).
+Catalogue requests have a 30-second context deadline and bounded socket I/O;
+the server also bounds header reads to 10 seconds and idle keep-alive connections
+to 60 seconds. These controls complement authentication and proxy concurrency
+limits. They do not turn a trusted-network installation into a public service.
 
 Generate keys with at least 256 bits of entropy:
 

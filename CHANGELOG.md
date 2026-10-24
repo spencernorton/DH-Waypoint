@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Bound GraphQL body/document/parser work, expanded selections and aliases,
+  page sizes, input lists and caller-selected count budgets before resolvers
+  run, including cached/persisted operations. GraphQL accepts JSON POST only.
+  GraphQL and REST catalogue work now inherits a 30-second context deadline
+  with bounded socket reads/writes; header and idle timeouts protect the HTTP
+  listener while separate streaming imports retain their existing behavior.
+
 ## 5.7.0 — 2026-10-24
 
 - GraphQL torrent search accepts `contentIdentity: {type, source, id}` to
