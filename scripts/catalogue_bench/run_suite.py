@@ -26,7 +26,11 @@ p.add_argument("--cold-samples",type=int,default=10)
 p.add_argument("--skip-seed",action="store_true")
 p.add_argument("--variants",default="baseline,candidate")
 p.add_argument("--disk-path",default=".")
+p.add_argument("--cold-only",action="store_true")
+p.add_argument("--cold-cases",default="hash,identity_rare,external_keyset,type_browse")
 args=p.parse_args()
+if args.cold_only and not args.skip_seed:
+    p.error('--cold-only requires --skip-seed and an already qualified fixture')
 out=Path(args.out).resolve()
 out.mkdir(parents=True,exist_ok=True)
 root=Path(__file__).resolve().parent
@@ -80,7 +84,8 @@ def start_database():
 for size in [int(x) for x in args.sizes.split(',')]:
     if size>32000000:
         raise SystemExit("size outside qualified workload bounds")
-    run(f"{size}-remove-candidates","indexes","--variant","baseline")
+    if not args.cold_only:
+        run(f"{size}-remove-candidates","indexes","--variant","baseline")
     if not args.skip_seed:
         run(f"{size}-seed","seed","--rows",str(size),"--workers","4","--disposable")
     with bench.connect(os.environ['CATALOGUE_BENCH_DSN']) as conn:
@@ -88,12 +93,15 @@ for size in [int(x) for x in args.sizes.split(',')]:
         if conn.execute("SELECT count(*) FROM torrents").fetchone()[0]!=size:
             raise SystemExit("fixture row count does not equal requested scale")
     for variant in args.variants.split(','):
-        if variant not in ["baseline","candidate"]:
+        if variant not in ["baseline","candidate","selected"]:
             raise SystemExit("invalid variant")
-        run(f"{size}-{variant}-indexes","indexes","--variant",variant)
-        run(f"{size}-{variant}-warm","run","--variant",variant,"--samples",str(args.samples))
-        run(f"{size}-{variant}-concurrent","run","--variant",variant,"--samples",str(args.samples),"--workers","4","--updates","--ingest")
-        for case in ["hash","identity_rare","external_keyset","type_browse"]:
+        if not args.cold_only:
+            run(f"{size}-{variant}-indexes","indexes","--variant",variant)
+            run(f"{size}-{variant}-warm","run","--variant",variant,"--samples",str(args.samples))
+            run(f"{size}-{variant}-concurrent","run","--variant",variant,"--samples",str(args.samples),"--workers","4","--updates","--ingest")
+        for case in args.cold_cases.split(','):
+            if case not in bench.cases(size):
+                raise SystemExit('unknown cold query case')
             for sample in range(args.cold_samples):
                 subprocess.run(["docker","stop","--time","30",args.container],check=True,stdout=subprocess.DEVNULL)
                 try:
@@ -103,7 +111,11 @@ for size in [int(x) for x in args.sizes.split(',')]:
                     start_database()
                 run(f"{size}-{variant}-cold-{case}-{sample}","run","--variant",variant,
                     "--samples","1","--cache-state","first_touch","--cases",case,"--rows",str(size))
-        run(f"{size}-{variant}-reindex","reindex","--variant",variant)
+        if not args.cold_only:
+            run(f"{size}-{variant}-reindex","reindex","--variant",variant)
+    if args.cold_only:
+        bench.emit(out/'suite.jsonl',{'kind':'cold_complete','rows':size,'cases':args.cold_cases.split(',')})
+        continue
     with bench.connect(os.environ["CATALOGUE_BENCH_DSN"]) as conn:
         conn.execute("SET statement_timeout=180000")
         before=conn.execute("SELECT count(*) FROM torrents").fetchone()[0]
