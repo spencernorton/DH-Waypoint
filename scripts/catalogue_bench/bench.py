@@ -100,6 +100,14 @@ ELIGIBLE = """EXISTS (SELECT 1 FROM torrents t WHERE t.info_hash=tc.info_hash AN
  WHERE serving_tc.info_hash=tc.info_hash AND (serving_tc.content_type='xxx' OR c.adult IS TRUE))"""
 
 
+def raw_serving_policy():
+    # Actual raw serving checks its own private field directly. Preserve the
+    # original 25-case reduced-policy experiment, and use this for v2 probes.
+    return ELIGIBLE.replace('=tc.info_hash','=raw.info_hash').replace(
+        'EXISTS (SELECT 1 FROM torrents t WHERE t.info_hash=raw.info_hash AND NOT t.private)',
+        'NOT raw.private',1)
+
+
 def emit(path, obj):
     obj = {"at": time.time(), **obj}
     with Path(path).open("a") as f:
@@ -287,8 +295,8 @@ def cases(rows):
     queries['enriched_bounded_fallback']+="UNION ALL (SELECT tc.id,tc.info_hash,tc.published_at FROM torrent_contents tc "
     queries['enriched_bounded_fallback']+=f"WHERE tc.content_id IS NULL AND ({text}) AND {ELIGIBLE} ORDER BY {ORDER} LIMIT 100)) all_candidates ORDER BY {ORDER} LIMIT 100"
     raw_policy=ELIGIBLE.replace('=tc.info_hash','=raw.info_hash')
-    def raw_page(predicate):
-        return f"SELECT encode(raw.info_hash,'hex') AS id,raw.info_hash FROM torrents raw WHERE ({predicate}) AND {raw_policy} ORDER BY raw.info_hash LIMIT 100"
+    def raw_page(predicate,policy=raw_policy):
+        return f"SELECT encode(raw.info_hash,'hex') AS id,raw.info_hash FROM torrents raw WHERE ({predicate}) AND {policy} ORDER BY raw.info_hash LIMIT 100"
     queries['raw_text_hot']=raw_page("raw.tsv @@ 'title1'::tsquery")
     queries['raw_text_rare']=raw_page("raw.tsv @@ 'title123456'::tsquery")
     queries['raw_text_miss']=raw_page("raw.tsv @@ 'unfindabletoken'::tsquery")
@@ -299,7 +307,9 @@ def cases(rows):
                       'miss':'unfindabletoken','wildcard':'title_%'}.items():
         escaped=term.replace('\\','\\\\').replace('%','\\%').replace('_','\\_')
         literal=psycopg.sql.Literal('%'+escaped+'%').as_string()
-        queries['raw_substring_'+name]=raw_page('raw.name ILIKE '+literal).replace('LIMIT 100','LIMIT 101')
+        queries['raw_substring_'+name]=raw_page('raw.name ILIKE '+literal,raw_serving_policy()).replace('LIMIT 100','LIMIT 101')
+    queries['raw_v2_keyset']=raw_page("raw.info_hash>decode('8000000000000000000000000000000000000000','hex')",
+                                     raw_serving_policy()).replace('LIMIT 100','LIMIT 101')
     return queries
 
 
@@ -340,6 +350,8 @@ def verify_page(conn,args,name,result):
             raise RuntimeError("wrong episode or pack")
     if name in ['text_miss','raw_text_miss'] and result:
         raise RuntimeError("miss returned results")
+    if name=='raw_v2_keyset' and (hashes!=sorted(hashes) or any(h<=bytes.fromhex('80'+'00'*19) for h in hashes)):
+        raise RuntimeError('wrong raw v2 cursor ordering or boundary')
     if name.startswith('raw_substring_'):
         if name in ['raw_substring_miss','raw_substring_wildcard'] and result:
             raise RuntimeError('literal substring miss returned results')
@@ -478,7 +490,7 @@ def run(conn,args):
     else:
         # Preserve the original 25-case mix across all three main scales.
         # The subsequently merged v2 API gets an explicit supplemental profile.
-        queries={k:v for k,v in queries.items() if not k.startswith('raw_substring_')}
+        queries={k:v for k,v in queries.items() if not k.startswith(('raw_substring_','raw_v2_'))}
     # Resolve cursor outside measurement; fetching an anchor is not part of the keyset request.
     if "keyset" in queries:
         anchor_start=time.perf_counter()

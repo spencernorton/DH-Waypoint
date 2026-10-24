@@ -156,7 +156,10 @@ an unclassified row; it needs a separate text fallback or subsequent enrichment.
 Statement timeout is five seconds for measured queries. A timed-out case is
 recorded and remaining samples of that case are skipped; timeouts are never
 converted into fast empty results or included as successful latency samples.
-Complete correctness scans have a separate 180-second budget. Quantiles use
+Complete correctness scans have a separate budget, increased from 180 to 600
+seconds for the 32M validation. Each full set is materialized once and compared
+both ways; it is checked before the warm profile, separately from concurrent
+timing. Quantiles use
 nearest rank and preserve sample counts and failures. Thirty warm observations
 and ten cold observations have limited tail resolution; p99 is effectively the
 slowest observation at these sample sizes.

@@ -34,6 +34,7 @@ manifests=[]
 complete=set()
 inventory=[]
 stages=[]
+prepared=[]
 
 
 def key(row):
@@ -45,6 +46,7 @@ for file in files:
     label=labels[file]
     inventory.append({"name":label,"sha256":hashlib.sha256(file.read_bytes()).hexdigest(),"bytes":file.stat().st_size})
     context={}
+    prepared_variant=None
     reader=gzip.open if file.suffix=='.gz' else open
     with reader(file,'rt') as source:
         for line in source:
@@ -75,7 +77,10 @@ for file in files:
             elif kind=='crash_recovery':recovery.append(row)
             elif kind in ['correctness','page_correctness','authority_check','raw_without_projection']:
                 correctness.append({"file":label,**row})
-            elif kind in ['manifest','prepared_manifest']:manifests.append(row)
+            elif kind in ['manifest','prepared_manifest','supplement_manifest']:
+                manifests.append(row)
+                if kind=='prepared_manifest':prepared_variant=row['variant']
+            elif kind=='prepared_counters':prepared.append({'file':label,'variant':prepared_variant,**row})
             elif kind=='scale_complete':complete.add(row['rows'])
             elif kind in ['stage_start','stage_end']:stages.append({'file':label,**row})
 
@@ -95,6 +100,7 @@ result={"format":1,"quantile_method":"nearest rank; successes only; failures/ski
   "completed_scales":sorted(complete),"manifests":manifests,"latencies":latencies,
   "storage":storage,"concurrent_writes":writes,"index_operations":indexes,"reindex":reindex,"recovery":recovery,
   "correctness":correctness,"stages":stages,"raw_files":inventory,
+  "prepared_plan_counters":prepared,
   "limits":["SQL microbenchmark; no HTTP serialization or complete production schema",
             "20-byte synthetic hashes; stated skew and file distribution",
             "30 warm and 10 selected cold samples give limited p99 resolution",
