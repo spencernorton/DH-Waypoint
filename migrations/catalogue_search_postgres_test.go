@@ -42,9 +42,13 @@ func TestCatalogueSearchIndexesUpDown(t *testing.T) {
 CREATE TABLE torrent_contents (id text PRIMARY KEY, info_hash bytea NOT NULL,
  content_type text, published_at timestamptz NOT NULL);
 CREATE INDEX existing_published_idx ON torrent_contents(published_at);
+CREATE TABLE torrents (info_hash bytea PRIMARY KEY, name text NOT NULL,
+ tsv tsvector GENERATED ALWAYS AS (to_tsvector('simple',name)) STORED);
+CREATE INDEX torrents_tsv_idx ON torrents(tsv);
 CREATE TABLE content_attributes (source text, value text, content_type text,
  content_source text, content_id text, key text);
 INSERT INTO torrent_contents VALUES ('synthetic',decode(repeat('ab',32),'hex'),'movie',now());
+INSERT INTO torrents(info_hash,name) VALUES (decode(repeat('ab',32),'hex'),'Synthetic title');
 INSERT INTO content_attributes VALUES ('imdb','tt123','movie','synthetic','123','id');`)
 	require.NoError(t, err)
 	const filename = "00072_catalogue_search_indexes.sql"
@@ -64,6 +68,10 @@ INSERT INTO content_attributes VALUES ('imdb','tt123','movie','synthetic','123',
  'torrent_contents_type_published_page_idx','content_attributes_identifier_lookup_idx')`).Scan(&valid)
 		require.NoError(t, err)
 		require.Equal(t, 3, valid)
+		var removed bool
+		err = db.QueryRowContext(ctx, `SELECT to_regclass('torrents_tsv_idx') IS NULL`).Scan(&removed)
+		require.NoError(t, err)
+		require.True(t, removed)
 		_, err = provider.Down(ctx)
 		require.NoError(t, err)
 		var remaining, torrents, attributes int
@@ -71,8 +79,14 @@ INSERT INTO content_attributes VALUES ('imdb','tt123','movie','synthetic','123',
  (SELECT count(*) FROM pg_indexes WHERE schemaname=current_schema()),
  (SELECT count(*) FROM torrent_contents),(SELECT count(*) FROM content_attributes)`).Scan(&remaining, &torrents, &attributes)
 		require.NoError(t, err)
-		require.Equal(t, 3, remaining) // torrent PK, original published index, Goose version PK
+		require.Equal(t, 5, remaining) // content/raw PKs, original published/TSV indexes, Goose PK
 		require.Equal(t, 1, torrents)
 		require.Equal(t, 1, attributes)
+		var restored bool
+		err = db.QueryRowContext(ctx, `SELECT i.indisvalid AND i.indisready AND am.amname='btree'
+ FROM pg_index i JOIN pg_class c ON c.oid=i.indexrelid JOIN pg_am am ON am.oid=c.relam
+ WHERE c.oid=to_regclass('torrents_tsv_idx')`).Scan(&restored)
+		require.NoError(t, err)
+		require.True(t, restored)
 	}
 }

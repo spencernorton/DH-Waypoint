@@ -107,7 +107,9 @@ outside a transaction. Concurrent construction still consumes I/O and disk,
 and can wait for old transactions. A failed build may leave an invalid index;
 inspect validity and remove that failed index before retrying the migration.
 Qualify build time, temporary headroom and ingestion impact on a restored
-catalogue before rollout. Existing indexes and historical migrations stay intact.
+catalogue before rollout. It removes the historical raw `torrents.tsv` B-tree,
+which cannot serve `@@` and is not used by raw v2's `ILIKE` query. Rollback
+restores that B-tree. Historical migration files stay intact.
 
 Published content pages use `(published_at, info_hash, id)`. `id` distinguishes
 several content rows belonging to the same torrent. A deterministic order fixes

@@ -123,8 +123,9 @@ tested by the Go integration suite.
 Raw text and enrichment-assisted fallback queries must produce the same complete
 eligible set. Unknown mappings remain text candidates. The bounded fallback
 first applies eligibility, then takes the top 100 of each disjoint branch and
-merges the candidates. Its first page must exactly equal the raw text page in
-both membership and order. A candidate without accepted mapping is not certified
+merges the candidates. Its first page must exactly equal the unassisted
+content-name text page in both membership and published order. Raw v2 uses a
+different hash order and literal substring semantics. A candidate without accepted mapping is not certified
 as a canonical identity. An ID-only API request cannot establish the identity of
 an unclassified row; it needs a separate text fallback or subsequent enrichment.
 
