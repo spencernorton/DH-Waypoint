@@ -77,7 +77,7 @@ for file in files:
                 correctness.append({"file":label,**row})
             elif kind in ['manifest','prepared_manifest']:manifests.append(row)
             elif kind=='scale_complete':complete.add(row['rows'])
-            elif kind in ['stage_start','stage_end']:stages.append(row)
+            elif kind in ['stage_start','stage_end']:stages.append({'file':label,**row})
 
 
 def quantile(values,q):
