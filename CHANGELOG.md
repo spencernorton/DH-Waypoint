@@ -38,6 +38,12 @@
   as well as dependency names; enforce the adapter's public-contract boundary.
 
 
+- Metadata peer requests can dial IPv4 and IPv6 addresses and close connected
+  sockets promptly on context cancellation, retaining their overall deadline
+  and existing metadata checks. Synthetic peers exercise the complete exchange
+  on both families. The protocol applicability ledger distinguishes this
+  transport support from remaining IPv6 DHT, uTP, MSE/PE and holepunch work.
+
 - Add algorithm-aware torrent identity and bounded BEP 52 metadata validation
   foundations, including verified hybrid layouts, original-info-byte hashing,
   v2 piece-layer checks and full SHA-256 magnet helpers. Runtime integration
