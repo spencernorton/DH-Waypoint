@@ -604,11 +604,13 @@ def run(conn,args):
 
 def indexes(conn,args):
     conn.execute("SET statement_timeout=0")
-    if args.variant=='selected':
+    if args.variant in ['selected','retained']:
         # Qualify the compact serving set separately: the raw B-tree cannot
         # implement @@, and current episode predicates do not use whole-JSON GIN.
         conn.execute('CREATE EXTENSION IF NOT EXISTS pg_trgm WITH SCHEMA public')
-        statements=[sql for sql in CANDIDATE_INDEXES if not any(x in sql for x in ['tc_episodes_gin','raw_tsv_gin'])]
+        excluded=['tc_episodes_gin','raw_tsv_gin']
+        if args.variant=='retained':excluded+=['tc_page','tc_type_page']
+        statements=[sql for sql in CANDIDATE_INDEXES if not any(x in sql for x in excluded)]
         statements.append(RAW_SUBSTRING_INDEX)
         statements.append(IDENTITY_PAGE_INDEX)
         for sql in statements:
@@ -616,7 +618,9 @@ def indexes(conn,args):
             statement=sql.replace('CREATE INDEX ','CREATE INDEX CONCURRENTLY IF NOT EXISTS ')
             conn.execute(statement)
             emit(args.out,{"kind":"index_change","variant":args.variant,"sql":statement,"seconds":time.perf_counter()-start})
-        for name in ['raw_tsv_btree','raw_tsv_gin','tc_episodes_gin']:
+        removed=['raw_tsv_btree','raw_tsv_gin','tc_episodes_gin']
+        if args.variant=='retained':removed+=['tc_page','tc_type_page']
+        for name in removed:
             start=time.perf_counter()
             statement='DROP INDEX CONCURRENTLY IF EXISTS '+name
             conn.execute(statement)
@@ -651,7 +655,7 @@ def main():
     p.add_argument("--updates",action="store_true")
     p.add_argument("--ingest",action="store_true",help="append real synthetic torrent/file transactions during updates, then remove that tail")
     p.add_argument("--disposable",action="store_true")
-    p.add_argument("--variant",choices=["baseline","candidate","selected"],default="baseline")
+    p.add_argument("--variant",choices=["baseline","candidate","selected","retained"],default="baseline")
     p.add_argument("--cache-state",choices=["warm","first_touch"],default="warm")
     p.add_argument("--cases")
     p.add_argument("--disk-path",default=".")
