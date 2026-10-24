@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"
@@ -336,6 +337,36 @@ func TestPostgresUpgradeRollbackCancellationAndBackpressure(t *testing.T) {
 	n, e = s.Scan(testContext)
 	require.NoError(t, e)
 	require.Zero(t, n)
+}
+
+func TestLockedSourceBoundsTableLockWait(t *testing.T) {
+	s, p, _ := fixture(t)
+	h := seedTorrent(t, p, 41, "movie")
+	writer, e := p.Begin(testContext)
+	require.NoError(t, e)
+	defer rollback(writer)
+	_, e = writer.Exec(testContext, `LOCK TABLE torrent_tags IN ROW EXCLUSIVE MODE`)
+	require.NoError(t, e)
+	tx, e := s.begin(testContext)
+	require.NoError(t, e)
+	defer rollback(tx)
+	bounded, cancel := context.WithTimeout(testContext, 10*time.Second)
+	defer cancel()
+	start := time.Now()
+	_, _, e = readSource(bounded, tx, h, true)
+	var pgErr *pgconn.PgError
+	require.ErrorAs(t, e, &pgErr)
+	require.Equal(t, "55P03", pgErr.Code)
+	require.Less(t, time.Since(start), 5*time.Second)
+	rollback(writer)
+	locked, e := s.begin(testContext)
+	require.NoError(t, e)
+	defer rollback(locked)
+	_, _, e = readSource(testContext, locked, h, true)
+	require.NoError(t, e)
+	var timeout string
+	require.NoError(t, locked.QueryRow(testContext, `SHOW lock_timeout`).Scan(&timeout))
+	require.Equal(t, "0", timeout)
 }
 
 // Keep generated model codecs exercised in the source snapshot path.
