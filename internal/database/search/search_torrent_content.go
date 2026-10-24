@@ -34,7 +34,8 @@ func (s search) TorrentContentByIdentifiers(ctx context.Context, refs []model.Co
 	if len(refs) == 0 || len(refs) == 1 && refs[0].Source == model.SourceTmdb {
 		return s.TorrentContent(ctx, options...)
 	}
-	// The lookup and page share one bounded snapshot. Concurrent alias changes
+	// The lookup and page share one read snapshot under the caller's context.
+	// Concurrent alias changes
 	// cannot turn a pre-resolved key into an omitted or misidentified result.
 	db := s.q.TorrentContent.WithContext(ctx).UnderlyingDB().Session(&gorm.Session{NewDB: true})
 	err = db.Transaction(func(tx *gorm.DB) error {

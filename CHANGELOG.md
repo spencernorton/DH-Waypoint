@@ -23,6 +23,8 @@
   multiple-ID alternatives, caller cancellation and serving checks before pagination; raw v2
   substring indexing remains in migration 00071. Rollback removes only the two
   new indexes and preserves the current raw schema and existing downgrade holds.
+- Torznab forwards HTTP request cancellation and deadlines to catalogue search,
+  including external-identifier lookup and nested result hydration.
 
 - REST search returns `total_count_is_estimate` alongside `total_count`, so
   clients can distinguish an approximate total from an exact count. The flag
