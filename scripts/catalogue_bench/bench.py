@@ -31,6 +31,7 @@ INSERT INTO sentinel VALUES ('synthetic-catalogue-v1');
 CREATE TABLE torrents (
  n bigint UNIQUE NOT NULL, info_hash bytea PRIMARY KEY, name text NOT NULL,
  size bigint NOT NULL, private boolean NOT NULL, files_count int NOT NULL,
+ tsv tsvector GENERATED ALWAYS AS (to_tsvector('simple',name)) STORED,
  created_at timestamptz NOT NULL
 );
 CREATE TABLE content (
@@ -69,6 +70,7 @@ CREATE TABLE quarantined (info_hash bytea PRIMARY KEY REFERENCES torrents(info_h
 
 # These model existing serving-query indexes, not every historical schema index.
 BASE_INDEXES = [
+ "CREATE INDEX raw_tsv_btree ON torrents(tsv)",
  "CREATE INDEX tc_hash ON torrent_contents(info_hash)",
  "CREATE INDEX tc_type ON torrent_contents(content_type)",
  "CREATE INDEX tc_source_id ON torrent_contents(content_source,content_id)",
@@ -79,6 +81,7 @@ BASE_INDEXES = [
  "(coalesce(seeders,-1)) DESC,info_hash) WHERE content_id IS NOT NULL",
 ]
 CANDIDATE_INDEXES = [
+ "CREATE INDEX raw_tsv_gin ON torrents USING gin(tsv)",
  "CREATE INDEX tc_type_page ON torrent_contents(content_type,published_at DESC,info_hash DESC,id DESC)",
  "CREATE INDEX tc_page ON torrent_contents(published_at DESC,info_hash DESC,id DESC)",
  "CREATE INDEX tc_episodes_gin ON torrent_contents USING gin(episodes)",
@@ -145,6 +148,8 @@ def seed(conn, args):
         conn.execute(DDL)
     if conn.execute("SELECT format FROM sentinel").fetchall() != [("synthetic-catalogue-v1",)]:
         raise RuntimeError("unrecognized fixture")
+    # Permit an earlier fixture to acquire the same raw FTS column as core.
+    conn.execute("ALTER TABLE torrents ADD COLUMN IF NOT EXISTS tsv tsvector GENERATED ALWAYS AS (to_tsvector('simple',name)) STORED")
     # Universe independent of requested scale; identities remain stable as it grows.
     conn.execute("""INSERT INTO content SELECT CASE WHEN n%3=0 THEN 'movie' ELSE 'tv_show' END,
       'synthetic',n::text,'Synthetic title'||n,(n%101=0)
@@ -176,7 +181,7 @@ def seed_range(conn,args,start,end):
         raise RuntimeError("disk reserve reached during seed")
     t0 = time.perf_counter()
     with conn.transaction():
-        bound(conn, f"""INSERT INTO torrents
+        bound(conn, f"""INSERT INTO torrents(n,info_hash,name,size,private,files_count,created_at)
           SELECT n,decode(md5('synthetic-'||n)||substr(md5('tail-'||n),1,8),'hex'),
             'Synthetic title'||family||' release'||n%4096||' season'||n%10||
             ' episode'||n%24||' resolution'||CASE WHEN n%8=0 THEN 2160 ELSE 1080 END||' group'||n%127,
@@ -265,6 +270,13 @@ def cases(rows):
     queries['enriched_bounded_fallback']+=f"SELECT tc.id,tc.info_hash,tc.published_at FROM torrent_contents tc WHERE ({identity}) AND {ELIGIBLE} ORDER BY {ORDER} LIMIT 100) "
     queries['enriched_bounded_fallback']+="UNION ALL (SELECT tc.id,tc.info_hash,tc.published_at FROM torrent_contents tc "
     queries['enriched_bounded_fallback']+=f"WHERE tc.content_id IS NULL AND ({text}) AND {ELIGIBLE} ORDER BY {ORDER} LIMIT 100)) all_candidates ORDER BY {ORDER} LIMIT 100"
+    raw_policy=ELIGIBLE.replace('=tc.info_hash','=raw.info_hash')
+    def raw_page(predicate):
+        return f"SELECT encode(raw.info_hash,'hex') AS id,raw.info_hash FROM torrents raw WHERE ({predicate}) AND {raw_policy} ORDER BY raw.info_hash LIMIT 100"
+    queries['raw_text_hot']=raw_page("raw.tsv @@ 'title1'::tsquery")
+    queries['raw_text_rare']=raw_page("raw.tsv @@ 'title123456'::tsquery")
+    queries['raw_text_miss']=raw_page("raw.tsv @@ 'unfindabletoken'::tsquery")
+    queries['raw_keyset']=raw_page("raw.info_hash>decode('8000000000000000000000000000000000000000','hex')")
     return queries
 
 
@@ -289,9 +301,9 @@ def verify_page(conn,args,name,result):
             raise RuntimeError(f"wrong canonical identity from {name}")
         if name in ['identity_rare','external_correlated','external_identifier','external_keyset'] and not (family==123456 and trusted):
             raise RuntimeError(f"wrong rare or external identity from {name}")
-        if name in ['text_hot','enriched_with_fallback','enriched_bounded_fallback'] and family!=1:
+        if name in ['text_hot','raw_text_hot','enriched_with_fallback','enriched_bounded_fallback'] and family!=1:
             raise RuntimeError(f"wrong text candidate from {name}")
-        if name=='text_rare' and family!=123456:
+        if name in ['text_rare','raw_text_rare'] and family!=123456:
             raise RuntimeError("wrong rare text candidate")
         if name=='type_browse' and not (trusted and family%3==0):
             raise RuntimeError("wrong movie type")
@@ -301,7 +313,7 @@ def verify_page(conn,args,name,result):
             raise RuntimeError("wrong season")
         if name.startswith('episode_') and not (n%10==3 and (n%11==0 or n%24==3)):
             raise RuntimeError("wrong episode or pack")
-    if name=='text_miss' and result:
+    if name in ['text_miss','raw_text_miss'] and result:
         raise RuntimeError("miss returned results")
     emit(args.out,{"kind":"page_correctness","case":name,"checked":len(result),"failures":0})
 
@@ -328,6 +340,24 @@ def correctness(conn,args,queries):
         raise RuntimeError("bounded fallback changed page or ordering")
     emit(args.out,{"kind":"correctness","left":"text_hot","right":"enriched_bounded_fallback",
                    "page_equal":True,"differences":0})
+    left=queries['text_hot'].rsplit(' ORDER BY ',1)[0]
+    right=queries['raw_text_hot'].rsplit(' ORDER BY ',1)[0]
+    delta=conn.execute(f"SELECT count(*) FROM ((SELECT info_hash FROM ({left}) a EXCEPT SELECT info_hash FROM ({right}) b) "
+                       f"UNION ALL (SELECT info_hash FROM ({right}) b EXCEPT SELECT info_hash FROM ({left}) a)) difference").fetchone()[0]
+    emit(args.out,{"kind":"correctness","left":"content_name_fts","right":"raw_torrent_name_fts","differences":delta})
+    if delta:
+        raise RuntimeError("raw and content name indexes disagree")
+    if args.rows>=198:
+        # Temporarily remove one unclassified projection. Raw catalogue search
+        # must still work without waiting for any processor to create that row.
+        raw_policy=ELIGIBLE.replace('=tc.info_hash','=raw.info_hash')
+        with conn.transaction():
+            conn.execute("DELETE FROM torrent_contents WHERE info_hash=(SELECT info_hash FROM torrents WHERE n=198)")
+            visible=conn.execute(f"SELECT count(*) FROM torrents raw WHERE raw.n=198 AND {raw_policy}").fetchone()[0]
+            if visible!=1:
+                raise RuntimeError("raw record lost without content projection")
+            raise psycopg.Rollback()
+        emit(args.out,{"kind":"raw_without_projection","visible":1})
     # Correctness is assessed while ingestion is stopped, on a stable snapshot.
     unsafe=conn.execute("""SELECT count(*) FROM torrent_contents tc JOIN annotations a USING(info_hash)
       WHERE tc.content_id IS NOT NULL AND (a.source_revision<>a.current_revision OR a.confidence<0.9
@@ -448,7 +478,8 @@ def run(conn,args):
             emit(args.out,{"kind":"plan","rows":rows,"variant":args.variant,"case":name,"plan":plan})
         except psycopg.Error as err:
             emit(args.out,{"kind":"plan_error","case":name,"sqlstate":err.sqlstate})
-    storage(conn,args)
+    if args.cache_state!='first_touch':
+        storage(conn,args)
 
 
 def indexes(conn,args):
