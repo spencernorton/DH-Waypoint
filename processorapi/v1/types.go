@@ -26,7 +26,9 @@ const (
 	DriverBuiltinFilter   = "builtin/filter-list"
 	DriverBuiltinRegex    = "builtin/regex-weights"
 	DriverBuiltinLiveness = "builtin/tracker-liveness"
-	DriverBuiltinLLM      = "builtin/llm"
+	// DriverBuiltinLLM is retained only to identify retired registrations.
+	// Deprecated: register a separate HTTP processor service instead.
+	DriverBuiltinLLM = "builtin/llm"
 )
 
 var Drivers = []string{
@@ -34,7 +36,6 @@ var Drivers = []string{
 	DriverBuiltinFilter,
 	DriverBuiltinRegex,
 	DriverBuiltinLiveness,
-	DriverBuiltinLLM,
 }
 
 const (
@@ -88,7 +89,8 @@ func (s *Selector) IsEmpty() bool {
 		s.SampleBasisPoints == nil
 }
 
-// LearningConfig controls bi-directional feedback routing and online calibration.
+// LearningConfig controls bidirectional feedback routing. Learning algorithms
+// and model state belong to the external processor, never to the core.
 type LearningConfig struct {
 	Enabled       bool     `json:"enabled"`
 	Mode          string   `json:"mode,omitempty"` // disabled, log_only, online_calibrate, accumulate_batch

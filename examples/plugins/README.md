@@ -16,8 +16,8 @@ the results (`dh-waypoint plugin list`, the processors status API, or
 | `01-filter-list.plugin.yml` | `builtin/filter-list` | Exclude releases by name pattern, extension, group, or size |
 | `02-categories-regex.plugin.yml` | `builtin/regex-weights` | Stamp content type / resolution / tags from weighted name rules |
 | `03-tracker-liveness.plugin.yml` | `builtin/tracker-liveness` | Tag or exclude swarms by tracker-observed seeders |
-| `04-llm-local-ollama.plugin.yml` | `builtin/llm` | Classify with a local Ollama model |
-| `05-llm-hosted.plugin.yml` | `builtin/llm` | Classify with a hosted OpenAI-compatible API |
+| `04-llm-local-ollama.plugin.yml` | `http` | Independent adapter for local OpenAI-compatible inference |
+| `05-llm-hosted.plugin.yml` | `http` | Independent adapter for hosted OpenAI-compatible inference |
 | `06-http-service.plugin.yml` | `http` | Call your own processor service in any language |
 | `07-armiger-ultra.plugin.yml` | `http` | Connect [Armiger / Armiger Ultra](../../docs/armiger-integration.md) neural classification, swarm viability, and safety gates |
 

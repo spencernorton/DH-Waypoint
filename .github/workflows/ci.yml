@@ -78,3 +78,8 @@ jobs:
           test "$(docker image inspect dh-waypoint:ci --format '{{index .Config.Labels "org.opencontainers.image.created"}}')" = "$BUILD_DATE"
           test "$(docker image inspect dh-waypoint:ci --format '{{index .Config.Labels "org.opencontainers.image.source"}}')" = "$BUILD_SOURCE"
           sh scripts/check_backend_image.sh dh-waypoint:ci "$VERSION"
+      - name: Build independent LLM processor image
+        run: |
+          docker build --platform linux/amd64 -f plugins/llm/Dockerfile --tag dh-waypoint-llm:ci .
+          docker run --rm --network none --read-only --cap-drop ALL \
+            --security-opt no-new-privileges dh-waypoint-llm:ci --help

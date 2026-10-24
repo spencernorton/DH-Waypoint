@@ -589,7 +589,7 @@ func (s *Store) RunOne(ctx context.Context) (bool, error) {
 // Only bounded implementation-owned reason codes reach durable technical errors.
 func failureReason(err error) string {
 	switch err.Error() {
-	case "binding_mismatch", "invalid_outcome", "result_bounds", "unproven_complete_miss", "unexpected_proposal", "missing_proposal", "one_proposal_per_stage", "invalid_content_type", "invalid_telemetry", "invalid_telemetry_time", "invalid_exclusion", "unexpected_exclusion", "invalid_language", "invalid_liveness", "invalid_tag", "invalid_weights", "unsupported_driver", "service_unavailable", "transport_failed", "transport_credential_unavailable", "invalid_uncertainty", "incompatible_contract":
+	case retiredLLMReason, retiredLearningReason, "binding_mismatch", "invalid_outcome", "result_bounds", "unproven_complete_miss", "unexpected_proposal", "missing_proposal", "one_proposal_per_stage", "invalid_content_type", "invalid_telemetry", "invalid_telemetry_time", "invalid_exclusion", "unexpected_exclusion", "invalid_language", "invalid_liveness", "invalid_tag", "invalid_weights", "unsupported_driver", "service_unavailable", "transport_failed", "transport_credential_unavailable", "invalid_uncertainty", "incompatible_contract":
 		return err.Error()
 	default:
 		return "malformed_response"

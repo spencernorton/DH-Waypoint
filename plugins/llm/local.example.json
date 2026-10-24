@@ -1,0 +1,13 @@
+{
+  "id": "local-llm",
+  "endpoint": "http://127.0.0.1:11434/v1/chat/completions",
+  "model": "llama3.1:8b",
+  "capabilities": ["classify", "extract"],
+  "enable_inference": false,
+  "dry_run": true,
+  "json_mode": true,
+  "token_limit_field": "max_tokens",
+  "max_output_tokens": 1024,
+  "max_requests": 100,
+  "requests_per_minute": 10
+}
