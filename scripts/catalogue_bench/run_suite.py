@@ -47,6 +47,14 @@ def stage(name,command):
       "bench_sha256":hashlib.sha256((root/'bench.py').read_bytes()).hexdigest()})
     with (out/(name+".log")).open("a") as log:
         result=subprocess.run(command,stdout=log,stderr=subprocess.STDOUT)
+    if name.endswith('-evict') and result.returncode==0:
+        for line in (out/(name+".log")).read_text().splitlines():
+            try:
+                receipt=json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if receipt.get('kind')=='file_cache_eviction':
+                bench.emit(out/'cache-evictions.jsonl',{'stage':name,**receipt})
     bench.emit(out/"suite.jsonl",{"kind":"stage_end","stage":name,"seconds":time.monotonic()-start,"exit_code":result.returncode})
     if result.returncode:
         raise SystemExit(f"stage failed: {name} (see preserved log)")
