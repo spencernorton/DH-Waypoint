@@ -1,0 +1,22 @@
+# OpenRouter: classifies torrents that nothing else could label, using a hosted
+# model through OpenRouter (https://openrouter.ai). The default model is
+# google/gemini-2.5-flash-lite, capped at 10 requests a minute.
+#
+# Turn it on:
+#   1. In .env, set OPENROUTER_API_KEY=<your key> and add `openrouter` to
+#      COMPOSE_PROFILES (for example COMPOSE_PROFILES=openrouter).
+#   2. Set `enabled: true` below.
+#   3. Run `docker compose up -d`.
+#
+# The key goes to the `openrouter` service in docker-compose.yml, never to
+# DH-Waypoint itself. Model, rate limit and spend cap live in
+# adapters/llm/openrouter.json.
+id: openrouter
+enabled: false
+driver: http
+endpoint: http://127.0.0.1:8091
+mode: apply # shadow records what it would do without changing the catalogue
+priority: 30 # lower runs first: this runs after the regex classifier and Armiger
+selector:
+  content_types: [unknown] # only torrents nothing has classified yet
+configuration: {}

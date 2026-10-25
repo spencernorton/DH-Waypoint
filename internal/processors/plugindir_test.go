@@ -104,17 +104,17 @@ configuration: {reason: test}
 	require.False(t, specs[0].Enabled)
 }
 
-// The shipped templates are documentation users copy verbatim; keep
-// them parseable and registrable forever.
-func TestExamplePluginTemplatesAreValid(t *testing.T) {
-	dir := filepath.Join("..", "..", "examples", "plugins")
+// The templates in plugins/ are what users switch on in place; keep them
+// parseable, registrable and off until a user enables one.
+func TestShippedPluginTemplatesAreValid(t *testing.T) {
+	dir := filepath.Join("..", "..", "plugins")
 	specs, err := LoadPluginDir(dir)
 	require.NoError(t, err)
-	require.NotEmpty(t, specs)
+	require.Len(t, specs, 3)
 	store := &Store{}
 	for _, spec := range specs {
 		w := spec.Write()
-		require.Equal(t, "shadow", w.Mode, "%s must ship in shadow mode", spec.Path)
+		require.False(t, spec.Enabled, "%s must ship disabled", spec.Path)
 		if normalizedDriver(w.Driver) == v1.DriverHTTP {
 			continue // registration probes the live endpoint
 		}

@@ -1,270 +1,62 @@
-# Integrating Armiger & Armiger Ultra with DH-Waypoint
+# Armiger Ultra integration
 
-[Armiger](https://github.com/spencernorton/armiger) (`NorviTech/armiger` and `NorviTech/armiger-ultra` on Hugging Face) is the official neural classification, swarm-viability, and safety-gating processor suite for **DH-Waypoint**.
+[Armiger Ultra](https://github.com/spencernorton/armiger) labels torrents by
+type from their names and file lists, on the CPU. DH-Waypoint uses it through
+[`adapters/armiger`](../adapters/armiger/README.md), a small bridge that answers
+the core's `classify` jobs by calling the Armiger container's
+`POST /v1/classify`. Armiger's published image is used unchanged.
 
-DH-Waypoint runs as a standalone, model-independent Go backend (`ghcr.io/spencernorton/dh-waypoint`) and communicates with Armiger over the versioned, deadline-bounded [`dh-waypoint.processor.v1`](processor-contract.md) HTTP contract. You can register, shadow-test, promote, drain, or roll back Armiger at runtime without rebuilding or restarting DH-Waypoint.
+## Turn it on
 
-```mermaid
-flowchart LR
-    DHT[DHT & Tracker Scrape] --> Core[DH-Waypoint Core]
-    Core -->|POST /v1/process
-dh-waypoint.processor.v1| Armiger[Armiger / Armiger Ultra
-8-Head Neural + 6 Plugins]
-    Armiger -->|Multi-capability Proposal
-category, lang, liveness, exclusion| Core
-    Core -->|Torznab / GraphQL| Arrs[Prowlarr / Sonarr / Radarr / Lidarr]
-    Arrs -->|POST /evidence/arr/:instance| Core
-    Core -->|POST /v1/feedback
-dh-waypoint.processors.feedback.v1| Armiger
-    Armiger -.->|Opt-in BEP-44/46
-Hybrid PQ Signed| Swarm[Decentralized Calibration & Shard Sync]
+1. In `.env`, add `armiger` to `COMPOSE_PROFILES`.
+2. In [`plugins/armiger-ultra.plugin.yml`](../plugins/armiger-ultra.plugin.yml),
+   set `enabled: true`.
+3. Run `docker compose up -d`.
+
+Compose then starts two services: `armiger-ultra`, the published
+`ghcr.io/spencernorton/armiger` image pinned by `ARMIGER_VERSION` (default
+`3.2.1`), and `armiger`, the bridge, built from this repository. The bridge
+shares the `dh-waypoint` container's network namespace, listens on
+`127.0.0.1:8095` and reaches Armiger over the Compose network.
+
+Check it:
+
+```sh
+docker compose exec dh-waypoint dh-waypoint plugin list
+docker compose exec dh-waypoint curl -s http://127.0.0.1:8095/v1/status
 ```
 
----
+`"state":"ready"` means the bridge can reach Armiger; `"unavailable"` means
+Armiger is still starting or has stopped.
 
-## 1. Choosing Between `Armiger` (INT8 CPU) and `Armiger Ultra` (FP32 + 6 Plugins)
+## What it proposes
 
-Both variants are shipped in [`spencernorton/armiger`](https://github.com/spencernorton/armiger) and speak the identical `dh-waypoint.processor.v1` wire protocol:
+For each torrent the plugin's selector admits (by default, those nothing else
+has labelled), the bridge sends the name, size and file list to Armiger and
+reads its `category` head:
 
-| Variant | Artifact & Footprint | Latency (p50 / Batch-64) | Capabilities & Bundled Plugins | Recommended Deployment |
-|---|---|---|---|---|
-| **Armiger (`int8`)** | `armiger.int8.onnx` (`8.3 MB`) | `2.44 ms` single-item / `3.07 ms` batch-64 (CPU) | 8-head byte-level RoPE Transformer + File-Tree Encoder (`category`, `adult`, `junk`, `anime`, `english_subs`, `lang`, `owner_scope`, `title_language`) + Mondrian conformal safety gates (`calibration.json`). | Low-power CPU hosts, NAS boxes, or high-rate pre-filtering before heavier stages. |
-| **Armiger Ultra (`fp32`)** | `armiger_ultra.fp32.onnx` (`32.3 MB`) + `swarm_adapter.pt` (`132 KB`) + `validated_zero_cue_catalog.json` (`26.0 MB`) | `0.21 ms/item` RTX GPU / `0.29 ms/item` Apple Silicon MPS / `1.12 ms` CPU single-item | Full-precision 8-head classifier plus all **6 official plugins**:<br>1. `SwarmSurvivalNet` (`100%` fake-seeder malware trap recall, `96.83%` Multi-Source Corpus swarm AUROC)<br>2. `SwarmPriors` (4-pathway Empirical Bayes tracker priors)<br>3. `ZeroCueCatalog` (`929,400` `BLAKE2b-64` title/year/anime entries)<br>4. `AudioLanguageGuard` (`97.80%` English-vs-Foreign audio disambiguation)<br>5. `CalibrationAndDHT` (`BEP-44`/`BEP-46` hybrid PQ-signed weight/temperature hot-reload + 500-canary gate)<br>6. `ArmigerDHTDBSync` + `CSAMGuard` (pre-ingest CSAM/abuse blocking & signed tombstones) | Primary classification, liveness, and policy engine for production DH-Waypoint instances. |
+- A category DH-Waypoint has a content type for (movie, tv_show, music, ebook,
+  audiobook, comic, game, software or xxx), at or above
+  `ARMIGER_MIN_CONFIDENCE` (default `0.6`), becomes a `classify` proposal whose
+  uncertainty is one minus Armiger's confidence.
+- `course`, `unknown` and less confident answers abstain.
+- If Armiger cannot be reached, the job is deferred and retried.
 
----
+The core validates the proposal as it does for any processor, and no plugin
+can delete a record. Armiger's other heads (adult, junk, anime, languages and
+swarm viability) are not used.
 
-## 2. Quickstart: Docker Compose + Drag-In Plugin File
+## Limits
 
-### Step 1: Launch DH-Waypoint + PostgreSQL + Armiger Ultra
+Armiger decides from metadata alone, and without a file list it reads only the
+name. It has no category for photos: in our tests it called photo collections
+`software` with about the same confidence it gave correct answers, so a higher
+threshold does not filter them out. To review its proposals before they change
+the catalogue, set `mode: shadow` in the plugin file.
 
-From a clone of `DH-Waypoint`:
+## Changing the Armiger version
 
-```bash
-cp examples/.env.example .env
-# Set a strong POSTGRES_PASSWORD and PROCESSORS_ADMIN_TOKEN in .env
-mkdir -p plugins
-cp examples/plugins/07-armiger-ultra.plugin.yml plugins/
-
-docker compose -f examples/armiger-processor/docker-compose.yml --env-file .env up -d
-```
-
-### Step 2: Verify Plugin Registration & Readiness
-
-DH-Waypoint reconciles `./plugins/*.plugin.yml` every 30 seconds (`PROCESSORS_PLUGINS_DIR=/plugins`). Verify that `armiger-ultra` is registered, healthy, and recording shadow proposals:
-
-```bash
-docker compose -f examples/armiger-processor/docker-compose.yml exec dh-waypoint dh-waypoint plugin list
-docker compose -f examples/armiger-processor/docker-compose.yml exec dh-waypoint dh-waypoint plugin test http://armiger-ultra:8095
-```
-
-Or query the operator status API directly:
-
-```bash
-curl -s http://localhost:3333/api/processors/v1/registry/armiger-ultra   -H "Authorization: Bearer ${PROCESSORS_ADMIN_TOKEN}" | jq .
-```
-
-### Step 3: Promote from `shadow` to `apply`
-
-Every plugin template starts in `mode: shadow` so you can inspect `dh_waypoint_processors_outcomes_total` and compare proposals against Core's deterministic pipeline before mutating catalogue rows. Once verified, edit `plugins/07-armiger-ultra.plugin.yml` and change `mode: shadow` to `mode: apply` (or promote via `PATCH /api/processors/v1/registry/armiger-ultra`).
-
----
-
-## 3. Drag-In Plugin File & Operator API Registration
-
-### Option A: Declarative Plugin File (`plugins/07-armiger-ultra.plugin.yml`)
-
-```yaml
-id: armiger-ultra
-driver: http
-mode: apply
-state: active
-priority: 20
-endpoint: http://armiger-ultra:8095
-auth_env: DH_WAYPOINT_PROCESSOR_TOKEN_ARMIGER_ULTRA
-selector:
-  excluded: false
-learning:
-  enabled: true
-  mode: online_calibrate
-  accepted_tiers:
-    - operational_receipt
-    - teacher_consensus
-    - verified_import
-    - human_gold
-  push_enabled: true
-configuration:
-  variant: fp32
-  enable_zero_cue_catalog: true
-  enable_audio_language_guard: true
-  enable_swarm_survival: true
-  enable_csam_guard: true
-  mondrian_junk_threshold: 0.36
-  mondrian_adult_threshold: 0.42
-  honeypot_trap_threshold: 0.50
-```
-
-Validate the file locally before deployment:
-
-```bash
-dh-waypoint plugin validate plugins/07-armiger-ultra.plugin.yml
-```
-
-### Option B: Authenticated Operator API (`PUT /api/processors/v1/registry/armiger-ultra`)
-
-For programmatic lifecycle management with compare-and-swap (`expected_generation`) protection and pinned artifact digests:
-
-```bash
-curl -s -X PUT http://localhost:3333/api/processors/v1/registry/armiger-ultra   -H "Authorization: Bearer ${PROCESSORS_ADMIN_TOKEN}"   -H "Content-Type: application/json"   -d '{
-    "expected_generation": 0,
-    "driver": "http",
-    "endpoint": "http://armiger-ultra:8095",
-    "mode": "shadow",
-    "state": "active",
-    "priority": 20,
-    "auth_env": "DH_WAYPOINT_PROCESSOR_TOKEN_ARMIGER_ULTRA",
-    "selector": {
-      "excluded": false
-    },
-    "learning": {
-      "enabled": true,
-      "mode": "online_calibrate",
-      "accepted_tiers": [
-        "operational_receipt",
-        "teacher_consensus",
-        "verified_import",
-        "human_gold"
-      ],
-      "push_enabled": true
-    },
-    "configuration": {
-      "variant": "fp32",
-      "enable_zero_cue_catalog": true,
-      "enable_audio_language_guard": true,
-      "enable_swarm_survival": true,
-      "enable_csam_guard": true
-    }
-  }'
-```
-
-To stack both the fast `8.3 MB` INT8 model and `Armiger Ultra` in a two-tier cascade, register `armiger` at `priority: 10` (`selector: {excluded: false}`) and `armiger-ultra` at `priority: 20` with `selector: {excluded: false, min_uncertainty: 0.18}`. Torrents resolved with high confidence by the `8.3 MB` INT8 pass skip the second pass automatically (`selector_skipped`).
-
----
-
-## 4. Whole-Pipeline Admission Policy (`dh-waypoint.processors.admission.v1`)
-
-DH-Waypoint controls what percentage of discovered torrents enter the optional processor queue via a deterministic SHA-256 cohort hash (`algorithm: "sha256-seed-infohash-v1"`). The hash covers `dh-waypoint.processors.admission.v1` and one newline, then the 32 raw seed bytes, then the raw info-hash bytes; its first eight bytes, big-endian, modulo 10,000 give the torrent's bucket, and a torrent is admitted when that bucket is below `basis_points`:
-
-- `basis_points: 0` pauses optional processor admission without stopping DHT crawling or deterministic Core classification.
-- `basis_points: 1000` admits a deterministic 10% cohort (ideal for initial capacity sizing).
-- `basis_points: 10000` admits 100% of eligible torrents.
-
-Inspect or update the admission policy via the Operator API:
-
-```bash
-# Read current admission policy
-curl -s http://localhost:3333/api/processors/v1/admission   -H "Authorization: Bearer ${PROCESSORS_ADMIN_TOKEN}" | jq .
-
-# Admit 100% of eligible torrents (10000 basis points). The seed must be 64
-# lowercase hex characters; keep it fixed so percentage cohorts stay nested.
-# policy_version and reason allow only letters, digits, '.', '_' and '-'.
-SEED=$(openssl rand -hex 32)
-curl -s -X PUT http://localhost:3333/api/processors/v1/admission   -H "Authorization: Bearer ${PROCESSORS_ADMIN_TOKEN}"   -H "Content-Type: application/json"   -d '{
-    "expected_generation": 1,
-    "seed": "'"${SEED}"'",
-    "basis_points": 10000,
-    "policy_version": "v1",
-    "reason": "enable-armiger-ultra"
-  }'
-```
-
----
-
-## 5. Wire Contract Mapping (`dh-waypoint.processor.v1`)
-
-When DH-Waypoint dispatches `POST /v1/process` to Armiger, it provides a single `v1.Job` containing both file-tree metadata and public-safe swarm observations:
-
-1. **File & Structural Inputs (`input.name`, `input.size`, `input.files`, `input.file_count`, `input.extension`):**
-   - Featurized by `armiger_inference.py` into 11 zero-tokenizer tensors (`title_bytes`, `ext_ids`, `file_sizes_log`, `file_depths`, `file_flags`, `file_mask`, `struct_feats`, `tracker_ids`, `cat_hint_id`, `tag_ids`, `swarm_feats`).
-2. **Swarm & Priors Inputs (`input.sources`, `input.swarm`):**
-   - DH-Waypoint passes `tracker_scraped`, `tracker_known`, `tracker_seeders`, `tracker_leechers`, `tracker_completed`, `dht_seeders`, `dht_leechers`, `liveness_status`, and title-derived `outcome_priors` (`PriorObservation` Beta $(\alpha, \beta)$ counts).
-   - Credential-bearing tracker URLs and private passkeys are stripped by Core before dispatch and double-checked by `SwarmPriors.is_public_safe_source`.
-3. **Multi-Capability `Result.Proposal`:**
-   - Armiger advertises `capabilities: ["classify", "extract", "language", "policy"]` in `GET /v1/manifest` and returns a unified `v1.Proposal` in a single HTTP round-trip:
-     - `content_type`: Maps Armiger's 11-class category (`movie`, `tv_show`, `music`, `audiobook`, `ebook`, `comic`, `game`, `software`, `course`, `xxx`, `unknown`) to DH-Waypoint's canonical content types (`0.00%` category flip guarantee across seeder counts).
-     - `language`: Populated by `AudioLanguageGuard` (`audio`, `subtitles`, `english_audio`, `evidence: "metadata_claim"`).
-     - `liveness`: Populated by `SwarmSurvivalNet` (`SwarmResidualAdapter`) and `SwarmPriors`.
-     - `add_tags` & `weights`: Attaches calibrated confidence scores (`armiger:viability`, `armiger:category_conf`, `armiger:anime`) that downstream `Selector.ScoreThresholds` and Torznab priors can consume.
-     - `exclusion`: Proposed when `CSAMGuard`, Mondrian `junk`/`adult`/`owner_scope` conformal gates, or `SwarmSurvivalNet`'s fake-seeder honeypot trap detector (`100.0%` recall on disguised `.exe`/`.scr`/`.lnk` malware) triggers.
-
----
-
-## 6. 4-Tier Closed-Loop Feedback (`dh-waypoint.processors.feedback.v1`)
-
-When Armiger returns `request_feedback: true` on a `v1.Result`, DH-Waypoint joins downstream ground-truth events back to the original prediction and delivers `v1.FeedbackBatch` (`contract: "dh-waypoint.processors.feedback.v1"`) to Armiger's `POST /v1/feedback` endpoint (or exposes it via `GET /api/processors/v1/feedback?processor_id=armiger-ultra&after_seq=<N>`):
-
-| Feedback Tier (`v1.FeedbackTiers`) | Source in DH-Waypoint | How Armiger Ultra Uses It (`ArmigerDHTRSIEngine`) |
-|---|---|---|
-| `operational_receipt` | Core validation outcome (`applied`, `rejected_ambiguous`, `rejected_policy`). | Tracks distribution drift and schema/policy rejection rates per execution generation. |
-| `teacher_consensus` | Multi-processor / teacher agreement on shadow or sampled cohorts. | Updates soft-label calibration buffers without overriding verified physical imports. |
-| `verified_import` | `*arr` grab + import webhooks (`POST /evidence/arr/:instance`) and `qBittorrent` completion state (`import_succeeded`, `import_failed`). | Updates per-head temperature scaling ($T_h$), Mondrian conformal thresholds (`calibration.json`), and Empirical Bayes release-group priors. |
-| `human_gold` | Explicit operator overrides. | Highest-precedence ground truth; updates the local golden canary suite and (when opt-in `BEP-44`/`BEP-46` publishing is enabled) contributes to anonymized differential-privacy telemetry bundles. |
-
----
-
-## 7. Opt-In by Default & Privacy-Hardened Distributed DHT Sharing
-
-Armiger and Armiger Ultra include optional decentralized `BEP-44` / `BEP-46` intelligence sync (`CalibrationAndDHT` in `armiger_dht_rsi.py` and `ArmigerDHTDBSync` in `armiger_dht_db_sync.py`). When running alongside DH-Waypoint, outbound DHT sharing is **strictly opt-in by default (`ARMIGER_DHT_SHARE_OPT_IN="0"`, `opt_in_sharing=False`)** and **enforced by the 5-layer `AnonymityGuard` wire firewall** when enabled:
-
-| Security & Privacy Guarantee | Default / Wire Enforcement | Mathematical & Cryptographic Mechanism |
-|---|---|---|
-| **Strictly Opt-In by Default** | `ARMIGER_DHT_SHARE_OPT_IN="0"` (`opt_in_sharing=False`) | Outbound DHT publishing is disabled by default (`0` packets emitted). Nodes must explicitly set both `ARMIGER_DHT_SHARE_OPT_IN="1"` and `opt_in_sharing=True` to contribute updates. |
-| **Pre-Publish `AnonymityGuard` Gate** | `500/500` (`100.0%`) canary block rate on forbidden fields | Every outbound `BEP-44` / `BEP-46` payload is inspected by `AnonymityGuard` before signing or serialization. Any payload containing raw 40-hex infohashes, release titles, file paths, tracker URLs, passkeys, IPv4/IPv6 addresses, or hostnames is deterministically rejected prior to network egress. |
-| **Unlinkable Ephemeral `Ed25519` Keys** | Fresh 32-byte keypair per publish (`ephemeral_node_id`) | Every outbound telemetry or shard contribution generates a single-use ephemeral `Ed25519` signing keypair and ephemeral node ID (`BLAKE2b-128(ephemeral_pubkey)`), preventing cross-epoch correlation or static node tracking. |
-| **Coarse UTC Hour Epoch Bucketing** | `epoch_ts = (utc_now // 3600) * 3600` | All published timestamps are quantized to coarse 1-hour UTC boundaries (`3600s`), eliminating sub-second clock-skew fingerprinting and grab/import timing correlation. |
-| **$(\\varepsilon, \\delta)$-Differentially Private Weight Deltas** | `L2` clipping (`C = 1.0`) + Gaussian noise ($\sigma = 0.05$) | Calibration temperature and prior weight deltas are L2-norm clipped (`clip_norm=1.0`) and perturbed with calibrated Gaussian noise (`noise_multiplier=0.05`) over minimum cohort batches before encryption (`X25519` + `ML-KEM-768` + `ChaCha20-Poly1305`), making single-import reconstruction mathematically infeasible. |
-| **One-Way Truncated `BLAKE2b-64` Catalog Hashes** | 16-hex-char (`64-bit`) domain-separated digest | Shared catalog entries (`ZeroCueCatalog` / `ArmigerDHTDBSync`) transmit only salted one-way `BLAKE2b-64` hashes mapped to integer TMDB/AniDB IDs and coarse category/language enums—never plaintext torrent names, filenames, or infohashes. |
-
----
-
-## 8. Conformal Safety Gates & Environment Reference
-
-### DH-Waypoint Core Processor Variables
-
-| Variable | Default | Purpose |
-|---|---|---|
-| `PROCESSING_MODE` | `basic` | `basic` stamps coarse file-extension categories in Core and delegates full classification to registered plugins; `full` runs Core's built-in classifier first; `raw` skips Core classification. |
-| `PROCESSORS_PLUGINS_DIR` | `plugins` (the Compose files set `/plugins`) | Directory reconciled every 30 seconds for `*.plugin.yml` files. |
-| `PROCESSORS_ADMIN_TOKEN` | *(empty)* | Bearer token required for `/api/processors/v1/*` operator endpoints (`503` when unset). |
-| `DH_WAYPOINT_PROCESSOR_TOKEN_<NAME>` | *(empty)* | Outbound Bearer token sent by DH-Waypoint to the processor service referenced by `auth_env`. |
-
-### Armiger Processor Service Variables & Conformal Knobs
-
-| Variable / Configuration Key | Default | Purpose |
-|---|---|---|
-| `ARMIGER_VARIANT` / `configuration.variant` | `fp32` | `fp32` loads `armiger_ultra.fp32.onnx` (`32.3 MB`); `int8` loads `armiger.int8.onnx` (`8.3 MB` CPU fast-path). |
-| `enable_zero_cue_catalog` | `true` | Enables the `929,400`-entry `BLAKE2b-64` title/year/anime disambiguation catalog (`validated_zero_cue_catalog.json`). |
-| `enable_audio_language_guard` | `true` | Enables cross-head `title_language` $\\times$ `lang` audio & anime dub disambiguation (`audio_language_guard.py`). |
-| `enable_swarm_survival` | `true` | Enables the 48-tensor `SwarmResidualAdapter` (`swarm_adapter.pt`) for swarm viability and fake-seeder honeypot detection. |
-| `enable_csam_guard` | `true` | Enforces multi-stage pre-ingest CSAM/CSAE blocking and signed `SHA-256` tombstone checks (`csam_guard.py`). |
-| `mondrian_junk_threshold` | `0.36` | Calibrated Mondrian conformal threshold for `junk` exclusion (`100.00%` precision on `oct15_confirmation`). |
-| `mondrian_adult_threshold` | `0.42` | Calibrated Mondrian conformal threshold for `adult`/`xxx` namespace isolation. |
-| `honeypot_trap_threshold` | `0.50` | Threshold on `SwarmSurvivalNet` honeypot probability above which disguised malware swarms are excluded. |
-| `ARMIGER_DHT_RSI_MODE` | `pull_only` | `off`, `pull_only` (verifies hybrid `Ed25519`+`WOTS+-SHAKE256` signatures, 3-of-5 distinct-ASN quorum, and 500-canary gate before hot-reloading weights), or `opt_in_contribute` (exports $\\varepsilon$-differentially private telemetry bundles encrypted with `X25519`+`ML-KEM-768`+`ChaCha20-Poly1305`). |
-| `ARMIGER_DHT_SHARE_OPT_IN` | `0` | Master opt-in switch for outbound DHT sharing (`0` = disabled by default, zero outbound packets; `1` = opt-in enabled with `AnonymityGuard`, ephemeral `Ed25519` keys, coarse UTC hour timestamps, DP-clipped weight deltas, and `BLAKE2b-64` hashes). |
-| `ARMIGER_DHT_DB_SYNC_MODE` | `off` | `off`, `subscribe` (pulls encrypted sharded catalog updates for selected `(category, language, quality)` tuples with `xxx` off by default), or `publish` (requires `ARMIGER_DHT_SHARE_OPT_IN=1`). |
-
----
-
-## 9. Observability & Rollback
-
-Monitor Armiger's latency, queue wait, and proposal outcomes through DH-Waypoint's Prometheus `/metrics` endpoint and the bundled [`observability/grafana-dashboards/dh-waypoint.json`](../observability/grafana-dashboards/dh-waypoint.json) dashboard:
-
-- `dh_waypoint_processors_attempts_total{processor_id="armiger-ultra",generation}`
-- `dh_waypoint_processors_outcomes_total{processor_id="armiger-ultra",generation,stage,outcome}`
-- `dh_waypoint_processors_request_duration_seconds_bucket{processor_id="armiger-ultra",stage}`
-- `dh_waypoint_processors_queue_wait_seconds_bucket{processor_id="armiger-ultra",stage}`
-
-To pause or roll back Armiger at any time without restarting DH-Waypoint:
-
-1. Set `mode: shadow` or `state: paused` in `plugins/07-armiger-ultra.plugin.yml` (or via `PATCH /api/processors/v1/registry/armiger-ultra`).
-2. Existing catalogue entries and their provenance receipts remain intact; pausing or removing a plugin never deletes catalogue history or interrupts Torznab serving.
+Set `ARMIGER_VERSION` in `.env` and run `docker compose up -d`. The bridge
+reports the version in its identity, so DH-Waypoint stops sending it work until
+the plugin is registered again: move the plugin file out of `plugins/` for 30
+seconds, then back.

@@ -420,3 +420,25 @@ func TestExampleServiceConfigurationsStayDisabled(t *testing.T) {
 		s.Close()
 	}
 }
+
+func TestOpenRouterConfigurationNeedsOnlyTheKey(t *testing.T) {
+	c, err := LoadConfig("openrouter.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !c.EnableInference || c.DryRun || c.APIKeyEnv != "OPENROUTER_API_KEY" ||
+		!strings.HasPrefix(c.Endpoint, "https://openrouter.ai/") || c.Listen != "127.0.0.1:8091" {
+		t.Fatalf("unexpected OpenRouter configuration %+v", c)
+	}
+	t.Setenv("LLM_PROCESSOR_TOKEN", "")
+	t.Setenv("OPENROUTER_API_KEY", "")
+	if _, err := New(c); err == nil {
+		t.Fatal("started without a provider key")
+	}
+	t.Setenv("OPENROUTER_API_KEY", "synthetic-provider-key")
+	s, err := New(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+}

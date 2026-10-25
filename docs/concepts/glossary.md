@@ -77,7 +77,7 @@ Kademlia routing table. The structured peer cache the DHT crawler maintains in m
 ## L
 
 ### LLM processor
-An optional, separately run HTTP processor (`plugins/llm`) that proposes classifications over the processor contract. It replaces the retired in-core LLM rerank stage. See [processors/llm.md](../processors/llm.md).
+An optional, separately run HTTP processor (`adapters/llm`) that proposes classifications over the processor contract. It replaces the retired in-core LLM rerank stage. See [processors/llm.md](../processors/llm.md).
 
 ## P
 

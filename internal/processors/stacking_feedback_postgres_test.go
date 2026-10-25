@@ -12,10 +12,10 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/spencernorton/DH-Waypoint/adapters/llm"
 	"github.com/spencernorton/DH-Waypoint/internal/classifier/contentfilter"
 	"github.com/spencernorton/DH-Waypoint/internal/evidence"
 	"github.com/spencernorton/DH-Waypoint/internal/lazy"
-	"github.com/spencernorton/DH-Waypoint/plugins/llm"
 	v1 "github.com/spencernorton/DH-Waypoint/processorapi/v1"
 	"github.com/stretchr/testify/require"
 )

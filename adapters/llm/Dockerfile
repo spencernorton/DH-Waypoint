@@ -2,8 +2,8 @@ FROM golang:1.26.10-alpine AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 COPY processorapi ./processorapi
-COPY plugins/llm ./plugins/llm
-RUN CGO_ENABLED=0 go build -trimpath -o /dh-waypoint-llm ./plugins/llm/cmd/dh-waypoint-llm
+COPY adapters/llm ./adapters/llm
+RUN CGO_ENABLED=0 go build -trimpath -o /dh-waypoint-llm ./adapters/llm/cmd/dh-waypoint-llm
 
 FROM alpine:3.23
 RUN apk add --no-cache ca-certificates && adduser -D -u 10001 processor

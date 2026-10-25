@@ -60,3 +60,15 @@ func TestCoerceFloatSlice(t *testing.T) {
 		t.Fatalf("bad slice values: %#v", vals)
 	}
 }
+
+// An empty list variable must not become one empty element: an empty
+// TRACKER_PASSKEYS from Compose used to fail tracker validation at startup.
+func TestCoerceEmptySliceHasNoValues(t *testing.T) {
+	got, err := coerceStringValue("", reflect.TypeOf([]string{}))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if vals, ok := got.([]interface{}); !ok || len(vals) != 0 {
+		t.Fatalf("got %#v", got)
+	}
+}

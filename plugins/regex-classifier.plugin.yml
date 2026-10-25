@@ -1,0 +1,39 @@
+# Regex classifier: labels and tags torrents from patterns in their name or
+# file paths. It runs inside DH-Waypoint, so it needs no service or API key.
+#
+# Turn it on: set `enabled: true`. DH-Waypoint reads this folder every 30
+# seconds; no restart is needed.
+#
+# Each rule matches `pattern` (Go regular expression syntax) against the
+# torrent name (`target: name`), its file paths (`target: files`) or both
+# (`target: any`). The first matching rule with a `content_type` sets the type
+# (movie, tv_show, music, ebook, audiobook, comic, game, software or xxx) when
+# nothing has set one yet; every matching rule adds its `add_tags`.
+id: regex-classifier
+enabled: false
+driver: builtin/regex-weights
+mode: apply # shadow records what it would do without changing the catalogue
+priority: 10 # lower runs first: this runs before Armiger and OpenRouter
+configuration:
+  rules:
+    - id: tv-episode
+      pattern: "(?i)\\bS\\d{1,2}E\\d{1,3}\\b"
+      target: name
+      content_type: tv_show
+    - id: movie
+      pattern: "(?i)\\b(19|20)\\d{2}\\b.*\\b(720p|1080p|2160p)\\b"
+      target: name
+      content_type: movie
+    - id: lossless-music
+      pattern: "(?i)\\.flac$"
+      target: files
+      content_type: music
+      add_tags: [lossless]
+    - id: ebook
+      pattern: "(?i)\\.(epub|mobi|azw3)$"
+      target: files
+      content_type: ebook
+    - id: remux
+      pattern: "(?i)\\bremux\\b"
+      target: name
+      add_tags: [remux]

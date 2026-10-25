@@ -1,0 +1,21 @@
+# Armiger Ultra: classifies torrents that nothing else could label, using the
+# Armiger Ultra model (https://github.com/spencernorton/armiger) on this host's
+# CPU. No API key or GPU is needed.
+#
+# Turn it on:
+#   1. In .env, add `armiger` to COMPOSE_PROFILES (for example
+#      COMPOSE_PROFILES=armiger, or COMPOSE_PROFILES=openrouter,armiger).
+#   2. Set `enabled: true` below.
+#   3. Run `docker compose up -d`. The first start downloads the Armiger image.
+#
+# Categories Armiger reports with less than 0.6 confidence are left unlabelled;
+# set ARMIGER_MIN_CONFIDENCE in .env to change that.
+id: armiger-ultra
+enabled: false
+driver: http
+endpoint: http://127.0.0.1:8095
+mode: apply # shadow records what it would do without changing the catalogue
+priority: 20 # lower runs first: this runs after the regex classifier, before OpenRouter
+selector:
+  content_types: [unknown] # only torrents nothing has classified yet
+configuration: {}

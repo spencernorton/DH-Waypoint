@@ -12,7 +12,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/spencernorton/DH-Waypoint/plugins/llm"
+	"github.com/spencernorton/DH-Waypoint/adapters/llm"
 )
 
 func main() {
