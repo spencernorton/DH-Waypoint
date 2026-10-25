@@ -157,7 +157,7 @@ Active when `CONTENT_FILTER_ENABLED=true`. With `CONTENT_FILTER_ENFORCE=true` dr
 
 ## Grafana dashboard
 
-A pre-configured Grafana dashboard ships in this repository at `observability/grafana-dashboards/dh-waypoint.json`. Import the JSON directly into your Grafana instance and point it at your Prometheus datasource. It covers DHT, metadata-request, crawler and queue activity; it does not include the panels above.
+A pre-configured Grafana dashboard ships in this repository at `observability/grafana-dashboards/dh-waypoint.json`. Import the JSON directly into your Grafana instance and point it at your Prometheus datasource. It covers process memory and DHT, metadata-request, crawler, queue and optional-processor activity; it does not include the panels above.
 
 ## See also
 
