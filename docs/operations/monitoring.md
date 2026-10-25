@@ -62,7 +62,7 @@ The dh-waypoint core repo ships a Grafana dashboard at `observability/grafana-da
 4. Pick your Prometheus data source.
 5. Save.
 
-The dashboard has panels for DHT query rates and latency, metadata requests, crawler persistence, queue jobs and, with a Loki data source, warnings and errors. It defaults to a 24-hour window.
+The dashboard has panels for process memory, DHT query rates and latency, metadata requests, crawler persistence, queue jobs, optional-processor outcomes and latency and, with a Loki data source holding JSON logs (`LOG_JSON=true`) labelled `job="dh-waypoint"`, warnings and errors. It defaults to a 24-hour window.
 
 ## Step 4 — Key panels to watch
 
@@ -129,10 +129,10 @@ Logs are stdout. There's no built-in log aggregator; use whatever your fleet use
 
 | Endpoint | Use |
 |---|---|
-| `/status` | Returns `200` while Postgres, the DHT crawler and any enabled TMDB or evidence-poller checks are up, otherwise `503`. Public even when `HTTP_SERVER_API_KEY` is set. |
+| `/status` | Returns `200` while Postgres, the DHT crawler and any enabled TMDB or evidence-poller checks are up, otherwise `503`. Also `503` for about the first minute, until every check has run once. Public even when `HTTP_SERVER_API_KEY` is set. |
 | `/metrics` | The actual signal of "is the crawler making progress" — `rate(dh_waypoint_dht_ktable_hashes_added[5m])` is the real liveness. |
 
-For a docker compose `healthcheck:` block, use `/status`. For Prometheus alerting, use the metrics.
+For a docker compose `healthcheck:` block, use `/status` with a `start_period` of at least 90s. For Prometheus alerting, use the metrics.
 
 ## Multi-instance
 

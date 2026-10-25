@@ -113,11 +113,13 @@ services:
         max-size: "50m"
         max-file: "5"
     healthcheck:
-      test: ["CMD", "curl", "--fail", "--silent", "--show-error", "--output", "/dev/null", "http://127.0.0.1:3333/metrics"]
+      # /status stays public when HTTP_SERVER_API_KEY is set. It returns 503
+      # until every check has run once, about a minute after start.
+      test: ["CMD", "curl", "--fail", "--silent", "--show-error", "--output", "/dev/null", "http://127.0.0.1:3333/status"]
       interval: 30s
       timeout: 5s
       retries: 5
-      start_period: 30s
+      start_period: 90s
 
   postgres:
     image: postgres:16-alpine

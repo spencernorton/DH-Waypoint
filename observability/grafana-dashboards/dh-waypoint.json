@@ -109,7 +109,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "dh_waypoint_process_resident_memory_bytes",
+          "expr": "bitmagnet_process_resident_memory_bytes",
           "legendFormat": "Process Memory",
           "range": true,
           "refId": "A"
@@ -297,10 +297,10 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "PBFA97CFB590B2093"
+            "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "increase(dh_waypoint_queue_jobs_total[$__rate_interval])",
+          "expr": "dh_waypoint_queue_jobs_total",
           "instant": false,
           "legendFormat": "{{queue}}:{{status}}",
           "range": true,
@@ -629,7 +629,7 @@
           },
           "editorMode": "code",
           "exemplar": false,
-          "expr": "histogram_quantile(0.5, dh_waypoint_dht_server_query_duration_seconds_bucket)",
+          "expr": "histogram_quantile(0.5, sum by (le, query) (rate(dh_waypoint_dht_server_query_duration_seconds_bucket[$__rate_interval])))",
           "instant": false,
           "legendFormat": "{{query}}",
           "range": true,
@@ -1014,7 +1014,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.5, dh_waypoint_meta_info_requester_duration_seconds_bucket)",
+          "expr": "histogram_quantile(0.5, sum by (le) (rate(dh_waypoint_meta_info_requester_duration_seconds_bucket[$__rate_interval])))",
           "instant": false,
           "legendFormat": "Latency",
           "range": true,
@@ -1206,14 +1206,14 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "rate(dh_waypoint_classifier_success_total[$__rate_interval])*60",
+          "expr": "sum by (processor_id, outcome) (rate(dh_waypoint_processors_outcomes_total[$__rate_interval]))*60",
           "instant": false,
-          "legendFormat": "__auto",
+          "legendFormat": "{{processor_id}}: {{outcome}}",
           "range": true,
           "refId": "A"
         }
       ],
-      "title": "Classifier success",
+      "title": "Processor outcomes per minute",
       "type": "timeseries"
     },
     {
@@ -1272,6 +1272,7 @@
               }
             ]
           },
+          "unit": "s",
           "unitScale": true
         },
         "overrides": []
@@ -1302,13 +1303,13 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.5, dh_waypoint_classifier_duration_seconds_bucket)",
-          "legendFormat": "__auto",
+          "expr": "histogram_quantile(0.5, sum by (le, processor_id) (rate(dh_waypoint_processors_request_duration_seconds_bucket[$__rate_interval])))",
+          "legendFormat": "{{processor_id}}",
           "range": true,
           "refId": "A"
         }
       ],
-      "title": "Classifier latency",
+      "title": "Processor request latency",
       "type": "timeseries"
     },
     {
