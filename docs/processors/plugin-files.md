@@ -4,10 +4,12 @@ A plugin file is a small YAML document that declares one processor
 registration. Drop it into the plugins directory and DH-Waypoint does
 the rest — no rebuild, no restart, no API calls.
 
+The [`plugins/`](../../plugins/README.md) folder ships three templates, each
+with `enabled: false`: a regex classifier, Armiger Ultra and OpenRouter. Set
+`enabled: true` in one and it is registered within 30 seconds:
+
 ```sh
-cp examples/plugins/01-filter-list.plugin.yml plugins/
-# registered within 30 seconds; verify:
-dh-waypoint plugin list
+docker compose exec dh-waypoint dh-waypoint plugin list
 ```
 
 ## Where files live
@@ -71,7 +73,17 @@ Rules:
 
 Excludes (or tags) releases by name/file evidence. Exclusions are
 reversible policy proposals; plugins can never delete torrents.
-Template: `examples/plugins/01-filter-list.plugin.yml`.
+
+```yaml
+id: household-filter
+driver: builtin/filter-list
+mode: shadow
+priority: 5
+configuration:
+  block_patterns: ["(?i)\\b(cam|hdcam|telesync|tsrip)\\b"]
+  blocked_extensions: [exe, scr]
+  reason: "household filter"
+```
 
 | Key | Meaning |
 |---|---|
@@ -87,7 +99,7 @@ Static weighted rules stamp content type, video fields, tags and scores.
 They do not learn or read retained learned state; use an external HTTP
 processor for calibration. Built-ins support feedback logging only.
 This is the "custom dataset" surface: rules can be generated from
-your own lists. Template: `examples/plugins/02-categories-regex.plugin.yml`.
+your own lists. Template: [`plugins/regex-classifier.plugin.yml`](../../plugins/regex-classifier.plugin.yml).
 
 Each rule: `id`, `pattern`, `target` (`name`|`files`|`any`),
 `weight`, optional `dimension`, `content_type`, `video_resolution`,
@@ -100,14 +112,26 @@ Top level: optional `exclude_dimension` + `exclude_threshold` +
 Acts on tracker-observed swarm facts (`min_seeders`,
 `exclude_dead`, live/dead tags and weights). A swarm the core has
 never scraped is *unknown*, never dead.
-Template: `examples/plugins/03-tracker-liveness.plugin.yml`.
+
+```yaml
+id: swarm-liveness
+driver: builtin/tracker-liveness
+mode: shadow
+priority: 90
+configuration:
+  min_seeders: 1
+  exclude_dead: false
+  tag_live: swarm-live
+  tag_dead: swarm-dead
+```
 
 ### Independent LLM adapter
 
 `builtin/llm` is retired. Run the [standalone LLM adapter](llm.md) and
 register it as `http`. Provider URLs, prompts, model settings, credentials
 and inference budgets belong in that service's configuration, never in
-this file. The `04` and `05` examples show the new registrations.
+this file. [`plugins/openrouter.plugin.yml`](../../plugins/openrouter.plugin.yml)
+is a complete registration.
 
 ### `http` — your own service, any language
 
@@ -115,8 +139,9 @@ Implements `GET /v1/manifest`, `GET /v1/status`,
 `POST /v1/process` ([protocol](v1.md)). Start from
 `examples/processors/reference` (Go, 79 lines) or
 `examples/processors/independent` (Python stdlib, 89 lines), probe
-with `dh-waypoint plugin test <endpoint>`, then register with
-`06-http-service.plugin.yml`.
+with `dh-waypoint plugin test <endpoint>`, then register it with a file like
+[`plugins/armiger-ultra.plugin.yml`](../../plugins/armiger-ultra.plugin.yml)
+that points `endpoint` at your service.
 
 ## Selectors: run plugins only where they pay
 
@@ -125,7 +150,7 @@ non-matching torrents record an abstention without a network call:
 
 | Key | Meaning |
 |---|---|
-| `content_types` / `exclude_types` | Core-stamped type filter |
+| `content_types` / `exclude_types` | Content type set by the core or proposed by an earlier step (`unknown` when neither) |
 | `extensions` | Primary file extension filter |
 | `is_anime` | Anime backbone verdict |
 | `has_content_match` | Whether a title identity is attached |
@@ -137,7 +162,8 @@ non-matching torrents record an abstention without a network call:
 
 ## Rollout pattern
 
-1. Copy a template, keep `mode: shadow`.
+1. Enable a template. To review its proposals before they change the
+   catalogue, set `mode: shadow` first.
 2. Watch proposals: processor status API, `dh-waypoint plugin list`,
    `dh_waypoint_processors_outcomes_total` metrics.
 3. When shadow results are right, set `mode: apply`.

@@ -7,6 +7,26 @@ routing. The adapter owns prompts, models, provider credentials and budgets.
 `builtin/llm` and built-in online calibration are retired; see
 [migration](migration.md#retired-built-in-inference-and-learning).
 
+## OpenRouter in three steps
+
+The root `docker-compose.yml` runs this adapter for OpenRouter when you ask
+for it, with [`adapters/llm/openrouter.json`](../../adapters/llm/openrouter.json)
+as its configuration:
+
+1. In `.env`, set `OPENROUTER_API_KEY` and `COMPOSE_PROFILES=openrouter`.
+2. In [`plugins/openrouter.plugin.yml`](../../plugins/openrouter.plugin.yml),
+   set `enabled: true`.
+3. Run `docker compose up -d`.
+
+The adapter shares the `dh-waypoint` container's network namespace, so it
+listens on loopback and needs no service token. The default model is
+`google/gemini-2.5-flash-lite`; the configuration allows 10 requests a minute
+and 20,000 per adapter start. The plugin's selector sends only torrents that
+nothing else has labelled. To change the model, edit `openrouter.json`, run
+`docker compose up -d --force-recreate openrouter`, then move the plugin file
+out of `plugins/` for 30 seconds and back so the core registers the new
+identity.
+
 ## Run without a provider or plugin
 
 No processor is required for discovery, metadata storage or search. The native
@@ -17,18 +37,18 @@ classifier. None of these modes makes model calls.
 Build the independent adapter from a checkout:
 
 ```sh
-go build -o dh-waypoint-llm ./plugins/llm/cmd/dh-waypoint-llm
-./dh-waypoint-llm -config plugins/llm/local.example.json
+go build -o dh-waypoint-llm ./adapters/llm/cmd/dh-waypoint-llm
+./dh-waypoint-llm -config adapters/llm/local.example.json
 curl --fail http://127.0.0.1:8091/v1/manifest
 curl --fail http://127.0.0.1:8091/v1/status
 ```
 
 The adapter imports only the public contract and Go's standard library. It
 does not start the backend or access its database. The backend binary does not
-link the adapter. Its own [Dockerfile](../../plugins/llm/Dockerfile) builds a
+link the adapter. Its own [Dockerfile](../../adapters/llm/Dockerfile) builds a
 separate image; the backend image does not contain this executable.
 
-Both supplied service configs start with `enable_inference: false` and
+The local and hosted example configs start with `enable_inference: false` and
 `dry_run: true`. Jobs return a bound abstention without contacting a provider.
 Readiness confirms local configuration, not upstream reachability or model
 quality. After testing, set **both** `enable_inference: true` and
@@ -38,8 +58,8 @@ proposals but still makes inference calls when the adapter enables them.
 
 ## Local and hosted setup
 
-Copy [local.example.json](../../plugins/llm/local.example.json) or
-[hosted.example.json](../../plugins/llm/hosted.example.json) to your own config.
+Copy [local.example.json](../../adapters/llm/local.example.json) or
+[hosted.example.json](../../adapters/llm/hosted.example.json) to your own config.
 Set the exact model ID your endpoint serves. A local server must already be
 running and have the model loaded; this adapter never installs a runtime or
 downloads weights. The example model names demonstrate configuration, not
@@ -58,9 +78,7 @@ Credential files are limited to 4 KiB. No credential value belongs in JSON,
 plugin files, registration configuration, traces or source. The process checks
 that its provider credential and processor service credential differ.
 
-Register the service using the updated
-[local](../../examples/plugins/04-llm-local-ollama.plugin.yml) or
-[hosted](../../examples/plugins/05-llm-hosted.plugin.yml) template:
+Register the service with a plugin file like this one:
 
 ```yaml
 id: local-llm
@@ -187,7 +205,7 @@ so protect it like other catalogue exports.
 ## Validation
 
 ```sh
-go test -race ./plugins/llm/... ./scripts/processorboundary
+go test -race ./adapters/... ./scripts/processorboundary
 python3 scripts/check_processor_boundary.py
 ```
 

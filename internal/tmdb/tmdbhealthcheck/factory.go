@@ -25,7 +25,8 @@ func New(p Params) Result {
 		Option: health.WithPeriodicCheck(
 			time.Minute*5,
 			0,
-			NewCheck(p.Config.Enabled, p.Client),
+			// Without a key TMDB is not configured, not down: it must not fail /status.
+			NewCheck(p.Config.Enabled && p.Config.APIKey != "", p.Client),
 		),
 	}
 }

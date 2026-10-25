@@ -64,7 +64,7 @@ services:
 
       # --- Private tracker (opt-in): see docs/private-tracker.md ---
       TRACKER_ENABLED: "${TRACKER_ENABLED:-false}"
-      TRACKER_PASSKEYS: ${TRACKER_PASSKEYS:-}
+      TRACKER_PASSKEYS: # passed only when set; empty fails startup before the next release
       TRACKER_ADMIN_TOKEN: ${TRACKER_ADMIN_TOKEN:-}
       TRACKER_PUBLIC_BASE_URL: ${TRACKER_PUBLIC_BASE_URL:-}
 

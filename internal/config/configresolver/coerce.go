@@ -40,6 +40,10 @@ func coerceStringValue(stringValue string, valueType reflect.Type) (interface{},
 	case reflect.Float64:
 		return strconv.ParseFloat(stringValue, 64)
 	case reflect.Slice:
+		// An empty variable (Compose's `${FOO:-}`) means no values, not one empty value.
+		if stringValue == "" {
+			return []interface{}{}, nil
+		}
 		strValues := strings.Split(stringValue, ",")
 		values := make([]interface{}, len(strValues))
 

@@ -19,7 +19,7 @@ import (
 
 const module = "github.com/spencernorton/DH-Waypoint"
 
-var blocked = []string{"/llmprovider", "/llmmatch", "/llmstage", "/llmreadiness", "/llmeval", "/llmcapture", "/llmwork", "/onnx", "/tensorflow", "/torch", "/plugins/", "openai-go", "go-openai", "anthropic-sdk"}
+var blocked = []string{"/llmprovider", "/llmmatch", "/llmstage", "/llmreadiness", "/llmeval", "/llmcapture", "/llmwork", "/onnx", "/tensorflow", "/torch", "/adapters/", "openai-go", "go-openai", "anthropic-sdk"}
 
 type pkg struct {
 	ImportPath string
@@ -123,13 +123,15 @@ func check() error {
 			}
 		}
 	}
-	deps, err = dependencies("./plugins/llm/cmd/dh-waypoint-llm")
-	if err != nil {
-		return err
-	}
-	for _, p := range deps {
-		if strings.HasPrefix(p.ImportPath, module+"/internal/") || p.ImportPath == module {
-			violations = append(violations, "plugin imports backend internals: "+p.ImportPath)
+	for _, adapter := range []string{"./adapters/llm/cmd/dh-waypoint-llm", "./adapters/armiger/cmd/dh-waypoint-armiger"} {
+		deps, err = dependencies(adapter)
+		if err != nil {
+			return err
+		}
+		for _, p := range deps {
+			if strings.HasPrefix(p.ImportPath, module+"/internal/") || p.ImportPath == module {
+				violations = append(violations, "adapter imports backend internals: "+p.ImportPath)
+			}
 		}
 	}
 	if len(violations) > 0 {
@@ -143,5 +145,5 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	fmt.Println("Backend graph and source contain no embedded inference/learning; LLM adapter imports only the public contract.")
+	fmt.Println("Backend graph and source contain no embedded inference/learning; adapters import only the public contract.")
 }

@@ -50,11 +50,10 @@ drop dead swarms.
 **Processing is as light as you want.** `PROCESSING_MODE=basic`, the default,
 stamps a coarse category from file extensions; `full` adds the deterministic
 classifier with anime-aware title parsing and TMDB matching; `raw` stores
-metadata untouched. Heavier work, such as an LLM or the
-[Armiger](https://github.com/spencernorton/armiger) classifier, runs as a
-separate HTTP processor that you register by dropping a plugin file into
-`./plugins`. Processors only propose: the core validates every proposal and
-never lets one delete a record.
+metadata untouched. Templates in [`plugins/`](plugins/README.md) add a regex
+classifier, the [Armiger](https://github.com/spencernorton/armiger) model or a
+model hosted on OpenRouter, each turned on in at most three steps. Plugins only
+propose: the core validates every proposal and never lets one delete a record.
 
 **Curation hides; it does not delete.** Content filtering and retention
 report what they would remove through `would_*` metrics, while the opt-in
@@ -97,9 +96,10 @@ behind a proxy ([security](docs/operations/security.md)).
 `examples/docker-compose.public.yml` builds the image from your checkout and
 runs in `full` mode; [the quickstart](docs/quickstart.md) covers both stacks.
 
-The published image is `linux/amd64` only. There is no browser interface,
-account system or hosted site here, and the [LLM processor](plugins/llm/README.md)
-is built from source; it has no published image. `main` is ahead of the latest
+The published image is `linux/amd64` only, and there is no browser interface,
+account system or hosted site here. The optional plugin services build from
+your checkout when their Compose profile is on; they have no published images.
+`main` is ahead of the latest
 release: [`CHANGELOG.md`](CHANGELOG.md) lists what is unreleased, including
 BitTorrent v2 indexing, the REST v2 catalogue and the external LLM processor.
 
@@ -109,7 +109,7 @@ BitTorrent v2 indexing, the REST v2 catalogue and the external LLM processor.
 - [Quickstart](docs/quickstart.md) and [configuration](docs/configuration.md)
 - [API guide](docs/api-guide.md), with [Torznab](docs/reference/torznab-api.md), [GraphQL](docs/reference/graphql-api.md), [metrics](docs/reference/metrics.md) and [CLI](docs/reference/cli.md) references
 - [Evidence](docs/evidence.md): wiring the \*arrs and qBittorrent into labels, ranking and liveness
-- [Processors](docs/processors/plugin-files.md): plugin files, the [v1 protocol](docs/processors/v1.md), the [LLM processor](docs/processors/llm.md) and [Armiger](docs/armiger-integration.md)
+- [Plugins](plugins/README.md): the three templates, [plugin files](docs/processors/plugin-files.md), the [v1 protocol](docs/processors/v1.md), the [LLM processor](docs/processors/llm.md) and [Armiger](docs/armiger-integration.md)
 - [BitTorrent v2](docs/bittorrent-v2.md): identities, the raw REST v2 catalogue and processor compatibility
 - [Architecture](docs/architecture.md) and [operations](docs/OPERATIONS.md): internals, capacity, backups and upgrades
 - [Benchmarks](docs/project/benchmarks.md) and [what changed from bitmagnet](docs/project/improvements.md)

@@ -8,6 +8,7 @@
 # No source checkout or Go toolchain needed at run time. To build from
 # source instead, use examples/docker-compose.public.yml.
 # Pin a release with DH_WAYPOINT_VERSION (default: the version in VERSION).
+# Optional plugin services (openrouter, armiger): see plugins/README.md.
 
 services:
 
@@ -36,7 +37,7 @@ services:
       PROCESSORS_ADMIN_TOKEN: ${PROCESSORS_ADMIN_TOKEN:-}
       # Private tracker (opt-in): see docs/private-tracker.md
       TRACKER_ENABLED: "${TRACKER_ENABLED:-false}"
-      TRACKER_PASSKEYS: ${TRACKER_PASSKEYS:-}
+      TRACKER_PASSKEYS: # passed only when set; empty fails startup before the next release
       TRACKER_ADMIN_TOKEN: ${TRACKER_ADMIN_TOKEN:-}
       TRACKER_PUBLIC_BASE_URL: ${TRACKER_PUBLIC_BASE_URL:-}
       TORZNAB_API_KEY: ${TORZNAB_API_KEY:-}
@@ -109,6 +110,50 @@ services:
       options:
         max-size: "50m"
         max-file: "5"
+
+  # Optional plugin services: each starts only when its profile is listed in
+  # COMPOSE_PROFILES (see plugins/README.md). The two processors share
+  # dh-waypoint's network namespace, so they listen on its loopback address
+  # and nothing else can reach them.
+  openrouter:
+    profiles: [openrouter]
+    build:
+      context: .
+      dockerfile: adapters/llm/Dockerfile
+    restart: unless-stopped
+    network_mode: service:dh-waypoint
+    depends_on:
+      dh-waypoint:
+        condition: service_started
+        restart: true
+    command: [-config, /config/openrouter.json]
+    environment:
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+    volumes:
+      - ./adapters/llm/openrouter.json:/config/openrouter.json:ro
+
+  armiger-ultra:
+    profiles: [armiger]
+    image: ghcr.io/spencernorton/armiger:${ARMIGER_VERSION:-3.2.1}
+    restart: unless-stopped
+
+  armiger:
+    profiles: [armiger]
+    build:
+      context: .
+      dockerfile: adapters/armiger/Dockerfile
+    restart: unless-stopped
+    network_mode: service:dh-waypoint
+    depends_on:
+      dh-waypoint:
+        condition: service_started
+        restart: true
+      armiger-ultra:
+        condition: service_started
+    environment:
+      ARMIGER_URL: http://armiger-ultra:8096
+      ARMIGER_VERSION: ${ARMIGER_VERSION:-3.2.1}
+      ARMIGER_MIN_CONFIDENCE: ${ARMIGER_MIN_CONFIDENCE:-0.6}
 
 volumes:
   dh-waypoint-config:

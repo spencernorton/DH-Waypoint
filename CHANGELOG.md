@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+- Fix the Compose quickstart, which has never started. Both Compose files
+  passed an empty `TRACKER_PASSKEYS`, which every release since 5.6.0 rejects
+  at startup ("tracker passkeys must be 8-256 characters"). They now pass it
+  only when it is set, `.env.example` leaves it commented out, and an empty
+  list setting now means no values instead of one empty value. CI starts the
+  root Compose stack on every change.
+- `/status` no longer reports the backend down because TMDB has no API key: an
+  unconfigured TMDB check is inactive. The quickstart's `/status` returned 503.
+
+- `plugins/` now holds three templates, each shipped with `enabled: false`: a
+  regex classifier, Armiger Ultra and OpenRouter. The root Compose file gains
+  `armiger` and `openrouter` profiles whose services listen on the core's
+  loopback, so neither needs a service token. `examples/plugins/` and
+  `examples/armiger-processor/`, which pinned an Armiger image tag that is not
+  on GHCR, are removed.
+- Add `adapters/armiger`, a processor bridge to the published Armiger Ultra
+  image's `/v1/classify`. Categories without a content type, low-confidence
+  answers and an unreachable Armiger abstain or defer.
+- The LLM adapter moves from `plugins/llm` to `adapters/llm` and ships an
+  OpenRouter configuration. Its default prompt now treats the release name as
+  evidence and other processors' abstentions as no evidence against a label. On
+  twelve labelled names, gemini-2.5-flash-lite went from 5 to 12 correct and
+  gpt-4o-mini from 2 to 11.
+- `examples/llm-match-embeddings.yml`, an overlay for the retired in-core
+  matcher whose keys now fail startup, moves to `_legacy/`.
+
 - The Compose examples pin `v5.7.1` and pass `EVIDENCE_WEBHOOK_SECRET` from
   `.env`, so the *arr webhook can be authenticated as the README describes.
   Both stacks now read the same `.env.example` settings, which no longer sets
@@ -46,7 +72,7 @@
 
 - Retire `builtin/llm` and built-in online calibration. Inference, prompts,
   provider credentials and budgets now live in a separately runnable HTTP
-  processor adapter (`plugins/llm`). Existing registrations fail closed with
+  processor adapter (`adapters/llm`). Existing registrations fail closed with
   migration reason codes; retain history and replace them using the documented
   migration. Static regex weights no longer consume retained learned state.
 - Default native processing to `basic`, matching Compose. Explicit
