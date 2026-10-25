@@ -69,7 +69,11 @@ services:
         max-size: "50m"
         max-file: "5"
     healthcheck:
-      test: ["CMD", "curl", "--fail", "--silent", "--show-error", "--output", "/dev/null", "http://127.0.0.1:3333/metrics"]
+      # /status stays public when HTTP_SERVER_API_KEY is set. Known gap: no
+      # --fail, because v5.7.1 reports TMDB without a key as down there, so
+      # this only checks that the server answers. Once the default image is
+      # newer, add --fail and start_period: 90s as in the source stack.
+      test: ["CMD", "curl", "--silent", "--show-error", "--output", "/dev/null", "http://127.0.0.1:3333/status"]
       interval: 30s
       timeout: 5s
       retries: 5

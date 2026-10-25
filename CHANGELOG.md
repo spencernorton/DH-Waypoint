@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- The Compose healthchecks no longer probe `/metrics`, which returns 401 once
+  `HTTP_SERVER_API_KEY` is set and so marked the container unhealthy. They
+  probe the public `/status`. The source stack waits for it to report up, with
+  a 90-second start period because `/status` returns 503 for about the first
+  minute. The root stack only checks that the server answers until its default
+  image is newer than `v5.7.1`, which reports TMDB without a key as down.
+- The bundled Grafana dashboard's memory, classifier and queue panels were
+  empty. Memory reads `bitmagnet_process_resident_memory_bytes`, the classifier
+  panels, whose metrics no longer exist, show optional-processor outcomes and
+  request latency, and the queue panel uses the selected Prometheus data
+  source and plots job counts instead of `increase()` of a gauge. The latency
+  panels show the recent median rather than the median since start.
+
 - Fix the Compose quickstart, which has never started. Both Compose files
   passed an empty `TRACKER_PASSKEYS`, which every release since 5.6.0 rejects
   at startup ("tracker passkeys must be 8-256 characters"). They now pass it
