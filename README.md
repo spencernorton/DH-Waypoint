@@ -52,7 +52,7 @@ stamps a coarse category from file extensions; `full` adds the deterministic
 classifier with anime-aware title parsing and TMDB matching; `raw` stores
 metadata untouched. Templates in [`plugins/`](plugins/README.md) add a regex
 classifier, the [Armiger](https://github.com/spencernorton/armiger) model or a
-model hosted on OpenRouter, each switched on with one setting. Plugins only
+model hosted on OpenRouter, each turned on in at most three steps. Plugins only
 propose: the core validates every proposal and never lets one delete a record.
 
 **Curation hides; it does not delete.** Content filtering and retention
