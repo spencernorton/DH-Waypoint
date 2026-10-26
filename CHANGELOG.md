@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Peer wire metadata requests now dial both IPv4 and IPv6 addresses, close active sockets immediately when the request context is cancelled, and document the supported BitTorrent / BEP compatibility surface in `docs/protocol-compatibility.md`.
 - The Compose healthchecks no longer probe `/metrics`, which returns 401 once
   `HTTP_SERVER_API_KEY` is set and so marked the container unhealthy. They
   probe the public `/status`. The source stack waits for it to report up, with

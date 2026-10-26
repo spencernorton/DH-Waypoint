@@ -109,6 +109,12 @@ func (r requester) Request(ctx context.Context, infoHash protocol.ID, addr netip
 		return Response{}, connErr
 	}
 
+	// DialContext stops observing cancellation once dialing succeeds. Close
+	// the active socket as well so cancellation interrupts handshake and
+	// metadata reads/writes immediately, before the absolute I/O deadline.
+	stopClose := context.AfterFunc(timeoutCtx, func() { _ = conn.Close() })
+	defer stopClose()
+
 	defer func() {
 		_ = conn.Close()
 	}()
@@ -151,7 +157,7 @@ func (r requester) Request(ctx context.Context, infoHash protocol.ID, addr netip
 }
 
 func (r requester) connect(ctx context.Context, addr netip.AddrPort) (conn *net.TCPConn, err error) {
-	c, dialErr := r.dialer.DialContext(ctx, "tcp4", addr.String())
+	c, dialErr := r.dialer.DialContext(ctx, "tcp", addr.String())
 	if dialErr != nil {
 		err = dialErr
 		return
