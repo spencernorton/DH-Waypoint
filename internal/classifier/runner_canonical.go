@@ -89,6 +89,13 @@ func (r *canonicalRunner) Run(
 	case label != nil:
 		contentType, ok := canonicalToContentType(label.MediaType)
 		if ok {
+			if canonicalNeedsIdentityEnrichment(contentType) && hasContradictoryNonVideoFiles(t) {
+				// File evidence contradicts a video hint (e.g. a single-file
+				// .exe/.7z masquerading with a scene episode name): fall
+				// through unhinted so the core workflow can classify it as
+				// software or leave it unmatched.
+				return r.inner.Run(ctx, workflow, flags, t)
+			}
 			if canonicalNeedsIdentityEnrichment(contentType) {
 				r.metrics.constrainedTotal.WithLabelValues(
 					string(label.ResolvedSource), string(label.MediaType),
@@ -116,6 +123,9 @@ func (r *canonicalRunner) Run(
 // workflow's attach-by-id actions resolve it (tvdb: included).
 func (r *canonicalRunner) withTitleEvidence(ctx context.Context, t model.Torrent) model.Torrent {
 	if r.titles == nil {
+		return t
+	}
+	if hasContradictoryNonVideoFiles(t) {
 		return t
 	}
 	label, outcome := r.titles.Preferred(ctx, t)

@@ -112,6 +112,17 @@
   advertise and accept `tvdbid`. Only `id` attributes establish external identity;
   text search and the existing serving-policy checks remain available.
 
+### Fixed
+
+- Single-file `.exe` and `.7z` torrents masquerading with TV episode scene
+  names are no longer hinted as `tv_show` by canonical or title evidence, and
+  historical grabs of such releases no longer cast title-evidence votes. The
+  core classifier now classifies them as `software` or leaves them unmatched
+  instead of attaching TMDB/TVDB series. Optional processors proposing
+  `movie`, `tv_show` or `xxx` for torrents whose file evidence contradicts
+  video are rejected as `rejected_policy`, including when the content filter
+  runs in shadow mode (`Enforce=false`).
+
 ### Breaking changes
 
 - Retire `builtin/llm` and built-in online calibration. Inference, prompts,

@@ -299,6 +299,158 @@ func TestFallThroughOnUnknownMediaType(t *testing.T) {
 	}
 }
 
+func TestCanonicalRunnerNonVideoNotHinted(t *testing.T) {
+	labels := &fakeTitleLabels{labels: []evidence.TitleLabel{
+		tvLabel(1, "South Park S01E01 1080p WEB", "tmdb:2190"),
+		tvLabel(2, "South Park S02E01 1080p WEB", "tmdb:2190"),
+	}}
+
+	t.Run("withTitleEvidence exe not hinted", func(t *testing.T) {
+		inner := &fakeRunner{}
+		r := NewCanonicalRunner(inner, &fakeStore{}, NewPreemptMetrics(), WithTitleEvidence(NewTitleEvidence(labels)))
+		exeTorrent := model.Torrent{
+			InfoHash: hashOf(9), Name: "South Park S29E04 1080p WEB H264-FLUX.exe",
+			FilesStatus: model.FilesStatusSingle, Extension: model.NewNullString("exe"), Size: 1000,
+		}
+		// withTitleEvidence is exercised via Run (no canonical label).
+		_, err := r.Run(context.Background(), "", Flags{}, exeTorrent)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !inner.torrent.Hint.IsNil() {
+			t.Fatalf("exe torrent must not be hinted, got %+v", inner.torrent.Hint)
+		}
+	})
+
+	t.Run("withTitleEvidence 7z not hinted", func(t *testing.T) {
+		labels2 := &fakeTitleLabels{labels: []evidence.TitleLabel{
+			tvLabel(1, "MobLand S01E01 1080p WEB", "tmdb:1001"),
+			tvLabel(2, "MobLand S01E02 1080p WEB", "tmdb:1001"),
+		}}
+		inner := &fakeRunner{}
+		r := NewCanonicalRunner(inner, &fakeStore{}, NewPreemptMetrics(), WithTitleEvidence(NewTitleEvidence(labels2)))
+		tor := model.Torrent{
+			InfoHash: hashOf(10), Name: "MobLand S02E07 1080p WEB H264.7z",
+			FilesStatus: model.FilesStatusSingle, Extension: model.NewNullString("7z"), Size: 1000,
+		}
+		_, err := r.Run(context.Background(), "", Flags{}, tor)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !inner.torrent.Hint.IsNil() {
+			t.Fatalf("7z torrent must not be hinted, got %+v", inner.torrent.Hint)
+		}
+	})
+
+	t.Run("canonical TV label exe not hinted", func(t *testing.T) {
+		inner := &fakeRunner{}
+		store := &fakeStore{label: &evidence.CanonicalLabel{MediaType: evidence.MediaTypeTV, MediaID: "tmdb:2190", ResolvedSource: evidence.SourceSonarr}}
+		r := NewCanonicalRunner(inner, store, NewPreemptMetrics())
+		tor := model.Torrent{
+			InfoHash: hashOf(9), Name: "South Park S29E04 1080p WEB H264-FLUX.exe",
+			FilesStatus: model.FilesStatusSingle, Extension: model.NewNullString("exe"), Size: 1000,
+		}
+		_, err := r.Run(context.Background(), "", Flags{}, tor)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !inner.called {
+			t.Fatal("inner must be called")
+		}
+		if !inner.torrent.Hint.IsNil() {
+			t.Fatalf("canonical TV hint must not apply to exe, got %+v", inner.torrent.Hint)
+		}
+	})
+
+	t.Run("canonical TV label 7z not hinted", func(t *testing.T) {
+		inner := &fakeRunner{}
+		store := &fakeStore{label: &evidence.CanonicalLabel{MediaType: evidence.MediaTypeTV, MediaID: "tmdb:1001", ResolvedSource: evidence.SourceSonarr}}
+		r := NewCanonicalRunner(inner, store, NewPreemptMetrics())
+		tor := model.Torrent{
+			InfoHash: hashOf(10), Name: "MobLand S02E07 1080p WEB H264.7z",
+			FilesStatus: model.FilesStatusSingle, Extension: model.NewNullString("7z"), Size: 1000,
+		}
+		_, err := r.Run(context.Background(), "", Flags{}, tor)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !inner.torrent.Hint.IsNil() {
+			t.Fatalf("canonical TV hint must not apply to 7z, got %+v", inner.torrent.Hint)
+		}
+	})
+
+	t.Run("multi-file non-video not hinted but video is", func(t *testing.T) {
+		inner := &fakeRunner{}
+		r := NewCanonicalRunner(inner, &fakeStore{}, NewPreemptMetrics(), WithTitleEvidence(NewTitleEvidence(labels)))
+		multi := model.Torrent{
+			InfoHash: hashOf(12), Name: "South Park S29E04 1080p WEB", FilesStatus: model.FilesStatusMulti,
+			Files: []model.TorrentFile{
+				{Path: "show.exe", Size: 100, Extension: model.NewNullString("exe")},
+				{Path: "show.rar", Size: 100, Extension: model.NewNullString("rar")},
+				{Path: "show.nfo", Size: 10, Extension: model.NewNullString("nfo")},
+			},
+		}
+		_, err := r.Run(context.Background(), "", Flags{}, multi)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !inner.torrent.Hint.IsNil() {
+			t.Fatalf("multi non-video must not be hinted, got %+v", inner.torrent.Hint)
+		}
+
+		inner2 := &fakeRunner{}
+		r2 := NewCanonicalRunner(inner2, &fakeStore{}, NewPreemptMetrics(), WithTitleEvidence(NewTitleEvidence(labels)))
+		withVideo := model.Torrent{
+			InfoHash: hashOf(13), Name: "South Park S29E04 1080p WEB", FilesStatus: model.FilesStatusMulti,
+			Files: []model.TorrentFile{
+				{Path: "show.mkv", Size: 1000, Extension: model.NewNullString("mkv")},
+				{Path: "show.nfo", Size: 10, Extension: model.NewNullString("nfo")},
+			},
+		}
+		_, err = r2.Run(context.Background(), "", Flags{}, withVideo)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if inner2.torrent.Hint.ContentType != model.ContentTypeTvShow {
+			t.Fatalf("multi with video must be hinted tv_show, got %+v", inner2.torrent.Hint)
+		}
+		if inner2.torrent.Hint.ContentID.String != "2190" {
+			t.Fatalf("expected tmdb 2190, got %+v", inner2.torrent.Hint)
+		}
+	})
+}
+
+func TestCanonicalRunnerCoreClassifierExeIsSoftware(t *testing.T) {
+	mocks := newTestClassifierMocks(t)
+	source, err := yamlSourceProvider{rawSourceProvider: coreSourceProvider{}}.source()
+	if err != nil {
+		t.Fatal(err)
+	}
+	inner, err := mocks.compiler.Compile(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	labels := &fakeTitleLabels{labels: []evidence.TitleLabel{
+		tvLabel(1, "South Park S01E01 1080p WEB", "tmdb:2190"),
+		tvLabel(2, "South Park S02E01 1080p WEB", "tmdb:2190"),
+	}}
+	r := NewCanonicalRunner(inner, &fakeStore{}, NewPreemptMetrics(), WithTitleEvidence(NewTitleEvidence(labels)))
+	tor := model.Torrent{
+		InfoHash: hashOf(9), Name: "South Park S29E04 1080p WEB H264-FLUX.exe",
+		FilesStatus: model.FilesStatusSingle, Extension: model.NewNullString("exe"), Size: 50_000_000,
+	}
+	res, err := r.Run(context.Background(), "default", Flags{}, tor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.ContentType.Valid || res.ContentType.ContentType != model.ContentTypeSoftware {
+		t.Fatalf("expected software, got %+v", res.ContentType)
+	}
+	if res.Content != nil {
+		t.Fatalf("must not attach TV content, got %+v", res.Content)
+	}
+}
+
 func TestInfoHashBytesForwardedToStore(t *testing.T) {
 	store := &fakeStore{label: nil}
 	inner := &fakeRunner{}

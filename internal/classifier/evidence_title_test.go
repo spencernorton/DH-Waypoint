@@ -212,6 +212,112 @@ func TestCanonicalRunnerTitleEvidence(t *testing.T) {
 	})
 }
 
+func TestTitleEvidencePreferredRejectsNonVideoFiles(t *testing.T) {
+	t.Parallel()
+
+	src := &fakeTitleLabels{labels: []evidence.TitleLabel{
+		tvLabel(1, "South Park S01E01 1080p WEB", "tmdb:2190"),
+		tvLabel(2, "South Park S02E01 1080p WEB", "tmdb:2190"),
+		tvLabel(3, "MobLand S01E01 1080p WEB", "tmdb:1001"),
+		tvLabel(4, "MobLand S01E02 1080p WEB", "tmdb:1001"),
+	}}
+	e := NewTitleEvidence(src)
+	ctx := context.Background()
+
+	exeTorrent := model.Torrent{
+		InfoHash:    hashOf(9),
+		Name:        "South Park S29E04 1080p WEB H264-FLUX.exe",
+		FilesStatus: model.FilesStatusSingle,
+		Extension:   model.NewNullString("exe"),
+	}
+	_, out := e.Preferred(ctx, exeTorrent)
+	assert.Equal(t, titleNoKey, out)
+
+	sevenZipTorrent := model.Torrent{
+		InfoHash:    hashOf(10),
+		Name:        "MobLand S02E07 1080p WEB H264.7z",
+		FilesStatus: model.FilesStatusSingle,
+		Extension:   model.NewNullString("7z"),
+	}
+	_, out = e.Preferred(ctx, sevenZipTorrent)
+	assert.Equal(t, titleNoKey, out)
+
+	// Bare scene name with no file info is not blocked (pseudo-extension).
+	bare := torrentNamed(11, "South Park S29E04 1080p WEB H264-FLUX")
+	lbl, out := e.Preferred(ctx, bare)
+	require.Equal(t, titleApplied, out)
+	assert.Equal(t, "tmdb:2190", lbl.MediaID)
+}
+
+func TestTitleEvidenceRebuildIgnoresNonVideoLabels(t *testing.T) {
+	t.Parallel()
+
+	// Only .exe/.7z labels exist for this title: they must cast no vote.
+	src := &fakeTitleLabels{labels: []evidence.TitleLabel{
+		tvLabel(1, "South Park S01E01 1080p WEB.exe", "tmdb:2190"),
+		tvLabel(2, "South Park S02E01 1080p WEB.7z", "tmdb:2190"),
+	}}
+	e := NewTitleEvidence(src)
+	_, out := e.Preferred(context.Background(), torrentNamed(9, "South Park S29E04 1080p WEB"))
+	assert.Equal(t, titleNoPreference, out)
+
+	// Mixed: two valid labels still vote despite one poisoned label.
+	src2 := &fakeTitleLabels{labels: []evidence.TitleLabel{
+		tvLabel(1, "South Park S01E01 1080p WEB.exe", "tmdb:2190"),
+		tvLabel(2, "South Park S02E01 1080p WEB", "tmdb:2190"),
+		tvLabel(3, "South Park S03E01 1080p WEB", "tmdb:2190"),
+	}}
+	e2 := NewTitleEvidence(src2)
+	lbl, out := e2.Preferred(context.Background(), torrentNamed(9, "South Park S29E04 1080p WEB"))
+	require.Equal(t, titleApplied, out)
+	assert.Equal(t, "tmdb:2190", lbl.MediaID)
+}
+
+func TestHasContradictoryNonVideoFiles(t *testing.T) {
+	t.Parallel()
+
+	assert.True(t, hasContradictoryNonVideoFiles(model.Torrent{
+		Name: "South Park S29E04 1080p WEB H264-FLUX.exe", FilesStatus: model.FilesStatusSingle, Extension: model.NewNullString("exe"),
+	}))
+	assert.True(t, hasContradictoryNonVideoFiles(model.Torrent{
+		Name: "MobLand S02E07 1080p WEB H264.7z", FilesStatus: model.FilesStatusSingle, Extension: model.NewNullString("7z"),
+	}))
+	// Name-only fallback.
+	assert.True(t, hasContradictoryNonVideoFiles(model.Torrent{Name: "Some Show S01E01.exe"}))
+	// Script extensions not in FileTypeFromExtension.
+	assert.True(t, isContradictoryNonVideoExtension("cmd"))
+	assert.True(t, isContradictoryNonVideoExtension("ps1"))
+	assert.True(t, isContradictoryNonVideoExtension("7z"))
+	assert.True(t, isContradictoryNonVideoExtension("exe"))
+	// Pseudo-extensions are not evidence.
+	assert.False(t, isContradictoryNonVideoExtension("web"))
+	assert.False(t, isContradictoryNonVideoExtension("h264"))
+	assert.False(t, isContradictoryNonVideoExtension("x264"))
+	assert.False(t, hasContradictoryNonVideoFiles(model.Torrent{Name: "Synthetic.V2.txt", FilesStatus: model.FilesStatusSingle}))
+	assert.False(t, hasContradictoryNonVideoFiles(torrentNamed(1, "Kitchen.Nightmares.S08E01.WEB")))
+	assert.False(t, hasContradictoryNonVideoFiles(torrentNamed(1, "Married.At.First.Sight.S16E02.720p.WEB.h264-BAE")))
+	// Video extension is not contradictory.
+	assert.False(t, hasContradictoryNonVideoFiles(model.Torrent{
+		Name: "Movie 2024.mkv", FilesStatus: model.FilesStatusSingle, Extension: model.NewNullString("mkv"),
+	}))
+	// Multi-file: only non-video files is contradictory; with video is not.
+	assert.True(t, hasContradictoryNonVideoFiles(model.Torrent{
+		Name: "Show S01E01", FilesStatus: model.FilesStatusMulti,
+		Files: []model.TorrentFile{
+			{Path: "show.exe", Size: 100, Extension: model.NewNullString("exe")},
+			{Path: "show.rar", Size: 100, Extension: model.NewNullString("rar")},
+			{Path: "show.nfo", Size: 10, Extension: model.NewNullString("nfo")},
+		},
+	}))
+	assert.False(t, hasContradictoryNonVideoFiles(model.Torrent{
+		Name: "Show S01E01", FilesStatus: model.FilesStatusMulti,
+		Files: []model.TorrentFile{
+			{Path: "show.mkv", Size: 1000, Extension: model.NewNullString("mkv")},
+			{Path: "show.nfo", Size: 10, Extension: model.NewNullString("nfo")},
+		},
+	}))
+}
+
 // A failing refresh must back off: a database outage is asked once a minute,
 // not once per classification (a review finding on this feature).
 func TestTitleEvidenceFailedRefreshBacksOff(t *testing.T) {

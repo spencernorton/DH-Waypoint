@@ -128,6 +128,9 @@ func titleEvidenceKey(name string) string {
 // t's title, not counting t's own label. The label is usable only when the
 // outcome is titleApplied.
 func (e *TitleEvidence) Preferred(ctx context.Context, t model.Torrent) (*evidence.CanonicalLabel, titleOutcome) {
+	if hasContradictoryNonVideoFiles(t) {
+		return nil, titleNoKey
+	}
 	idx := e.index(ctx)
 	if idx == nil || idx.votes == nil {
 		return nil, titleNoIndex
@@ -204,6 +207,9 @@ func (e *TitleEvidence) rebuild(ctx context.Context) {
 		self:  make(map[string]titleSelf, len(labels)),
 	}
 	for _, l := range labels {
+		if ext := model.FileExtensionFromPath(l.Name); ext.Valid && isContradictoryNonVideoExtension(ext.String) {
+			continue
+		}
 		contentType, ok := canonicalToContentType(l.MediaType)
 		if !ok || !canonicalNeedsIdentityEnrichment(contentType) {
 			continue
