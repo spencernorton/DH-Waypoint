@@ -1,13 +1,13 @@
-package queueclean
+package queue
 
 import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/spencernorton/DH-Waypoint/internal/telemetry/dualemit"
 )
 
-// Metrics for the queueclean worker. Mirrors retention.Metrics so the
+// PurgeMetrics for the queueclean worker. Mirrors retention.PurgeMetrics so the
 // operator dashboards have a single mental model.
-type Metrics struct {
+type PurgeMetrics struct {
 	cyclesTotal      *dualemit.Counter
 	cycleDuration    *dualemit.Histogram
 	candidatesTotal  *dualemit.CounterVec // by status
@@ -17,12 +17,12 @@ type Metrics struct {
 	lastCycleUnix    *dualemit.Gauge
 }
 
-func NewMetrics() *Metrics {
+func NewPurgeMetrics() *PurgeMetrics {
 	const (
 		namespace = "dh_waypoint"
 		subsystem = "queueclean"
 	)
-	return &Metrics{
+	return &PurgeMetrics{
 		cyclesTotal: dualemit.NewCounter(prometheus.CounterOpts{
 			Namespace: namespace, Subsystem: subsystem, Name: "cycles_total",
 			Help: "Completed queueclean cycles (dry-run or live).",
@@ -55,7 +55,7 @@ func NewMetrics() *Metrics {
 	}
 }
 
-func (m *Metrics) Collectors() []prometheus.Collector {
+func (m *PurgeMetrics) Collectors() []prometheus.Collector {
 	return []prometheus.Collector{
 		m.cyclesTotal, m.cycleDuration, m.candidatesTotal,
 		m.wouldPurgeTotal, m.purgedTotal, m.cycleErrorsTotal,

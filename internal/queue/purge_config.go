@@ -1,4 +1,4 @@
-// Package queueclean runs a scheduled worker that purges stale
+// The queue purge worker (config section "queueclean") purges stale
 // queue_jobs rows. The DHT crawl pipeline writes process_torrent jobs
 // to a Postgres-backed queue; once a job moves to status='processed'
 // or 'failed' it can be safely deleted to keep the table + its 825 MB
@@ -18,13 +18,13 @@
 //	  QUEUECLEAN_ENABLE_PURGE=true    deletes per cycle
 //
 // See AGENTS/SPEC_db_hygiene_2026-04-26.md §1.
-package queueclean
+package queue
 
 import "time"
 
-// Config controls queueclean behaviour. Registered as the
+// PurgeConfig controls queueclean behaviour. Registered as the
 // "queueclean" configfx section; env prefix QUEUECLEAN_*.
-type Config struct {
+type PurgeConfig struct {
 	// Enabled turns the worker on. When false, no scheduled cycles run
 	// and no metrics are emitted.
 	Enabled bool `yaml:"enabled"`
@@ -55,10 +55,10 @@ type Config struct {
 	PurgeStatuses []string `yaml:"purge_statuses"`
 }
 
-// NewDefaultConfig — explicit opt-in, dry-run by default. Same shape
-// as retention.NewDefaultConfig.
-func NewDefaultConfig() Config {
-	return Config{
+// NewPurgeDefaultConfig — explicit opt-in, dry-run by default. Same shape
+// as retention.NewPurgeDefaultConfig.
+func NewPurgeDefaultConfig() PurgeConfig {
+	return PurgeConfig{
 		Enabled:       false,
 		EnablePurge:   false,
 		Interval:      1 * time.Hour,

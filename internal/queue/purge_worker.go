@@ -1,10 +1,8 @@
-package queueclean
+package queue
 
 import (
 	"context"
 	"errors"
-	"fmt"
-	"strings"
 	"sync"
 	"time"
 
@@ -17,45 +15,45 @@ import (
 
 const workerKey = "queueclean"
 
-type Params struct {
+type PurgeParams struct {
 	fx.In
-	Config  Config
-	Pool    lazy.Lazy[*pgxpool.Pool]
-	Metrics *Metrics
-	Logger  *zap.SugaredLogger
+	PurgeConfig PurgeConfig
+	Pool        lazy.Lazy[*pgxpool.Pool]
+	Metrics     *PurgeMetrics
+	Logger      *zap.SugaredLogger
 }
 
-type Result struct {
+type PurgeResult struct {
 	fx.Out
 	Worker worker.Worker `group:"workers"`
 }
 
-// New wires the queueclean worker. Respects Config.Enabled — when
+// New wires the queueclean worker. Respects PurgeConfig.Enabled — when
 // false, OnStart is a no-op so the scheduled cycles never fire.
-func New(p Params) Result {
-	w := &cleanWorker{
-		cfg:     p.Config,
+func NewPurgeWorker(p PurgeParams) PurgeResult {
+	w := &purgeWorker{
+		cfg:     p.PurgeConfig,
 		pool:    p.Pool,
 		metrics: p.Metrics,
 		logger:  p.Logger.Named("queueclean"),
 	}
-	return Result{Worker: worker.NewWorker(workerKey, fx.Hook{
+	return PurgeResult{Worker: worker.NewWorker(workerKey, fx.Hook{
 		OnStart: w.start,
 		OnStop:  w.stop,
 	})}
 }
 
-type cleanWorker struct {
-	cfg     Config
+type purgeWorker struct {
+	cfg     PurgeConfig
 	pool    lazy.Lazy[*pgxpool.Pool]
-	metrics *Metrics
+	metrics *PurgeMetrics
 	logger  *zap.SugaredLogger
 
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 }
 
-func (w *cleanWorker) start(context.Context) error {
+func (w *purgeWorker) start(context.Context) error {
 	if !w.cfg.Enabled {
 		w.logger.Info("queueclean disabled via config; skipping start")
 		return nil
@@ -81,7 +79,7 @@ func (w *cleanWorker) start(context.Context) error {
 	return nil
 }
 
-func (w *cleanWorker) stop(context.Context) error {
+func (w *purgeWorker) stop(context.Context) error {
 	if w.cancel != nil {
 		w.cancel()
 	}
@@ -89,7 +87,7 @@ func (w *cleanWorker) stop(context.Context) error {
 	return nil
 }
 
-func (w *cleanWorker) loop(ctx context.Context) {
+func (w *purgeWorker) loop(ctx context.Context) {
 	defer w.wg.Done()
 
 	// Offset the first cycle so we don't slam the DB at startup.
@@ -113,7 +111,7 @@ func (w *cleanWorker) loop(ctx context.Context) {
 	}
 }
 
-func (w *cleanWorker) runCycle(ctx context.Context) {
+func (w *purgeWorker) runCycle(ctx context.Context) {
 	start := time.Now()
 	defer func() {
 		w.metrics.cyclesTotal.Inc()
@@ -174,7 +172,7 @@ func (w *cleanWorker) runCycle(ctx context.Context) {
 
 // countCandidates is intentionally simple: queue_jobs is small enough
 // (~14k rows live) that a count() with two-column predicate is sub-ms.
-func (w *cleanWorker) countCandidates(ctx context.Context, pool *pgxpool.Pool, status string, cutoff time.Time) (int64, error) {
+func (w *purgeWorker) countCandidates(ctx context.Context, pool *pgxpool.Pool, status string, cutoff time.Time) (int64, error) {
 	var n int64
 	err := pool.QueryRow(ctx,
 		`SELECT count(*) FROM queue_jobs WHERE status = $1 AND created_at < $2`,
@@ -186,7 +184,7 @@ func (w *cleanWorker) countCandidates(ctx context.Context, pool *pgxpool.Pool, s
 // purgeBatch deletes BatchSize rows max per call. The id IN (subquery)
 // pattern lets Postgres use the (queue, status) index for the inner
 // scan and avoid locking rows we're not deleting.
-func (w *cleanWorker) purgeBatch(ctx context.Context, pool *pgxpool.Pool, status string, cutoff time.Time) (int64, error) {
+func (w *purgeWorker) purgeBatch(ctx context.Context, pool *pgxpool.Pool, status string, cutoff time.Time) (int64, error) {
 	q := `
 DELETE FROM queue_jobs
 WHERE id IN (
@@ -201,17 +199,3 @@ WHERE id IN (
 	}
 	return tag.RowsAffected(), nil
 }
-
-// statusListCSV is here for log readability; not used in SQL paths.
-func statusListCSV(s []string) string {
-	return strings.Join(s, ",")
-}
-
-// fmtCutoff is here for log readability; pgx's default time formatting
-// is verbose.
-func fmtCutoff(t time.Time) string {
-	return fmt.Sprintf("%s UTC", t.UTC().Format(time.RFC3339))
-}
-
-var _ = statusListCSV // keep helper for future log enrichment
-var _ = fmtCutoff     // keep helper for future log enrichment

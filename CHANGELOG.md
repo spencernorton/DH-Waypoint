@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- Classifier CEL `matches` calls no longer recompile their regex on every
+  evaluation. Constant patterns compile once at program creation and the
+  remaining patterns (keyword-list fold variables) go through a bounded
+  compiled-pattern cache, cutting deterministic pipeline time roughly 3x
+  (about 1,090 µs to 320 µs per benchmark run) and allocations by about
+  89% with identical match and error semantics.
+- Consolidated wiring: the queue purge worker moved from `internal/queueclean`
+  into `internal/queue` (config section, worker key, logger and metric names
+  unchanged; only the `config show` type label now reads `queue.PurgeConfig`),
+  and nine single-purpose `*fx` wrapper packages were inlined into the app
+  and cli packages with fx module names preserved. No provider, group,
+  lifecycle, config key or CLI behaviour changes.
+
 ## 5.8.0 — 2026-10-26
 
 - Serving queries avoid evaluating the full Unicode-aware filename evidence

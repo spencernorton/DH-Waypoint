@@ -1,4 +1,4 @@
-package queueclean
+package queue
 
 import (
 	"testing"
@@ -12,7 +12,7 @@ func TestNewDefaultConfig_SafeOptIn(t *testing.T) {
 	// flips Enabled=true. Even then, EnablePurge must default false so
 	// the first cycles produce dry-run telemetry only. Mirrors the
 	// retention worker's safety pattern.
-	cfg := NewDefaultConfig()
+	cfg := NewPurgeDefaultConfig()
 
 	assert.False(t, cfg.Enabled, "Enabled must default false (operator opt-in)")
 	assert.False(t, cfg.EnablePurge, "EnablePurge must default false (dry-run first)")
@@ -28,7 +28,7 @@ func TestNewDefaultConfig_NeverPurgesPending(t *testing.T) {
 	// Pending jobs are never eligible for purge — the worker would
 	// otherwise nuke jobs that the queue server hasn't processed yet.
 	// Pin this contract.
-	cfg := NewDefaultConfig()
+	cfg := NewPurgeDefaultConfig()
 	for _, s := range cfg.PurgeStatuses {
 		assert.NotEqual(t, "pending", s,
 			"pending status must NEVER be in default PurgeStatuses")
