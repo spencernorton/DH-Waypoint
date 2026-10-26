@@ -24,6 +24,7 @@ type Policy struct {
 	excludeAdult        bool
 	processorExclusions bool
 	strongPattern       string
+	candidatePattern    string
 	mediaExtensions     []string
 	names               *namepolicy.Policy
 }
@@ -47,6 +48,7 @@ func NewPolicy(cfg Config, strongKeywords, mediaExtensions []string, names ...*n
 	pattern := strings.ReplaceAll(r.String(), `\p{L}`, postgresLetterRanges())
 	pattern = strings.ReplaceAll(pattern, `\d`, `0-9`)
 	p := &Policy{processorExclusions: cfg.ProcessorExclusions, excludeAdult: cfg.ExcludeAdult, strongPattern: pattern, mediaExtensions: append([]string(nil), mediaExtensions...)}
+	p.candidatePattern = candidatePattern(r.String())
 	if len(names) == 1 {
 		p.names = names[0]
 	}
@@ -143,6 +145,12 @@ func (p *Policy) TorrentCondition(table string) clause.Expr {
 		// The positive media-byte test mirrors core XXX typing; arbitrary archives
 		// and a single weak title token never become adult evidence here.
 		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(p.mediaExtensions)), ",")
+		nameMatch, nameArgs := p.strongMatchSQL(`CASE WHEN serving_t.files_status = 'single' AND serving_t.extension IS NOT NULL
+   THEN left(serving_t.name, greatest(char_length(serving_t.name)-char_length(serving_t.extension)-1, 0))
+   ELSE serving_t.name END`)
+		fileMatch, fileArgs := p.strongMatchSQL(`CASE WHEN serving_f.extension IS NOT NULL
+     THEN left(serving_f.path, greatest(char_length(serving_f.path)-char_length(serving_f.extension)-1, 0))
+     ELSE serving_f.path END`)
 		sql += ` AND NOT EXISTS (
  SELECT 1 FROM torrents serving_t WHERE serving_t.info_hash = ` + root + `
   AND (CASE WHEN serving_t.files_status = 'single'
@@ -150,19 +158,15 @@ func (p *Policy) TorrentCondition(table string) clause.Expr {
    ELSE COALESCE((SELECT sum(CASE WHEN serving_f.extension IN (` + placeholders + `)
     THEN serving_f.size ELSE -serving_f.size END) FROM torrent_files serving_f
     WHERE serving_f.info_hash = serving_t.info_hash), 0) > 0 END)
-  AND ((CASE WHEN serving_t.files_status = 'single' AND serving_t.extension IS NOT NULL
-   THEN left(serving_t.name, greatest(char_length(serving_t.name)-char_length(serving_t.extension)-1, 0))
-   ELSE serving_t.name END) ~* ? OR EXISTS (SELECT 1 FROM torrent_files serving_f
-   WHERE serving_f.info_hash = serving_t.info_hash AND
-    (CASE WHEN serving_f.extension IS NOT NULL
-     THEN left(serving_f.path, greatest(char_length(serving_f.path)-char_length(serving_f.extension)-1, 0))
-     ELSE serving_f.path END) ~* ?)))`
+  AND (` + nameMatch + ` OR EXISTS (SELECT 1 FROM torrent_files serving_f
+   WHERE serving_f.info_hash = serving_t.info_hash AND ` + fileMatch + `)))`
 		for range 2 {
 			for _, extension := range p.mediaExtensions {
 				args = append(args, extension)
 			}
 		}
-		args = append(args, p.strongPattern, p.strongPattern)
+		args = append(args, nameArgs...)
+		args = append(args, fileArgs...)
 	}
 	if p.names.Enabled() {
 		nameColumn, hashColumn := "torrents.name", root
