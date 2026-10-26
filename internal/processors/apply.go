@@ -168,7 +168,7 @@ func (s *Store) apply(ctx context.Context, tx pgx.Tx, l Lease, src source) error
 				stepOutcomes[i] = "rejected_policy"
 				continue
 			}
-			if s.filter != nil {
+			{
 				ext := ""
 				if src.Extension != nil {
 					ext = *src.Extension
@@ -186,7 +186,8 @@ func (s *Store) apply(ctx context.Context, tx pgx.Tx, l Lease, src source) error
 				for lang := range tc.Languages {
 					langs = append(langs, string(lang))
 				}
-				if !s.filter.DecideDeterministic(contentfilter.Input{Title: src.Name, ContentType: p.ContentType, PrimaryExtension: ext, AllExtensions: exts, Languages: langs}).Allow {
+				filterInput := contentfilter.Input{Title: src.Name, ContentType: p.ContentType, PrimaryExtension: ext, AllExtensions: exts, Languages: langs}
+				if shouldRejectApplyContentType(s.filter, filterInput, p.ContentType, tc.Torrent) {
 					stepOutcomes[i] = "rejected_policy"
 					continue
 				}
@@ -347,6 +348,26 @@ func (s *Store) apply(ctx context.Context, tx pgx.Tx, l Lease, src source) error
 		finalMatch = &v1.MatchRef{Source: tc.ContentSource.String, ID: tc.ContentID.String}
 	}
 	return s.recordExecutionFeedback(ctx, tx, l, stepOutcomes, finalType, finalMatch, finalExcluded)
+}
+
+// shouldRejectApplyContentType reports whether an optional processor's
+// content-type proposal must be rejected. DecideDeterministic.Allow is
+// true in shadow mode (Enforce=false) even when Reason is blocked, so the
+// Reason is checked directly. A video proposal (movie/tv_show/xxx) is also
+// rejected when the torrent's file evidence contradicts video, regardless
+// of filter enforcement.
+func shouldRejectApplyContentType(filter *contentfilter.Filter, filterInput contentfilter.Input, proposed string, torrent model.Torrent) bool {
+	if filter != nil && filter.DecideDeterministic(filterInput).Reason != contentfilter.ReasonNone {
+		return true
+	}
+	if (proposed == "movie" || proposed == "tv_show" || proposed == "xxx") && classifier.HasContradictoryNonVideoFiles(torrent) {
+		return true
+	}
+	// Fallback for torrents whose Files slice is empty: the name extension
+	// alone (e.g. ".exe"/".7z") is already covered by
+	// HasContradictoryNonVideoFiles via Extension/Name, so no extra check
+	// is needed here.
+	return false
 }
 
 func applyExtraction(tc *model.TorrentContent, ex *v1.Extraction) bool {
