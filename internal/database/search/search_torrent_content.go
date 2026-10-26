@@ -30,6 +30,7 @@ type IdentifierTorrentContentSearch interface {
 }
 
 func (s search) TorrentContentByIdentifiers(ctx context.Context, refs []model.ContentRef, options ...query.Option) (result TorrentContentResult, err error) {
+	refs = dedupeContentRefs(refs)
 	options = append(append([]query.Option(nil), options...), query.Where(torrentContentResolvedIdentifiersCriteria(ctx, refs)))
 	if len(refs) == 0 || len(refs) == 1 && refs[0].Source == model.SourceTmdb {
 		return s.TorrentContent(ctx, options...)

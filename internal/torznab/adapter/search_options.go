@@ -207,7 +207,19 @@ func requestIdentifierRefs(r torznab.SearchRequest) []model.ContentRef {
 	if r.TVDBID.Valid {
 		identifiers = append(identifiers, identifierRefs(torznab.FunctionTV, "tvdb", r.TVDBID.String)...)
 	}
-	return identifiers
+	// A repeated (type, source, id) carries no extra OR alternative; keep the
+	// ref list minimal so downstream singleton checks and bound parameter
+	// counts reflect distinct identifiers only.
+	seen := make(map[model.ContentRef]struct{}, len(identifiers))
+	distinct := identifiers[:0]
+	for _, ref := range identifiers {
+		if _, ok := seen[ref]; ok {
+			continue
+		}
+		seen[ref] = struct{}{}
+		distinct = append(distinct, ref)
+	}
+	return distinct
 }
 
 func identifierRefs(function, source, id string) []model.ContentRef {
