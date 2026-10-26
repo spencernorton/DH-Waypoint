@@ -67,6 +67,13 @@
   order, including several content rows belonging to one torrent. Add a disposable
   catalogue SQL harness for deterministic scale, correctness, concurrent writes,
   cold/warm queries, index bytes, reindexing and recovery qualification.
+- Identifier snapshot search now probes `torrent_contents` with one index
+  equality per resolved canonical key instead of keeping the identifier
+  subquery semijoin in the page query. Torznab requests carrying several
+  external IDs (for example `tvdbid` with `tmdbid`) resolve their distinct
+  key set inside the existing repeatable-read snapshot, covering IDs that
+  map to the same canonical content and IDs attributed to several contents;
+  wider alias fan-out keeps the previous complete predicate.
 - Add concurrent indexes for ordered canonical identities and reverse external-ID
   lookup, selected after 2.4M/10M/32M synthetic qualification. Resolve singleton
   external aliases and read their pages in one read-only snapshot, preserving
