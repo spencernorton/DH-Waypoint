@@ -5,9 +5,9 @@ pyroscope.write "default" {
 }
 
 pyroscope.scrape "default_settings" {
-  targets    = [ { "__address__" = "bitmagnet:3333", "service_name" = "bitmagnet" } ]
+  targets    = [ { "__address__" = "dh-waypoint:3333", "service_name" = "dh-waypoint" } ]
   forward_to = [pyroscope.write.default.receiver]
-  job_name = "bitmagnet"
+  job_name = "dh-waypoint"
   profiling_config {
     profile.goroutine {
       enabled = true
@@ -49,15 +49,15 @@ pyroscope.scrape "default_settings" {
   }
 }
 
-local.file_match "bitmagnet" {
+local.file_match "dh_waypoint" {
 	path_targets = [{
 		__address__ = "localhost",
-		__path__    = "/var/log/bitmagnet/*.log",
-		job         = "bitmagnet",
+		__path__    = "/var/log/dh-waypoint/*.log",
+		job         = "dh-waypoint",
 	}]
 }
 
-loki.process "bitmagnet" {
+loki.process "dh_waypoint" {
 	forward_to = [loki.write.default.receiver]
 
 	stage.json {
@@ -72,9 +72,9 @@ loki.process "bitmagnet" {
 	}
 }
 
-loki.source.file "bitmagnet" {
-	targets    = local.file_match.bitmagnet.targets
-	forward_to = [loki.process.bitmagnet.receiver]
+loki.source.file "dh_waypoint" {
+	targets    = local.file_match.dh_waypoint.targets
+	forward_to = [loki.process.dh_waypoint.receiver]
 }
 
 loki.write "default" {

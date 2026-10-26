@@ -13,7 +13,7 @@
 services:
 
   dh-waypoint:
-    image: ghcr.io/spencernorton/dh-waypoint:${DH_WAYPOINT_VERSION:-v5.7.1}
+    image: ghcr.io/spencernorton/dh-waypoint:${DH_WAYPOINT_VERSION:-v5.8.0}
     container_name: dh-waypoint
     restart: unless-stopped
     depends_on:
@@ -69,15 +69,13 @@ services:
         max-size: "50m"
         max-file: "5"
     healthcheck:
-      # /status stays public when HTTP_SERVER_API_KEY is set. Known gap: no
-      # --fail, because v5.7.1 reports TMDB without a key as down there, so
-      # this only checks that the server answers. Once the default image is
-      # newer, add --fail and start_period: 90s as in the source stack.
-      test: ["CMD", "curl", "--silent", "--show-error", "--output", "/dev/null", "http://127.0.0.1:3333/status"]
+      # /status stays public when HTTP_SERVER_API_KEY is set. It returns 503
+      # until every check has run once, about a minute after start.
+      test: ["CMD", "curl", "--fail", "--silent", "--show-error", "--output", "/dev/null", "http://127.0.0.1:3333/status"]
       interval: 30s
       timeout: 5s
       retries: 5
-      start_period: 30s
+      start_period: 90s
 
   postgres:
     image: postgres:16-alpine
