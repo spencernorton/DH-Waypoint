@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 5.8.0 — 2026-10-26
+
 - Serving queries avoid evaluating the full Unicode-aware filename evidence
   regex when a conservative necessary ASCII substring is absent. The original
   matcher still decides eligibility; optional or unsupported alternatives keep
@@ -15,10 +17,11 @@
 - Peer wire metadata requests now dial both IPv4 and IPv6 addresses, close active sockets immediately when the request context is cancelled, and document the supported BitTorrent / BEP compatibility surface in `docs/protocol-compatibility.md`.
 - The Compose healthchecks no longer probe `/metrics`, which returns 401 once
   `HTTP_SERVER_API_KEY` is set and so marked the container unhealthy. They
-  probe the public `/status`. The source stack waits for it to report up, with
-  a 90-second start period because `/status` returns 503 for about the first
-  minute. The root stack only checks that the server answers until its default
-  image is newer than `v5.7.1`, which reports TMDB without a key as down.
+  probe the public `/status`. Both Compose stacks now probe `/status` with
+  `--fail` and a 90-second start period because `/status` returns 503 for about
+  the first minute (`docker-compose.yml` now defaults to `v5.8.0`).
+  `observability/grafana-agent.config.river` now targets `dh-waypoint:3333`
+  and labels Loki logs `job="dh-waypoint"`.
 - The bundled Grafana dashboard's memory, classifier and queue panels were
   empty. Memory reads `bitmagnet_process_resident_memory_bytes`, the classifier
   panels, whose metrics no longer exist, show optional-processor outcomes and
@@ -56,7 +59,7 @@
 - `examples/llm-match-embeddings.yml`, an overlay for the retired in-core
   matcher whose keys now fail startup, moves to `_legacy/`.
 
-- The Compose examples pin `v5.7.1` and pass `EVIDENCE_WEBHOOK_SECRET` from
+- The Compose examples pin `v5.8.0` (`docker-compose.yml` defaults to `v5.8.0`) and pass `EVIDENCE_WEBHOOK_SECRET` from
   `.env`, so the *arr webhook can be authenticated as the README describes.
   Both stacks now read the same `.env.example` settings, which no longer sets
   `PROCESSING_MODE`: the root stack runs `basic` and the source stack `full`,
