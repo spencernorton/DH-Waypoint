@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Locked processor source reads now take per-hash row locks instead of
+  table-wide `SHARE` locks on the evidence, verdict and catalogue tables.
+  Finishing a processor job no longer blocks evidence inserts or other
+  writers for unrelated torrents.
 - Peer wire metadata requests now dial both IPv4 and IPv6 addresses, close active sockets immediately when the request context is cancelled, and document the supported BitTorrent / BEP compatibility surface in `docs/protocol-compatibility.md`.
 - The Compose healthchecks no longer probe `/metrics`, which returns 401 once
   `HTTP_SERVER_API_KEY` is set and so marked the container unhealthy. They
