@@ -78,17 +78,51 @@ type contentFact struct {
 func readSource(ctx context.Context, tx pgx.Tx, hash []byte, lock bool) (source, json.RawMessage, error) {
 	var out source
 	if lock {
-		// Lock order matches core persistence: independent authority, then parent
-		// and child rows. The short transaction has a deadline and no network I/O.
-		// A waiting SHARE request also holds back every later writer to these
-		// tables, so its wait is bounded whatever the caller's deadline; the rest
-		// of the transaction keeps the session's lock_timeout.
-		if _, e := tx.Exec(ctx, `SET LOCAL lock_timeout='2s';
-LOCK TABLE label_evidence,torrent_canonical_labels,torrent_verdict_state,junkpurge_quarantine,torrent_files,torrent_hints,torrent_contents,torrent_tags IN SHARE MODE;
-SET LOCAL lock_timeout TO DEFAULT`); e != nil {
+		// Freeze this hash only: the parent row lock also blocks new
+		// foreign-key children, and FOR SHARE locks freeze the existing
+		// authority and catalogue rows the snapshot reads, including rows
+		// keyed by the validated v2 alias. Writers for other hashes never
+		// wait on these locks. The short transaction has a deadline and no
+		// network I/O, so its wait is bounded whatever the caller's
+		// deadline; the rest of the transaction keeps the session's
+		// lock_timeout.
+		if _, e := tx.Exec(ctx, `SET LOCAL lock_timeout='2s'`); e != nil {
 			return out, nil, e
 		}
-		if _, e := tx.Exec(ctx, `SELECT info_hash FROM torrents WHERE info_hash=$1 FOR UPDATE`, hash); e != nil {
+		var v2 []byte
+		e := tx.QueryRow(ctx, `SELECT info_hash_v2 FROM torrents WHERE info_hash=$1 FOR UPDATE`, hash).Scan(&v2)
+		if e != nil && !errors.Is(e, pgx.ErrNoRows) {
+			return out, nil, e
+		}
+		if e == nil {
+			keys := [][]byte{hash}
+			if len(v2) == 32 {
+				keys = append(keys, v2)
+			}
+			for _, q := range []string{
+				`SELECT id FROM label_evidence WHERE info_hash=$1 ORDER BY id FOR SHARE`,
+				`SELECT info_hash FROM torrent_canonical_labels WHERE info_hash=$1 ORDER BY info_hash FOR SHARE`,
+				`SELECT info_hash FROM torrent_verdict_state WHERE info_hash=$1 ORDER BY info_hash FOR SHARE`,
+				`SELECT info_hash FROM junkpurge_quarantine WHERE info_hash=$1 ORDER BY info_hash FOR SHARE`,
+			} {
+				for _, k := range keys {
+					if _, e := tx.Exec(ctx, q, k); e != nil {
+						return out, nil, e
+					}
+				}
+			}
+			for _, q := range []string{
+				`SELECT info_hash FROM torrent_files WHERE info_hash=$1 ORDER BY "index",path FOR SHARE`,
+				`SELECT info_hash FROM torrent_hints WHERE info_hash=$1 FOR SHARE`,
+				`SELECT id FROM torrent_contents WHERE info_hash=$1 ORDER BY id FOR SHARE`,
+				`SELECT info_hash FROM torrent_tags WHERE info_hash=$1 ORDER BY name FOR SHARE`,
+			} {
+				if _, e := tx.Exec(ctx, q, hash); e != nil {
+					return out, nil, e
+				}
+			}
+		}
+		if _, e := tx.Exec(ctx, `SET LOCAL lock_timeout TO DEFAULT`); e != nil {
 			return out, nil, e
 		}
 	}

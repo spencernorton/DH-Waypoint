@@ -345,7 +345,9 @@ func TestLockedSourceBoundsTableLockWait(t *testing.T) {
 	writer, e := p.Begin(testContext)
 	require.NoError(t, e)
 	defer rollback(writer)
-	_, e = writer.Exec(testContext, `LOCK TABLE torrent_tags IN ROW EXCLUSIVE MODE`)
+	// The locked read takes per-hash row locks, so contention is a held
+	// parent row lock rather than a table lock.
+	_, e = writer.Exec(testContext, `SELECT info_hash FROM torrents WHERE info_hash=$1 FOR UPDATE`, h)
 	require.NoError(t, e)
 	tx, e := s.begin(testContext)
 	require.NoError(t, e)
@@ -367,6 +369,29 @@ func TestLockedSourceBoundsTableLockWait(t *testing.T) {
 	var timeout string
 	require.NoError(t, locked.QueryRow(testContext, `SHOW lock_timeout`).Scan(&timeout))
 	require.Equal(t, "0", timeout)
+}
+
+func TestLockedSourceAllowsUnrelatedEvidenceInsert(t *testing.T) {
+	s, p, _ := fixture(t)
+	h := seedTorrent(t, p, 42, "movie")
+	other := seedTorrent(t, p, 43, "movie")
+	locked, e := s.begin(testContext)
+	require.NoError(t, e)
+	defer rollback(locked)
+	_, _, e = readSource(testContext, locked, h, true)
+	require.NoError(t, e)
+	// While the locked read holds h, an evidence insert for an unrelated
+	// hash must not wait on it. The bounded context turns a table-wide
+	// lock regression into a failure instead of a hang.
+	insertCtx, cancel := context.WithTimeout(testContext, 1500*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, e = p.Exec(insertCtx, `INSERT INTO label_evidence(source,source_kind,source_instance,source_object_id,info_hash,observed_at,strength) VALUES('sonarr','synthetic','fixture','unrelated-evidence',$1,now(),10)`, other)
+	require.NoError(t, e)
+	require.Less(t, time.Since(start), 1500*time.Millisecond)
+	var n int
+	require.NoError(t, p.QueryRow(testContext, `SELECT count(*) FROM label_evidence WHERE info_hash=$1`, other).Scan(&n))
+	require.Equal(t, 1, n)
 }
 
 // Keep generated model codecs exercised in the source snapshot path.
