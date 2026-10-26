@@ -2,7 +2,7 @@ package app
 
 import (
 	"github.com/spencernorton/DH-Waypoint/internal/app/appfx"
-	"github.com/spencernorton/DH-Waypoint/internal/app/cli/hooks"
+	appcli "github.com/spencernorton/DH-Waypoint/internal/app/cli"
 	"github.com/spencernorton/DH-Waypoint/internal/logging/loggingfx"
 	"github.com/urfave/cli/v2"
 	"go.uber.org/fx"
@@ -16,7 +16,7 @@ func New() *fx.App {
 		fx.Invoke(func(
 			logger *zap.SugaredLogger,
 			_ *cli.App,
-			_ hooks.AttachedHooks,
+			_ appcli.AttachedHooks,
 		) {
 			logger.Debug("app invoked")
 		}),

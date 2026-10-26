@@ -2,7 +2,6 @@ package devfx
 
 import (
 	"github.com/spencernorton/DH-Waypoint/internal/app/cli"
-	"github.com/spencernorton/DH-Waypoint/internal/app/cli/args"
 	"github.com/spencernorton/DH-Waypoint/internal/config/configfx"
 	"github.com/spencernorton/DH-Waypoint/internal/database"
 	"github.com/spencernorton/DH-Waypoint/internal/database/migrations"
@@ -10,7 +9,7 @@ import (
 	"github.com/spencernorton/DH-Waypoint/internal/dev/app/cmd/gormcmd"
 	"github.com/spencernorton/DH-Waypoint/internal/dev/app/cmd/migratecmd"
 	"github.com/spencernorton/DH-Waypoint/internal/logging/loggingfx"
-	"github.com/spencernorton/DH-Waypoint/internal/validation/validationfx"
+	"github.com/spencernorton/DH-Waypoint/internal/validation"
 	"go.uber.org/fx"
 )
 
@@ -20,8 +19,8 @@ func New() fx.Option {
 		configfx.NewConfigModule[postgres.Config]("postgres", postgres.NewDefaultConfig()),
 		configfx.New(),
 		loggingfx.New(),
-		validationfx.New(),
-		fx.Provide(args.New),
+		fx.Provide(validation.New),
+		fx.Provide(cli.NewArgs),
 		fx.Provide(cli.New),
 		fx.Provide(database.New),
 		fx.Provide(migrations.New),

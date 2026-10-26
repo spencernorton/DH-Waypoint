@@ -1,26 +1,26 @@
-package hooks
+package cli
 
 import (
 	"go.uber.org/fx"
 )
 
-type Params struct {
+type HooksParams struct {
 	fx.In
 	Lifecycle fx.Lifecycle
 	Hooks     []fx.Hook `group:"app_hooks"`
 }
 
-type Result struct {
+type HooksResult struct {
 	fx.Out
 	AttachedHooks
 }
 
 type AttachedHooks struct{}
 
-func New(p Params) (Result, error) {
+func AttachHooks(p HooksParams) (HooksResult, error) {
 	for _, hook := range p.Hooks {
 		p.Lifecycle.Append(hook)
 	}
 
-	return Result{}, nil
+	return HooksResult{}, nil
 }
