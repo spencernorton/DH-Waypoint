@@ -16,6 +16,8 @@
   source and plots job counts instead of `increase()` of a gauge. The latency
   panels show the recent median rather than the median since start.
 
+- `/import` now streams newline-delimited JSON with a 1 MiB per-record limit, closes active import sessions cleanly on failure without deadlocking, and preserves HTTP socket write deadlines through response finalization.
+
 - Fix the Compose quickstart, which has never started. Both Compose files
   passed an empty `TRACKER_PASSKEYS`, which every release since 5.6.0 rejects
   at startup ("tracker passkeys must be 8-256 characters"). They now pass it

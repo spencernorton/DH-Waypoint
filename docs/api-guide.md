@@ -156,6 +156,19 @@ catalogue is untouched until you switch to `apply`.
 back a count. Imported rows pass the same CSAM/blocklist gates as
 crawled ones. Treat this endpoint as trusted-network only.
 
+Each JSON line is limited to 1 MiB, excluding its LF or CRLF delimiter; the
+overall stream can contain many such lines. Blank lines are ignored, and a
+final complete JSON record may omit its newline. Read/parse/import failures
+stop the stream and close its importer. Client disconnection cancels downstream
+work through the actual request context.
+
+Imports are incremental, so an accepted prefix can persist after a later error.
+The response includes progress counts and ends with `import complete` only if
+reading, importing and closing all succeed. Always verify that final marker:
+after progress has committed HTTP headers, a later failure is reported in the
+body and cannot change the earlier HTTP status. Before progress is sent,
+oversized lines return 413 and other import failures return 400.
+
 ## Building a UI or client on top
 
 - Read path: GraphQL, REST (`/api/v1`) and Torznab are the stable
