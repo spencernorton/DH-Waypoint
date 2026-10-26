@@ -32,7 +32,7 @@ external=("SELECT tc.id,tc.info_hash FROM torrent_contents tc WHERE "
 raw=("SELECT encode(raw.info_hash,'hex') AS id,raw.info_hash FROM torrents raw "
      "WHERE raw.tsv @@ $1::tsquery AND "+raw_policy+" ORDER BY raw.info_hash LIMIT 100")
 substring=("SELECT encode(raw.info_hash,'hex') AS id,raw.info_hash FROM torrents raw "
-           "WHERE raw.name ILIKE $1 AND "+bench.raw_serving_policy()+" ORDER BY raw.info_hash LIMIT 101")
+           "WHERE raw.name ILIKE $1 AND "+bench.raw_serving_policy()+" ORDER BY raw.info_hash || ''::bytea LIMIT 101")
 raw_cursor=("SELECT encode(raw.info_hash,'hex') AS id,raw.info_hash FROM torrents raw "
             "WHERE raw.info_hash>decode($1,'hex') AND "+bench.raw_serving_policy()+" ORDER BY raw.info_hash LIMIT 101")
 cases={

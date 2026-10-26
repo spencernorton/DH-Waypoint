@@ -33,8 +33,17 @@ bench.emit(args.out,{'kind':'prepared_manifest','rows':rows,'variant':'resolved'
     'timing':'BEGIN read-only repeatable-read + lookup + page + COMMIT; no hydration or HTTP'})
 
 
+MAX_RESOLVED_IDENTIFIER_KEYS=32
+
+
 def execution(name,values):
     return sql.SQL('EXECUTE {} ({})').format(sql.Identifier(name),sql.SQL(',').join(sql.Literal(v) for v in values))
+
+
+def resolved_page_sql(nkeys):
+    arms=['(tc.content_type = $%d AND tc.content_source = $%d AND tc.content_id = $%d)'%(i*3+1,i*3+2,i*3+3) for i in range(nkeys)]
+    predicate=arms[0] if nkeys==1 else '('+' OR '.join(arms)+')'
+    return 'SELECT tc.id,tc.info_hash FROM torrent_contents tc WHERE '+predicate+' AND '+bench.ELIGIBLE+' ORDER BY '+bench.ORDER+' LIMIT 100'
 
 
 for mode in ['auto','force_custom_plan','force_generic_plan']:
@@ -44,26 +53,34 @@ for mode in ['auto','force_custom_plan','force_generic_plan']:
             values=','.join('('+','.join('$'+str(i*3+j+1) for j in range(3))+')' for i in range(len(refs)))
             alternatives=' OR '.join('(content_type=$%d AND source=$%d AND value=$%d)'%(i*3+1,i*3+2,i*3+3) for i in range(len(refs)))
             keys='VALUES '+values+' UNION ALL SELECT content_type,content_source,content_id FROM content_attributes WHERE key=\'id\' AND ('+alternatives+')'
-            lookup='SELECT DISTINCT content_type,content_source,content_id FROM (SELECT type AS content_type,source AS content_source,id AS content_id FROM content WHERE (type,source,id) IN (VALUES '+values+') UNION ALL SELECT content_type,content_source,content_id FROM content_attributes WHERE key=\'id\' AND ('+alternatives+')) identifier_keys LIMIT 2'
+            lookup='SELECT DISTINCT content_type,content_source,content_id FROM (SELECT type AS content_type,source AS content_source,id AS content_id FROM content WHERE (type,source,id) IN (VALUES '+values+') UNION ALL SELECT content_type,content_source,content_id FROM content_attributes WHERE key=\'id\' AND ('+alternatives+')) identifier_keys LIMIT 33'
             guard='(tc.content_type,tc.content_source,tc.content_id) IN ('+keys+')'
             page='SELECT tc.id,tc.info_hash FROM torrent_contents tc WHERE '+guard+' AND '+bench.ELIGIBLE+' ORDER BY '+bench.ORDER+' LIMIT 100'
-            first=len(refs)*3+1
-            resolved=page.replace(' WHERE ',' WHERE tc.content_type=$%d AND tc.content_source=$%d AND tc.content_id=$%d AND '%(first,first+1,first+2),1)
+            empty_page='SELECT tc.id,tc.info_hash FROM torrent_contents tc WHERE false AND '+bench.ELIGIBLE+' ORDER BY '+bench.ORDER+' LIMIT 100'
             params=[v for ref in refs for v in ref]
-            for statement,query,nparams in [('resolve',lookup,len(params)),('page',page,len(params)),('resolved_page',resolved,len(params)+3)]:
+            for statement,query,nparams in [('resolve',lookup,len(params)),('page',page,len(params))]:
                 conn.execute('PREPARE '+statement+' ('+','.join(['text']*nparams)+') AS '+query)
-            bench.emit(args.out,{'kind':'prepared_query','case':name,'plan_mode':mode,'lookup_sql':lookup,'page_sql':page,'resolved_sql':resolved,'params':params})
+            bench.emit(args.out,{'kind':'prepared_query','case':name,'plan_mode':mode,'lookup_sql':lookup,'page_sql':page,'resolved_sql':resolved_page_sql(1),'params':params})
+            resolved_stmts={}
 
             def run():
                 start=time.perf_counter()
                 conn.execute('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY')
                 try:
-                    keys=conn.execute(execution('resolve',params),prepare=False).fetchall()
-                    if len(keys)==1:
-                        query=execution('resolved_page',params+list(keys[0]))
-                    else:
+                    keys=sorted(conn.execute(execution('resolve',params),prepare=False).fetchall())
+                    if len(keys)==0:
+                        result=[]
+                        query=sql.SQL(empty_page)
+                    elif len(keys)>MAX_RESOLVED_IDENTIFIER_KEYS:
                         query=execution('page',params)
-                    result=conn.execute(query,prepare=False).fetchall()
+                        result=conn.execute(query,prepare=False).fetchall()
+                    else:
+                        statement='resolved_page_%d'%len(keys)
+                        if statement not in resolved_stmts:
+                            conn.execute('PREPARE '+statement+' ('+','.join(['text']*(len(keys)*3))+') AS '+resolved_page_sql(len(keys)))
+                            resolved_stmts[statement]=True
+                        query=execution(statement,[v for key in keys for v in key])
+                        result=conn.execute(query,prepare=False).fetchall()
                     conn.execute('COMMIT')
                 except BaseException:
                     conn.execute('ROLLBACK')

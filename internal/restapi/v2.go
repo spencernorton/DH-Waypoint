@@ -68,7 +68,17 @@ func (a *API) handleV2Search(c *gin.Context) {
 		c.JSON(400, gin.H{"error": "q must contain 3-4096 valid UTF-8 characters/bytes"})
 		return
 	}
-	opts := []query.Option{p.Option(), query.OrderBy(query.OrderByColumn{OrderByColumn: clause.OrderByColumn{Column: clause.Column{Table: "torrents", Name: "info_hash"}}})}
+	// With a substring filter, order by an expression that evaluates to the
+	// same bytes as info_hash. The plain column order lets a generic plan
+	// walk torrents_pkey expecting the ILIKE filter to match early; for
+	// rare or absent terms that scans the whole table. The expression
+	// cannot be satisfied by that index, so the planner uses the trigram
+	// index instead. Cursor comparison below still uses the plain column.
+	orderColumn := clause.Column{Table: "torrents", Name: "info_hash"}
+	if text != "" {
+		orderColumn = clause.Column{Name: "torrents.info_hash || ''::bytea", Raw: true}
+	}
+	opts := []query.Option{p.Option(), query.OrderBy(query.OrderByColumn{OrderByColumn: clause.OrderByColumn{Column: orderColumn}})}
 	if text != "" {
 		escaped := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(text)
 		opts = append(opts, query.Where(query.DBCriteria{SQL: "torrents.name ILIKE ?", Args: []any{"%" + escaped + "%"}}))

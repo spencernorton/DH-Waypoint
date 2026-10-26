@@ -84,6 +84,15 @@
   key set inside the existing repeatable-read snapshot, covering IDs that
   map to the same canonical content and IDs attributed to several contents;
   wider alias fan-out keeps the previous complete predicate.
+- Raw v2 substring search (`/api/v2/search?q=...`) no longer walks the
+  primary-key index under a generic prepared plan. With `q` set it orders by
+  `torrents.info_hash || ''::bytea`, which returns identical ordering and
+  cursor pagination while letting the planner use the trigram name index for
+  rare or absent terms; cursor browsing without `q` is unchanged. The
+  catalogue benchmark's prepared substring case mirrors the new ordering, and
+  its resolved-identifier case now resolves up to 32 canonical keys and pages
+  with one equality arm per key inside the snapshot, falling back to the
+  complete predicate only beyond that bound.
 - Add concurrent indexes for ordered canonical identities and reverse external-ID
   lookup, selected after 2.4M/10M/32M synthetic qualification. Resolve singleton
   external aliases and read their pages in one read-only snapshot, preserving
