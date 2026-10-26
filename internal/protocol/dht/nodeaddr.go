@@ -3,6 +3,7 @@ package dht
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
 	"net"
 	"net/netip"
 	"strconv"
@@ -34,6 +35,11 @@ func (a NodeAddr) String() string {
 }
 
 func (a *NodeAddr) UnmarshalBinary(b []byte) error {
+	// Compact addresses contain exactly an IPv4 or IPv6 address and a
+	// two-byte port. Validate before allocating or slicing untrusted input.
+	if len(b) != net.IPv4len+2 && len(b) != net.IPv6len+2 {
+		return fmt.Errorf("invalid compact address length: %d", len(b))
+	}
 	a.IP = make(net.IP, len(b)-2)
 	copy(a.IP, b[:len(b)-2])
 	a.Port = int(binary.BigEndian.Uint16(b[len(b)-2:]))

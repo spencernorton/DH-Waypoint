@@ -27,6 +27,8 @@
 - `/status` no longer reports the backend down because TMDB has no API key: an
   unconfigured TMDB check is inactive. The quickstart's `/status` returned 503.
 
+- Compact DHT node and peer address decoders now reject truncated byte slices cleanly instead of panicking on malformed UDP payloads.
+
 - `plugins/` now holds three templates, each shipped with `enabled: false`: a
   regex classifier, Armiger Ultra and OpenRouter. The root Compose file gains
   `armiger` and `openrouter` profiles whose services listen on the core's
