@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Serving queries avoid evaluating the full Unicode-aware filename evidence
+  regex when a conservative necessary ASCII substring is absent. The original
+  matcher still decides eligibility; optional or unsupported alternatives keep
+  the existing evaluation path. This reduces repeated filename-check work in
+  grouped and raw search without changing filters, counts or pagination.
+
 - Locked processor source reads now take per-hash row locks instead of
   table-wide `SHARE` locks on the evidence, verdict and catalogue tables.
   Finishing a processor job no longer blocks evidence inserts or other
