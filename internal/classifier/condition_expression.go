@@ -6,6 +6,7 @@ import (
 	"reflect"
 
 	"github.com/google/cel-go/cel"
+	"github.com/google/cel-go/interpreter"
 )
 
 const expressionName = "expression"
@@ -32,6 +33,11 @@ var celProgramPayload = payloadTransformer[string, cel.Program]{
 		}
 		prg, prgErr := ctx.celEnv.Program(ast,
 			cel.EvalOptions(cel.OptOptimize),
+			// Compile constant `matches` patterns once at program
+			// creation, and cache the rest (fold variables) at Eval
+			// time via cacheMatchesDecorator. See cel_matches_cache.go.
+			cel.OptimizeRegex(interpreter.MatchesRegexOptimization),
+			cel.CustomDecoratorV2(cacheMatchesDecorator),
 		)
 		if prgErr != nil {
 			return nil, ctx.error(fmt.Errorf("program construction error: %w", prgErr))
