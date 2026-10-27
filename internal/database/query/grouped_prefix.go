@@ -14,7 +14,7 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-const groupedPrefixSearchBudget = 500 * time.Millisecond
+const groupedPrefixSearchBudget = 750 * time.Millisecond
 
 type prefixCandidateQuery struct {
 	SubQuery
@@ -142,6 +142,7 @@ func (gq *genericQuery[T]) groupedPrefixItems() ([]T, bool, error) {
 		return nil, false, nil
 	}
 	candidateTable, candidateCTE, candidateSQL, winnerSourceSQL := "eligible", "", "", ""
+	selectiveCandidates := false
 	if candidateSource != nil {
 		winnerSourceSQL = candidateSource.UnderlyingDB().ToSQL(func(tx *gorm.DB) *gorm.DB { return tx.Find(&[]interface{}{}) })
 		if err = flat.applySelect(candidateSource.UnderlyingDB(), true); err != nil {
@@ -219,7 +220,7 @@ func (gq *genericQuery[T]) groupedPrefixItems() ([]T, bool, error) {
 		if _, inTransaction := executionDB.Statement.ConnPool.(gorm.TxCommitter); inTransaction {
 			return nil, false, nil
 		}
-		probeCtx, cancelProbe := context.WithTimeout(gq.ctx, 50*time.Millisecond)
+		probeCtx, cancelProbe := context.WithTimeout(gq.ctx, 150*time.Millisecond)
 		probeErr := executionDB.WithContext(probeCtx).Transaction(func(tx *gorm.DB) error {
 			if settingErr := tx.Exec("SET LOCAL jit = off").Error; settingErr != nil {
 				return settingErr
@@ -234,6 +235,7 @@ func (gq *genericQuery[T]) groupedPrefixItems() ([]T, bool, error) {
 		// A common or slow probe leaves the ordered-index strategy intact and
 		// shares the original speculative budget with the subsequent prefix.
 		if probeErr == nil && matches <= 32768 {
+			selectiveCandidates = true
 			candidateCTE = ", winner_source AS NOT MATERIALIZED (" + winnerSourceSQL + "), candidate_source AS MATERIALIZED (" + candidateSQL + ")"
 		}
 	}
@@ -252,6 +254,11 @@ func (gq *genericQuery[T]) groupedPrefixItems() ([]T, bool, error) {
 		for prefix < 2*(int(b.offset)+wanted) {
 			prefix *= 2
 		}
+	}
+	if selectiveCandidates {
+		// A small complete match set is cheaper to test once than repeatedly
+		// revisiting the same expensive title representatives during expansion.
+		prefix = 32768
 	}
 	if b.orderBy[0].Column.Table == model.TableNameTorrent && b.orderBy[0].Column.Name == "name" {
 		prefix = 4096
