@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 5.8.1 — 2026-10-26
+
 - Classifier CEL `matches` calls no longer recompile their regex on every
   evaluation. Constant patterns compile once at program creation and the
   remaining patterns (keyword-list fold variables) go through a bounded
