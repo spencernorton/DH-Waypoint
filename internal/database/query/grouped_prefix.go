@@ -13,11 +13,12 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-const groupedPrefixSearchBudget = 2 * time.Second
+const groupedPrefixSearchBudget = 500 * time.Millisecond
 
 // A selective full-text predicate can make the ordered prefix less efficient
 // than grouping the complete matching set. Bound only that optional attempt;
-// the authoritative grouped query retains the caller's original context.
+// keep its speculative work below an interactive page's latency budget. The
+// authoritative grouped query retains the caller's original context.
 func (gq *genericQuery[T]) groupedPrefixItemsWithSearchBudget() ([]T, bool, error) {
 	b, ok := gq.builder.(optionBuilder)
 	if !ok || b.tsquery == "" {

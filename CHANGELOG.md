@@ -10,6 +10,9 @@
   substrings before invoking the authoritative regular expression. Unicode
   text and non-UTF-8 databases bypass this optional optimization, retaining
   their complete existing matching behavior.
+- Selective text searches spend at most 500 ms on the optional ordered-prefix
+  strategy before using the authoritative grouped query. Counts, winner
+  selection, pagination and the caller's deadline are unchanged.
 
 ## 5.8.1 — 2026-10-26
 
