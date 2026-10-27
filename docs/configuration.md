@@ -133,7 +133,7 @@ own inference runtimes, prompts, credentials, caches and budgets. See
 | `PROCESSORS_RETAINED_JOBS` | `10000` | Maximum retained optional jobs; admission pauses at the bound. |
 | `PROCESSORS_REQUEST_TIMEOUT` | `10s` | Hard request deadline; allowed 100ms–60s. |
 | `PROCESSORS_MAX_ATTEMPTS` | `3` | Per-step dispatch limit, at most 5. |
-| `PROCESSORS_POLL_INTERVAL` | `1s` | Optional admission/worker cadence. |
+| `PROCESSORS_POLL_INTERVAL` | `1s` | Optional admission/worker cadence. A worker runs ready steps back to back while they succeed and waits one interval when the queue is empty or a step fails. |
 | `PROCESSORS_SCAN_BATCH` | `32` | Maximum existing torrents inspected per catch-up scan, at most 256. |
 | `PROCESSORS_RETENTION` | `168h` | Terminal job retention, at most 30 days. |
 
