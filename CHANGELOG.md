@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 5.8.3 — 2026-10-27
+
 - Grouped serving pages choose a cheap ordered candidate prefix before applying
   expensive eligibility checks. Every returned record still comes from the
   globally winning eligible row, with the complete serving policy and client
