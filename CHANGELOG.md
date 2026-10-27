@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Grouped serving pages choose a cheap ordered candidate prefix before applying
+  expensive eligibility checks. Every returned record still comes from the
+  globally winning eligible row, with the complete serving policy and client
+  filters. Incomplete prefixes, incompatible sources/joins and caller-owned
+  transactions retain the authoritative fallback; counts and facets are unchanged.
+
 ## 5.8.2 — 2026-10-27
 
 - Hash lookups now resolve requested identities and hybrid aliases into a

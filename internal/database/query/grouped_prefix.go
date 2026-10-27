@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"reflect"
 	"strings"
 	"time"
 
@@ -14,6 +15,19 @@ import (
 )
 
 const groupedPrefixSearchBudget = 500 * time.Millisecond
+
+type prefixCandidateQuery struct {
+	SubQuery
+	candidates SubQuery
+}
+
+// WithCandidatePrefixSource supplies a cheaper eligibility superset for the
+// speculative ordered prefix. Every eligible row must exist there unchanged.
+// Winners and returned records still come from the authoritative eligible query;
+// a short prefix always expands or falls back to the complete grouped query.
+func WithCandidatePrefixSource(eligible, candidates SubQuery) SubQuery {
+	return prefixCandidateQuery{SubQuery: eligible, candidates: candidates}
+}
 
 // A selective full-text predicate can make the ordered prefix less efficient
 // than grouping the complete matching set. Bound only that optional attempt;
@@ -93,6 +107,10 @@ func (gq *genericQuery[T]) groupedPrefixItems() ([]T, bool, error) {
 	flat.grouping = nil
 	flat.selections = []clause.Expr{{SQL: b.tableName + ".*"}}
 	sq := gq.factory(gq.ctx, gq.daoQ)
+	var candidateSource SubQuery
+	if hinted, ok := sq.(prefixCandidateQuery); ok {
+		candidateSource = hinted.candidates
+	}
 	if err = flat.applySelect(sq.UnderlyingDB(), true); err != nil {
 		return nil, false, err
 	}
@@ -122,6 +140,34 @@ func (gq *genericQuery[T]) groupedPrefixItems() ([]T, bool, error) {
 	if len(statement.Joins) != 0 || len(from.Joins) != len(joins) {
 		return nil, false, nil
 	}
+	candidateTable, candidateCTE := "eligible", ""
+	if candidateSource != nil {
+		if err = flat.applySelect(candidateSource.UnderlyingDB(), true); err != nil {
+			return nil, false, err
+		}
+		if err = flat.applyPre(candidateSource, true); err != nil {
+			return nil, false, err
+		}
+		var candidateRendered *gorm.DB
+		candidateSQL := candidateSource.UnderlyingDB().ToSQL(func(tx *gorm.DB) *gorm.DB {
+			candidateRendered = tx.Find(&[]interface{}{})
+			return candidateRendered
+		})
+		if candidateRendered.Error != nil {
+			return nil, false, candidateRendered.Error
+		}
+		cs := candidateRendered.Statement
+		cf, _ := cs.Clauses["FROM"].Expression.(clause.From)
+		if _, inTransaction := cs.ConnPool.(gorm.TxCommitter); inTransaction {
+			return nil, false, nil
+		}
+		if cs.Table != statement.Table || !reflect.DeepEqual(cs.TableExpr, statement.TableExpr) ||
+			!reflect.DeepEqual(cf.Tables, from.Tables) || len(cs.Joins) != 0 || len(cf.Joins) != len(joins) {
+			return nil, false, nil
+		}
+		candidateTable = "candidate_source"
+		candidateCTE = ", candidate_source AS NOT MATERIALIZED (" + candidateSQL + ")"
+	}
 	winnerOrder := "COALESCE(winner.seeders,-1) DESC,winner.info_hash"
 	// Separate NULL branches let each winner lookup use the ordered covering
 	// group index, while retaining SQL NULL grouping semantics for every key.
@@ -133,7 +179,7 @@ func (gq *genericQuery[T]) groupedPrefixItems() ([]T, bool, error) {
 		} else {
 			conditions = append(conditions, "keys.content_source IS NOT NULL", "winner.content_source=keys.content_source")
 		}
-		branches = append(branches, "(SELECT winner.id FROM eligible winner WHERE "+
+		branches = append(branches, "(SELECT winner.* FROM eligible winner WHERE "+
 			strings.Join(conditions, " AND ")+" ORDER BY "+winnerOrder+" LIMIT 1)")
 	}
 	fresh := func() *gorm.DB {
@@ -161,17 +207,17 @@ func (gq *genericQuery[T]) groupedPrefixItems() ([]T, bool, error) {
 		candidateBuilder.limit = model.NewNullUint(uint(prefix))
 		candidateBuilder.nextPage = false
 		candidateBuilder.preloads = nil
-		candidates := fresh().Table("eligible")
+		candidates := fresh().Table(candidateTable)
 		if err = candidateBuilder.applyPost(candidates); err != nil {
 			return nil, false, err
 		}
 		keys := strings.Join(keyNames, ",")
 		prefixSQL := "WITH eligible AS NOT MATERIALIZED (" + eligibleSQL +
-			"), candidates AS MATERIALIZED (" + dao.ToSQL(candidates) +
+			")" + candidateCTE + ", candidates AS MATERIALIZED (" + dao.ToSQL(candidates) +
 			"), keys AS MATERIALIZED (SELECT DISTINCT " + keys + " FROM candidates), " +
-			"winners AS MATERIALIZED (SELECT representative.id FROM keys JOIN LATERAL (" +
+			"winners AS MATERIALIZED (SELECT representative.* FROM keys JOIN LATERAL (" +
 			strings.Join(branches, " UNION ALL ") + ") representative ON TRUE), " +
-			"selected AS (SELECT candidate.* FROM candidates candidate JOIN winners ON winners.id=candidate.id) " + outerSQL
+			"selected AS (SELECT winners.* FROM candidates candidate JOIN winners ON winners.id=candidate.id) " + outerSQL
 		var items []T
 		executionDB := fresh()
 		if _, inTransaction := executionDB.Statement.ConnPool.(gorm.TxCommitter); inTransaction {

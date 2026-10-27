@@ -69,6 +69,7 @@ func (s search) torrentContent(ctx context.Context, serial bool, options ...quer
 		model.TableNameTorrentContent,
 		func(ctx context.Context, q *dao.Query) query.SubQuery {
 			base := q.TorrentContent.WithContext(ctx).ReadDB()
+			candidates := q.TorrentContent.WithContext(ctx).ReadDB()
 			if s.adultPolicy != nil {
 				predicate := s.adultPolicy.TorrentCondition(model.TableNameTorrentContent)
 				base = base.Scopes(func(d gen.Dao) gen.Dao {
@@ -77,9 +78,15 @@ func (s search) torrentContent(ctx context.Context, serial bool, options ...quer
 					return d
 				})
 			}
-			return query.GenericSubQuery[dao.ITorrentContentDo]{
+			eligible := query.GenericSubQuery[dao.ITorrentContentDo]{
 				SubQuery: base,
 			}
+			if s.adultPolicy != nil {
+				// The candidate superset shares the same stored rows and client
+				// filters. The complete serving policy remains on every winner.
+				return query.WithCandidatePrefixSource(eligible, query.GenericSubQuery[dao.ITorrentContentDo]{SubQuery: candidates})
+			}
+			return eligible
 		},
 	)
 }
