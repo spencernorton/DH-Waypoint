@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## 5.8.6 — 2026-10-27
+
+- Processor workers run ready queue steps back to back while they succeed,
+  instead of one step per `PROCESSORS_POLL_INTERVAL`. A worker returns to its
+  poll interval when nothing is ready or a step fails, so failing work keeps
+  its existing pace and backoff. `PROCESSORS_CONCURRENCY` still bounds the
+  number of steps in flight.
+- Failed processor steps are logged as warnings, at most once per minute per
+  worker, with the number of failures since the previous warning. Preparation
+  failures, such as a registration whose stored manifest no longer validates,
+  were previously silent and visible only as queue counts.
+
 ## 5.8.5 — 2026-10-27
 
 - Broad grouped text pages stream ordered candidates through the complete
