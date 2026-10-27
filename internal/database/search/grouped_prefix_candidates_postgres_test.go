@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -60,6 +61,12 @@ BEGIN RAISE NOTICE 'eligibility-evaluation'; RETURN TRUE; END $$;`)
 			require.NoError(t, err)
 			f.q = dao.Use(db)
 			f, trace := observeGroupedPrefixFixture(t, f)
+			var countQueries atomic.Int64
+			require.NoError(t, f.q.TorrentContent.WithContext(ctx).UnderlyingDB().Callback().Row().Before("gorm:row").Register("test:prefix_exhaustion_count", func(tx *gorm.DB) {
+				if strings.HasSuffix(strings.TrimSpace(tx.Statement.SQL.String()), "SELECT count(*) FROM candidates") {
+					countQueries.Add(1)
+				}
+			}))
 			searchText := ""
 			secondID := "prefix-2"
 			if textSearch {
@@ -90,6 +97,7 @@ BEGIN RAISE NOTICE 'eligibility-evaluation'; RETURN TRUE; END $$;`)
 			require.EqualValues(t, "prefix-1", result.Items[0].ID)
 			require.EqualValues(t, secondID, result.Items[1].ID)
 			require.True(t, result.HasNextPage)
+			require.Zero(t, countQueries.Load(), "a full page must not repeat the candidate scan for exhaustion")
 			require.Positive(t, trace.prefixes.Load(), "exercise the prefix, not a complete-query fallback")
 			require.Positive(t, evaluations.Load(), "the authoritative guard must execute")
 			require.Less(t, evaluations.Load(), int64(1024), "a small page must not evaluate eligibility across all6000 matches")
