@@ -24,7 +24,7 @@ type prefixCandidateQuery struct {
 // WithCandidatePrefixSource supplies a cheaper eligibility superset for the
 // speculative ordered prefix. Every eligible row must exist there unchanged.
 // Winners and returned records still come from the authoritative eligible query;
-// a short prefix always expands or falls back to the complete grouped query.
+// Short results require same-snapshot exhaustion proof, expansion or fallback.
 func WithCandidatePrefixSource(eligible, candidates SubQuery) SubQuery {
 	return prefixCandidateQuery{SubQuery: eligible, candidates: candidates}
 }
@@ -196,7 +196,7 @@ func (gq *genericQuery[T]) groupedPrefixItems() ([]T, bool, error) {
 			// This ordered root is only an eligibility superset. The dependent
 			// point lookup returns the fully guarded record, including all client
 			// filters. A found winner is exact because every earlier root row was
-			// tested. If these32 candidates contain no eligible row, keep the
+			// tested. If these 32 candidates contain no eligible row, keep the
 			// original whole-group lookup as the authoritative fallback.
 			fastBranches = append(fastBranches, "(SELECT visible.* FROM (SELECT winner.*, "+
 				"COALESCE(winner.seeders,-1) AS _winner_seeders FROM winner_source winner WHERE "+where+
@@ -243,7 +243,7 @@ func (gq *genericQuery[T]) groupedPrefixItems() ([]T, bool, error) {
 		// shares the original speculative budget with the subsequent prefix.
 		if probeErr == nil && matches <= 32768 {
 			selectiveCandidates = true
-			candidateCTE = ", winner_source AS NOT MATERIALIZED (" + winnerSourceSQL + "), candidate_source AS MATERIALIZED (" + candidateSQL + ")"
+			candidateCTE = ", candidate_source AS MATERIALIZED (" + candidateSQL + "), winner_source AS NOT MATERIALIZED (SELECT * FROM candidate_source)"
 		}
 	}
 	outer := fresh().Table("selected")

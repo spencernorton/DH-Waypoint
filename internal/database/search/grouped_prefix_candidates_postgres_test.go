@@ -2,6 +2,7 @@ package search
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"sync/atomic"
 	"testing"
@@ -20,10 +21,12 @@ import (
 )
 
 func TestGroupedPrefixPostgresBoundsEligibilityWorkBeforeReturningAPage(t *testing.T) {
-	f := newAdultServingPostgresFixture(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	_, err := f.pool.Exec(ctx, `
+	for _, textSearch := range []bool{false, true} {
+		t.Run(fmt.Sprint(textSearch), func(t *testing.T) {
+			f := newAdultServingPostgresFixture(t)
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			_, err := f.pool.Exec(ctx, `
 INSERT INTO torrents(info_hash,name,private)
 SELECT decode(md5('prefix-'||i)||'00000000','hex'),
        CASE WHEN i%7=0 THEN 'Synthetic.Siterip.mkv' ELSE 'Synthetic.Film.mkv' END,
@@ -36,52 +39,62 @@ CREATE INDEX ON torrent_contents(content_type,content_source,content_id,
 ANALYZE torrents; ANALYZE torrent_contents;
 CREATE FUNCTION witness_eligibility(bytea) RETURNS boolean LANGUAGE plpgsql STABLE AS $$
 BEGIN RAISE NOTICE 'eligibility-evaluation'; RETURN TRUE; END $$;`)
-	require.NoError(t, err)
+			require.NoError(t, err)
 
-	// A server notice observes predicate evaluation without modifying data in
-	// the read-only prefix transaction or depending on wall-clock timings.
-	var evaluations atomic.Int64
-	var schema string
-	require.NoError(t, f.pool.QueryRow(ctx, "SELECT current_schema()").Scan(&schema))
-	cfg, err := pgx.ParseConfig(os.Getenv("DH_WAYPOINT_TEST_POSTGRES_DSN"))
-	require.NoError(t, err)
-	cfg.RuntimeParams["search_path"] = schema
-	cfg.OnNotice = func(_ *pgconn.PgConn, notice *pgconn.Notice) {
-		if notice.Message == "eligibility-evaluation" {
-			evaluations.Add(1)
-		}
-	}
-	sqlDB := stdlib.OpenDB(*cfg)
-	t.Cleanup(func() { require.NoError(t, sqlDB.Close()) })
-	db, err := gorm.Open(postgres.New(postgres.Config{Conn: sqlDB}), &gorm.Config{})
-	require.NoError(t, err)
-	f.q = dao.Use(db)
-	f, trace := observeGroupedPrefixFixture(t, f)
-	policy := f.serving(t, true).adultPolicy
-	result, err := query.GenericQuery[TorrentContentResultItem](ctx, f.q,
-		query.Options(TorrentContentGroupByContentOption(), query.WithTotalCount(false),
-			query.OrderBy(TorrentContentOrderBySeeders.Clauses(OrderDirectionDescending)...),
-			query.Limit(2), query.WithHasNextPage(true)),
-		model.TableNameTorrentContent,
-		func(ctx context.Context, q *dao.Query) query.SubQuery {
-			base := q.TorrentContent.WithContext(ctx).ReadDB().Scopes(func(d gen.Dao) gen.Dao {
-				do := d.(*gen.DO)
-				do.ReplaceDB(do.UnderlyingDB().Where(policy.TorrentCondition(model.TableNameTorrentContent)).
-					Where("witness_eligibility(torrent_contents.info_hash)"))
-				return d
-			})
-			return query.WithCandidatePrefixSource(
-				query.GenericSubQuery[dao.ITorrentContentDo]{SubQuery: base},
-				query.GenericSubQuery[dao.ITorrentContentDo]{SubQuery: q.TorrentContent.WithContext(ctx).ReadDB()})
+			// A server notice observes predicate evaluation without modifying data in
+			// the read-only prefix transaction or depending on wall-clock timings.
+			var evaluations atomic.Int64
+			var schema string
+			require.NoError(t, f.pool.QueryRow(ctx, "SELECT current_schema()").Scan(&schema))
+			cfg, err := pgx.ParseConfig(os.Getenv("DH_WAYPOINT_TEST_POSTGRES_DSN"))
+			require.NoError(t, err)
+			cfg.RuntimeParams["search_path"] = schema
+			cfg.OnNotice = func(_ *pgconn.PgConn, notice *pgconn.Notice) {
+				if notice.Message == "eligibility-evaluation" {
+					evaluations.Add(1)
+				}
+			}
+			sqlDB := stdlib.OpenDB(*cfg)
+			t.Cleanup(func() { require.NoError(t, sqlDB.Close()) })
+			db, err := gorm.Open(postgres.New(postgres.Config{Conn: sqlDB}), &gorm.Config{})
+			require.NoError(t, err)
+			f.q = dao.Use(db)
+			f, trace := observeGroupedPrefixFixture(t, f)
+			searchText := ""
+			secondID := "prefix-2"
+			if textSearch {
+				_, err = f.pool.Exec(ctx, "UPDATE torrent_contents SET content_id='text-group-'||((substring(id from 8)::integer)/60) WHERE id LIKE 'prefix-%'")
+				require.NoError(t, err)
+				searchText = "synthetic"
+				secondID = "prefix-61"
+			}
+			policy := f.serving(t, true).adultPolicy
+			result, err := query.GenericQuery[TorrentContentResultItem](ctx, f.q,
+				query.Options(TorrentContentGroupByContentOption(), query.WithTotalCount(false), query.SearchString(searchText),
+					query.OrderBy(TorrentContentOrderBySeeders.Clauses(OrderDirectionDescending)...),
+					query.Limit(2), query.WithHasNextPage(true)),
+				model.TableNameTorrentContent,
+				func(ctx context.Context, q *dao.Query) query.SubQuery {
+					base := q.TorrentContent.WithContext(ctx).ReadDB().Scopes(func(d gen.Dao) gen.Dao {
+						do := d.(*gen.DO)
+						do.ReplaceDB(do.UnderlyingDB().Where(policy.TorrentCondition(model.TableNameTorrentContent)).
+							Where("witness_eligibility(torrent_contents.info_hash)"))
+						return d
+					})
+					return query.WithCandidatePrefixSource(
+						query.GenericSubQuery[dao.ITorrentContentDo]{SubQuery: base},
+						query.GenericSubQuery[dao.ITorrentContentDo]{SubQuery: q.TorrentContent.WithContext(ctx).ReadDB()})
+				})
+			require.NoError(t, err)
+			require.Len(t, result.Items, 2)
+			require.EqualValues(t, "prefix-1", result.Items[0].ID)
+			require.EqualValues(t, secondID, result.Items[1].ID)
+			require.True(t, result.HasNextPage)
+			require.Positive(t, trace.prefixes.Load(), "exercise the prefix, not a complete-query fallback")
+			require.Positive(t, evaluations.Load(), "the authoritative guard must execute")
+			require.Less(t, evaluations.Load(), int64(1024), "a small page must not evaluate eligibility across all6000 matches")
 		})
-	require.NoError(t, err)
-	require.Len(t, result.Items, 2)
-	require.EqualValues(t, "prefix-1", result.Items[0].ID)
-	require.EqualValues(t, "prefix-2", result.Items[1].ID)
-	require.True(t, result.HasNextPage)
-	require.Positive(t, trace.prefixes.Load(), "exercise the prefix, not a complete-query fallback")
-	require.Positive(t, evaluations.Load(), "the authoritative guard must execute")
-	require.Less(t, evaluations.Load(), int64(1024), "a small page must not evaluate eligibility across all6000 matches")
+	}
 }
 
 func TestGroupedPrefixPostgresDifferentCandidateRootFallsBack(t *testing.T) {
