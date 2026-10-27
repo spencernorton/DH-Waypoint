@@ -25,8 +25,14 @@ func infoHashCriteria(table string, infoHashes ...protocol.InfoHash) query.Crite
 		decodes[i] = fmt.Sprintf("DECODE('%s', 'hex')", infoHash.String())
 	}
 
+	// Build the small set of requested keys and hybrid aliases first. An OR
+	// with an alias subquery makes PostgreSQL scan the whole outer table even
+	// when the caller is hydrating only a page of results. The semi-join keeps
+	// direct keys (including not-yet-catalogued ones) and full v2 aliases while
+	// allowing an index lookup for each resulting key.
+	keys := strings.Join(decodes, ", ")
 	return query.DBCriteria{
-		SQL: fmt.Sprintf("(%s.info_hash IN (%s) OR %s.info_hash IN (SELECT info_hash FROM torrents WHERE info_hash_v2 IN (%s)))", table, strings.Join(decodes, ", "), table, strings.Join(decodes, ", ")),
+		SQL: fmt.Sprintf("%s.info_hash IN (SELECT unnest(ARRAY[%s]) UNION SELECT info_hash FROM torrents WHERE info_hash_v2 IN (%s))", table, keys, keys),
 	}
 }
 

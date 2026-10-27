@@ -60,13 +60,15 @@ func TestUnconstrainedAlternativesDisableTheCandidate(t *testing.T) {
 func TestCandidateRetainsTheOriginalMatcherBehindAShortCircuit(t *testing.T) {
 	p, err := NewPolicy(Config{ExcludeAdult: true}, []string{"private ?gold", "siterip"}, []string{"mkv"})
 	require.NoError(t, err)
-	require.NotEmpty(t, p.candidatePattern)
-	sql, args := p.strongMatchSQL("name")
+	require.NotEmpty(t, p.candidateNeedles)
+	sql, args := p.strongMatchSQL("name", "raw_name")
 	require.Contains(t, sql, "CASE WHEN")
 	require.Contains(t, sql, "ELSE FALSE END")
-	require.Equal(t, []any{p.candidatePattern, p.strongPattern}, args)
-	p.candidatePattern = ""
-	sql, args = p.strongMatchSQL("name")
+	require.Contains(t, sql, "getdatabaseencoding() <> 'UTF8'")
+	require.Contains(t, sql, "octet_length(raw_name) <> char_length(raw_name)")
+	require.Equal(t, p.strongPattern, args[len(args)-1])
+	p.candidateNeedles = nil
+	sql, args = p.strongMatchSQL("name", "raw_name")
 	require.Equal(t, "(name) ~* ?", sql)
 	require.Equal(t, []any{p.strongPattern}, args)
 }

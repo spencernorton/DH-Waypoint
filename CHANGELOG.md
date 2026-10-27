@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+## 5.8.2 — 2026-10-27
+
+- Hash lookups now resolve requested identities and hybrid aliases into a
+  small key set before fetching rows. Page hydration can use the existing
+  identity indexes instead of scanning the catalogue; full v2 identities,
+  direct keys and duplicate handling retain their existing behavior.
+- Filename evidence uses literal contains checks for necessary ASCII
+  substrings before invoking the authoritative regular expression. Unicode
+  text and non-UTF-8 databases bypass this optional optimization, retaining
+  their complete existing matching behavior.
+- Selective text searches spend at most 500 ms on the optional ordered-prefix
+  strategy before using the authoritative grouped query. Counts, winner
+  selection, pagination and the caller's deadline are unchanged.
+
 ## 5.8.1 — 2026-10-26
 
 - Classifier CEL `matches` calls no longer recompile their regex on every
