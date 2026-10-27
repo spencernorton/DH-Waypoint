@@ -21,12 +21,16 @@ import (
 type groupedPrefixTrace struct {
 	gormlogger.Interface
 	prefixes atomic.Int64
+	probes   atomic.Int64
 }
 
 func (l *groupedPrefixTrace) Trace(_ context.Context, _ time.Time, fc func() (string, int64), _ error) {
 	sql, _ := fc()
 	if strings.HasPrefix(strings.TrimSpace(sql), "WITH eligible AS NOT MATERIALIZED") {
 		l.prefixes.Add(1)
+	}
+	if strings.HasPrefix(strings.TrimSpace(sql), "SELECT count(*) FROM (") && strings.Contains(sql, "bounded_matches") {
+		l.probes.Add(1)
 	}
 }
 
@@ -94,6 +98,7 @@ BEGIN PERFORM pg_sleep(10); RETURN true; END $$`)
 	require.EqualValues(t, 1, result.TotalCount)
 	require.Equal(t, f.hashes[4:5], adultServingContentHashes(result.Items))
 	require.False(t, result.HasNextPage)
+	require.LessOrEqual(t, trace.probes.Load(), int64(1), "the cost hint is attempted only once")
 	require.Equal(t, int64(1), trace.prefixes.Load(), "stop the slow prefix before expanding it again")
 	require.NoError(t, f.q.TorrentContent.WithContext(context.Background()).UnderlyingDB().Raw("SHOW jit").Scan(&jit).Error)
 	require.Equal(t, "on", jit, "canceled prefix settings cannot leak into pooled connections")

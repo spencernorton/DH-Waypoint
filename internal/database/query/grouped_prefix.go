@@ -49,13 +49,14 @@ func (gq *genericQuery[T]) groupedPrefixItemsWithSearchBudget() ([]T, bool, erro
 	return items, complete, err
 }
 
-// groupedPrefixItems tests an ordered, fully eligible candidate prefix rather
+// groupedPrefixItems tests an ordered candidate superset rather
 // than sorting every release before returning a small grouped page. A candidate
 // is returned only when it is the exact highest-seeder/hash-ascending eligible
 // representative of its group. Winners outside the prefix are never returned.
 // A complete requested page is exact: every unseen representative is itself an
-// unseen candidate, after this prefix. A short prefix is never exhaustion proof;
-// expand or let the original whole-corpus query establish the final short page.
+// unseen candidate, after this prefix. A short result requires either proof that
+// the entire candidate superset was exhausted in the same snapshot, expansion,
+// or the original whole-corpus query to establish the final short page.
 func (gq *genericQuery[T]) groupedPrefixItems() ([]T, bool, error) {
 	b, ok := gq.builder.(optionBuilder)
 	if !ok || b.grouping == nil || !b.grouping.candidatePrefix || b.tableName != model.TableNameTorrentContent || !b.limit.Valid ||
@@ -196,15 +197,21 @@ func (gq *genericQuery[T]) groupedPrefixItems() ([]T, bool, error) {
 		if _, inTransaction := executionDB.Statement.ConnPool.(gorm.TxCommitter); inTransaction {
 			return nil, false, nil
 		}
-		if err = executionDB.Transaction(func(tx *gorm.DB) error {
+		probeCtx, cancelProbe := context.WithTimeout(gq.ctx, 50*time.Millisecond)
+		probeErr := executionDB.WithContext(probeCtx).Transaction(func(tx *gorm.DB) error {
 			if settingErr := tx.Exec("SET LOCAL jit = off").Error; settingErr != nil {
 				return settingErr
 			}
 			return tx.Raw("SELECT count(*) FROM (" + candidateSQL + " LIMIT 32769) bounded_matches").Scan(&matches).Error
-		}, &sql.TxOptions{ReadOnly: true}); err != nil {
-			return nil, false, fmt.Errorf("grouped candidate match probe: %w", err)
+		}, &sql.TxOptions{ReadOnly: true})
+		probeExpired := probeCtx.Err() == context.DeadlineExceeded
+		cancelProbe()
+		if probeErr != nil && (!probeExpired || gq.ctx.Err() != nil) {
+			return nil, false, fmt.Errorf("grouped candidate match probe: %w", probeErr)
 		}
-		if matches <= 32768 {
+		// A common or slow probe leaves the ordered-index strategy intact and
+		// shares the original speculative budget with the subsequent prefix.
+		if probeErr == nil && matches <= 32768 {
 			candidateCTE = ", candidate_source AS MATERIALIZED (" + candidateSQL + ")"
 		}
 	}
@@ -218,6 +225,12 @@ func (gq *genericQuery[T]) groupedPrefixItems() ([]T, bool, error) {
 		wanted++
 	}
 	prefix := 512
+	if b.tsquery != "" && candidateSQL != "" {
+		prefix = 64
+		for prefix < 2*(int(b.offset)+wanted) {
+			prefix *= 2
+		}
+	}
 	if b.orderBy[0].Column.Table == model.TableNameTorrent && b.orderBy[0].Column.Name == "name" {
 		prefix = 4096
 		if b.offset > 0 {
@@ -235,13 +248,14 @@ func (gq *genericQuery[T]) groupedPrefixItems() ([]T, bool, error) {
 			return nil, false, err
 		}
 		keys := strings.Join(keyNames, ",")
-		prefixSQL := "WITH eligible AS NOT MATERIALIZED (" + eligibleSQL +
-			")" + candidateCTE + ", candidates AS MATERIALIZED (" + dao.ToSQL(candidates) +
-			"), keys AS MATERIALIZED (SELECT DISTINCT " + keys + " FROM candidates), " +
+		candidateSQLPrefix := "WITH eligible AS NOT MATERIALIZED (" + eligibleSQL +
+			")" + candidateCTE + ", candidates AS MATERIALIZED (" + dao.ToSQL(candidates) + ")"
+		prefixSQL := candidateSQLPrefix + ", keys AS MATERIALIZED (SELECT DISTINCT " + keys + " FROM candidates), " +
 			"winners AS MATERIALIZED (SELECT representative.* FROM keys JOIN LATERAL (" +
 			strings.Join(branches, " UNION ALL ") + ") representative ON TRUE), " +
 			"selected AS (SELECT winners.* FROM candidates candidate JOIN winners ON winners.id=candidate.id) " + outerSQL
 		var items []T
+		var candidateCount int64
 		executionDB := fresh()
 		if _, inTransaction := executionDB.Statement.ConnPool.(gorm.TxCommitter); inTransaction {
 			return nil, false, nil
@@ -255,11 +269,17 @@ func (gq *genericQuery[T]) groupedPrefixItems() ([]T, bool, error) {
 			if settingErr := tx.Exec("SET LOCAL jit = off").Error; settingErr != nil {
 				return settingErr
 			}
+			if countErr := tx.Raw(candidateSQLPrefix + " SELECT count(*) FROM candidates").Scan(&candidateCount).Error; countErr != nil {
+				return countErr
+			}
 			return tx.Raw(prefixSQL).Scan(&items).Error
-		}, &sql.TxOptions{ReadOnly: true}); err != nil {
+		}, &sql.TxOptions{ReadOnly: true, Isolation: sql.LevelRepeatableRead}); err != nil {
 			return nil, false, fmt.Errorf("grouped candidate prefix: %w", err)
 		}
-		if len(items) >= wanted {
+		// The count and page use this owned repeatable-read snapshot. When
+		// the raw prefix is short, every eligible representative must already
+		// be among these candidates, so the final short/empty page is exact.
+		if len(items) >= wanted || candidateCount < int64(prefix) {
 			return items, true, nil
 		}
 		if err = gq.ctx.Err(); err != nil {
