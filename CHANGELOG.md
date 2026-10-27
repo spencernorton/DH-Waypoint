@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Hash lookups now resolve requested identities and hybrid aliases into a
+  small key set before fetching rows. Page hydration can use the existing
+  identity indexes instead of scanning the catalogue; full v2 identities,
+  direct keys and duplicate handling retain their existing behavior.
+
 ## 5.8.1 — 2026-10-26
 
 - Classifier CEL `matches` calls no longer recompile their regex on every
