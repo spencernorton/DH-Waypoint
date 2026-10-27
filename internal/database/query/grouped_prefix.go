@@ -281,7 +281,7 @@ func (gq *genericQuery[T]) groupedPrefixItems() ([]T, bool, error) {
 		prefix = 64
 		// A searched page often contains many releases of the same title.
 		// Start with enough candidates to avoid repeating cold index walks.
-		for prefix < 8*(int(b.offset)+wanted) {
+		for prefix < 32768 && prefix < 8*(int(b.offset)+wanted) {
 			prefix *= 2
 		}
 	}
@@ -307,12 +307,35 @@ func (gq *genericQuery[T]) groupedPrefixItems() ([]T, bool, error) {
 			return nil, false, err
 		}
 		keys := strings.Join(keyNames, ",")
-		candidateSQLPrefix := "WITH eligible AS NOT MATERIALIZED (" + eligibleSQL +
-			")" + candidateCTE + ", candidates AS MATERIALIZED (" + dao.ToSQL(candidates) + ")"
+		candidateSQLHead := "WITH eligible AS NOT MATERIALIZED (" + eligibleSQL + ")" + candidateCTE
+		candidateRowsSQL := dao.ToSQL(candidates)
+		candidateSQLPrefix := candidateSQLHead + ", candidates AS MATERIALIZED (" + candidateRowsSQL + ")"
 		prefixSQL := candidateSQLPrefix + ", keys AS MATERIALIZED (SELECT DISTINCT " + keys + " FROM candidates), " +
 			"winners AS MATERIALIZED (SELECT representative.* FROM keys JOIN LATERAL (" +
 			winnerSQL + ") representative ON TRUE), " +
 			"selected AS (SELECT winners.* FROM candidates candidate JOIN winners ON winners.id=candidate.id) " + outerSQL
+		if b.tsquery != "" && candidateSQL != "" && !selectiveCandidates {
+			// Broad text pages can stop at their last returned candidate instead of
+			// guarding every distinct key in the prefix before sorting. Keep the
+			// raw order visible to PostgreSQL through this dependent point lookup.
+			// Only the exact fully guarded winner may match a candidate's id.
+			projection := []string{"visible.*"}
+			streamOuterSQL := outerSQL
+			for i := range b.orderBy {
+				orderAlias := fmt.Sprintf(`"_order_%d"`, i)
+				streamAlias := fmt.Sprintf(`"_stream_order_%d"`, i)
+				projection = append(projection, "keys."+orderAlias+" AS "+streamAlias)
+				streamOuterSQL = strings.ReplaceAll(streamOuterSQL, orderAlias, streamAlias)
+			}
+			// Candidate and eligible values for the same id are identical by the
+			// hint contract. Project only their order as private extra columns;
+			// returned records still come from the authoritative eligible query.
+			// The barrier prevents the id test from changing winner selection.
+			prefixSQL = candidateSQLHead + ", candidates AS NOT MATERIALIZED (" + candidateRowsSQL +
+				"), selected AS NOT MATERIALIZED (SELECT " + strings.Join(projection, ", ") +
+				" FROM candidates keys JOIN LATERAL (" + winnerSQL +
+				" LIMIT 1 OFFSET 0) visible ON visible.id=keys.id) " + streamOuterSQL
+		}
 		var items []T
 		var candidateCount int64
 		executionDB := fresh()

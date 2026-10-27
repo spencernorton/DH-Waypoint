@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## 5.8.5 — 2026-10-27
+
+- Broad grouped text pages stream ordered candidates through the complete
+  guarded winner lookup, stopping when the page is full. This avoids checking
+  every group in a materialized prefix before returning an ordinary page.
+  Selective text sets retain their existing grouped strategy.
+- Returned rows, winner ordering and same-snapshot short-page exhaustion remain
+  authoritative. Deep common-text pages cap their initial prefix at the existing
+  maximum, retaining an optional attempt before exact fallback.
+
 ## 5.8.4 — 2026-10-27
 
 - A complete grouped page no longer repeats its candidate scan to count rows.
