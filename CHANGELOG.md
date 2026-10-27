@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 5.8.2 — 2026-10-27
+
 - Hash lookups now resolve requested identities and hybrid aliases into a
   small key set before fetching rows. Page hydration can use the existing
   identity indexes instead of scanning the catalogue; full v2 identities,
