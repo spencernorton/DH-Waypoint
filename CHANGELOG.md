@@ -4,11 +4,19 @@
 
 ## 5.8.3 — 2026-10-27
 
-- Grouped serving pages choose a cheap ordered candidate prefix before applying
-  expensive eligibility checks. Every returned record still comes from the
-  globally winning eligible row, with the complete serving policy and client
-  filters. Incomplete prefixes, incompatible sources/joins and caller-owned
-  transactions retain the authoritative fallback; counts and facets are unchanged.
+- Grouped pages choose a cheap candidate superset before checking each title's
+  highest-seeded eligible representative. Ordered per-title trials use guarded
+  point lookups; a trial containing no eligible release retains the complete
+  group lookup. Returned records, visibility and representative selection remain
+  authoritative.
+- Small text-match sets are selected before language and other client facets,
+  avoiding large bitmap-index intersections for selective searches. A bounded
+  match probe is a planner hint only. Optional text work shares a one-second
+  budget and retains the caller's original context for the exact fallback.
+- Final short pages use candidate-exhaustion proof in the same read snapshot.
+  Default ordering retains canonical group-key order; incompatible roots/joins
+  and caller transactions retain the original path. Counts, facets, source and
+  processing policies are unchanged.
 
 ## 5.8.2 — 2026-10-27
 

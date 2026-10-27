@@ -246,9 +246,13 @@ func (gq *genericQuery[T]) groupedPrefixItems() ([]T, bool, error) {
 		}
 		// A common or slow probe leaves the ordered-index strategy intact and
 		// shares the original speculative budget with the subsequent prefix.
-		boundedText := probeErr == nil && matches <= 32768
 		phraseText := strings.Contains(b.tsquery, "<->") || strings.Contains(b.tsquery, " <")
-		if boundedText || phraseText {
+		if probeErr == nil && matches > 32768 && phraseText {
+			// Wide phrase rechecks do not benefit from an ordered prefix.
+			// Avoid spending the remaining speculative budget before fallback.
+			return nil, false, nil
+		}
+		if probeErr == nil && matches <= 32768 {
 			selectiveCandidates = true
 			// Apply selective text matching before the other client facets. This
 			// prevents a bitmap intersection from reading a common language's
@@ -258,13 +262,6 @@ func (gq *genericQuery[T]) groupedPrefixItems() ([]T, bool, error) {
 				Clauses(clause.From{Tables: []clause.Table{{Name: "text_matches", Alias: b.tableName}}}).
 				ToSQL(func(tx *gorm.DB) *gorm.DB { return tx.Find(&[]interface{}{}) })
 			textSet := ", text_matches AS MATERIALIZED (" + textSourceSQL + ")"
-			if !boundedText {
-				// Phrase rechecks benefit from text-first execution even when the
-				// cheap probe cannot certify a small set. OFFSET 0 retains that
-				// planning boundary while streaming the raw matches; the complete
-				// filtered candidate set still shares the overall search deadline.
-				textSet = ", text_matches AS NOT MATERIALIZED (" + textSourceSQL + " OFFSET 0)"
-			}
 			candidateCTE = textSet +
 				", candidate_source AS MATERIALIZED (" + filteredTextSQL +
 				"), winner_source AS NOT MATERIALIZED (SELECT * FROM candidate_source)"
