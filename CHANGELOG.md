@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 5.8.7 — 2026-10-27
+
+- Processor workers keep draining when a step's lease turns out to be stale,
+  for example jobs queued under the previous build after an upgrade changes
+  the core policy. Those jobs are already settled, so they no longer cost one
+  poll interval each or log a `processor step failed` warning.
+
 ## 5.8.6 — 2026-10-27
 
 - Processor workers run ready queue steps back to back while they succeed,
