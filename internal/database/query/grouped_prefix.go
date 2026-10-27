@@ -148,10 +148,15 @@ func (gq *genericQuery[T]) groupedPrefixItems() ([]T, bool, error) {
 	if len(statement.Joins) != 0 || len(from.Joins) != len(joins) {
 		return nil, false, nil
 	}
-	candidateTable, candidateCTE, candidateSQL, winnerSourceSQL := "eligible", "", "", ""
+	candidateTable, candidateCTE, candidateSQL, winnerSourceSQL, textSourceSQL := "eligible", "", "", "", ""
 	selectiveCandidates := false
 	if candidateSource != nil {
 		winnerSourceSQL = candidateSource.UnderlyingDB().ToSQL(func(tx *gorm.DB) *gorm.DB { return tx.Find(&[]interface{}{}) })
+		if b.tsquery != "" {
+			textSourceSQL = candidateSource.UnderlyingDB().Session(&gorm.Session{}).
+				Where(b.tableName+".tsv @@ ?::tsquery", b.tsquery).
+				ToSQL(func(tx *gorm.DB) *gorm.DB { return tx.Find(&[]interface{}{}) })
+		}
 		if err = flat.applySelect(candidateSource.UnderlyingDB(), true); err != nil {
 			return nil, false, err
 		}
@@ -232,7 +237,7 @@ func (gq *genericQuery[T]) groupedPrefixItems() ([]T, bool, error) {
 			if settingErr := tx.Exec("SET LOCAL jit = off").Error; settingErr != nil {
 				return settingErr
 			}
-			return tx.Raw("SELECT count(*) FROM (" + candidateSQL + " LIMIT 32769) bounded_matches").Scan(&matches).Error
+			return tx.Raw("SELECT count(*) FROM (" + textSourceSQL + " LIMIT 32769) bounded_matches").Scan(&matches).Error
 		}, &sql.TxOptions{ReadOnly: true})
 		probeExpired := probeCtx.Err() == context.DeadlineExceeded
 		cancelProbe()
@@ -243,7 +248,16 @@ func (gq *genericQuery[T]) groupedPrefixItems() ([]T, bool, error) {
 		// shares the original speculative budget with the subsequent prefix.
 		if probeErr == nil && matches <= 32768 {
 			selectiveCandidates = true
-			candidateCTE = ", candidate_source AS MATERIALIZED (" + candidateSQL + "), winner_source AS NOT MATERIALIZED (SELECT * FROM candidate_source)"
+			// Apply selective text matching before the other client facets. This
+			// prevents a bitmap intersection from reading a common language's
+			// multi-million-row index just to count a few text matches. The outer
+			// candidate query still applies every original client predicate/join.
+			filteredTextSQL := candidateSource.UnderlyingDB().Session(&gorm.Session{}).
+				Clauses(clause.From{Tables: []clause.Table{{Name: "text_matches", Alias: b.tableName}}}).
+				ToSQL(func(tx *gorm.DB) *gorm.DB { return tx.Find(&[]interface{}{}) })
+			candidateCTE = ", text_matches AS MATERIALIZED (" + textSourceSQL +
+				"), candidate_source AS MATERIALIZED (" + filteredTextSQL +
+				"), winner_source AS NOT MATERIALIZED (SELECT * FROM candidate_source)"
 		}
 	}
 	outer := fresh().Table("selected")
