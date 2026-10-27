@@ -8,6 +8,8 @@
   guarded winner lookup, stopping when the page is full. This avoids checking
   every group in a materialized prefix before returning an ordinary page.
   Selective text sets retain their existing grouped strategy.
+- Optional text-prefix work allows five seconds of bounded execution headroom,
+  while retaining the caller's original deadline for exact fallback.
 - Returned rows, winner ordering and same-snapshot short-page exhaustion remain
   authoritative. Deep common-text pages cap their initial prefix at the existing
   maximum, retaining an optional attempt before exact fallback.

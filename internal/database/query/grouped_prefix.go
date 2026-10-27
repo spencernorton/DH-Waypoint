@@ -14,7 +14,7 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-const groupedPrefixSearchBudget = 3 * time.Second
+const groupedPrefixSearchBudget = 5 * time.Second
 
 type prefixCandidateQuery struct {
 	SubQuery
