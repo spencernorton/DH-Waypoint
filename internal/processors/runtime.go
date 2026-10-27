@@ -2,6 +2,7 @@ package processors
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 
@@ -72,11 +73,16 @@ func (s *Store) Worker() worker.Worker {
 }
 
 // drain runs ready steps back to back while they succeed, so a full queue is
-// not paced to one step per poll tick. An empty queue or an error returns to
-// the caller's ticker, which keeps failing work at one attempt per tick.
+// not paced to one step per poll tick. A stale lease (its inputs or the core
+// policy changed, as for jobs queued before a release) was already settled, so
+// draining continues. An empty queue or any other error returns to the
+// caller's ticker, which keeps failing work at one attempt per tick.
 func drain(ctx context.Context, run func(context.Context) (bool, error)) error {
 	for ctx.Err() == nil {
 		worked, err := run(ctx)
+		if worked && errors.Is(err, ErrStale) {
+			continue
+		}
 		if err != nil || !worked {
 			return err
 		}

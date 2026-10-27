@@ -3,6 +3,7 @@ package processors
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 
 func TestDrainRunsReadyStepsUntilIdleOrError(t *testing.T) {
 	failed := errors.New("prepare processor job: invalid_binding")
+	stale := fmt.Errorf("prepare processor job: %w", ErrStale)
 	for _, tc := range []struct {
 		name  string
 		steps []error // nil = a successful step; the queue is empty afterwards
@@ -23,6 +25,7 @@ func TestDrainRunsReadyStepsUntilIdleOrError(t *testing.T) {
 		{name: "empty queue", calls: 1},
 		{name: "drains a full queue in one tick", steps: []error{nil, nil, nil}, calls: 4},
 		{name: "error waits for the next tick", steps: []error{nil, failed, nil}, calls: 2, err: failed},
+		{name: "stale leases keep draining", steps: []error{stale, stale, nil, stale}, calls: 5},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			calls := 0
