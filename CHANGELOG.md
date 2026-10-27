@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 5.8.4 — 2026-10-27
+
+- A complete grouped page no longer repeats its candidate scan to count rows.
+  Short pages still prove exhaustion in the same read snapshot before returning.
+- Searched pages begin with a larger raw prefix to reduce repeated index walks.
+  Optional text-prefix work has a three-second budget to accommodate planning,
+  cold reads and page expansion before the exact fallback. The caller's original
+  context, visibility checks, ordering and paging rules are retained.
+
 ## 5.8.3 — 2026-10-27
 
 - Grouped pages choose a cheap candidate superset before checking each title's

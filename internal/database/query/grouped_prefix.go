@@ -14,7 +14,7 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-const groupedPrefixSearchBudget = time.Second
+const groupedPrefixSearchBudget = 3 * time.Second
 
 type prefixCandidateQuery struct {
 	SubQuery
@@ -279,7 +279,9 @@ func (gq *genericQuery[T]) groupedPrefixItems() ([]T, bool, error) {
 	prefix := 512
 	if b.tsquery != "" && candidateSQL != "" {
 		prefix = 64
-		for prefix < 2*(int(b.offset)+wanted) {
+		// A searched page often contains many releases of the same title.
+		// Start with enough candidates to avoid repeating cold index walks.
+		for prefix < 8*(int(b.offset)+wanted) {
 			prefix *= 2
 		}
 	}
@@ -326,10 +328,16 @@ func (gq *genericQuery[T]) groupedPrefixItems() ([]T, bool, error) {
 			if settingErr := tx.Exec("SET LOCAL jit = off").Error; settingErr != nil {
 				return settingErr
 			}
-			if countErr := tx.Raw(candidateSQLPrefix + " SELECT count(*) FROM candidates").Scan(&candidateCount).Error; countErr != nil {
-				return countErr
+			if pageErr := tx.Raw(prefixSQL).Scan(&items).Error; pageErr != nil {
+				return pageErr
 			}
-			return tx.Raw(prefixSQL).Scan(&items).Error
+			// A full page already proves that every returned winner is in this
+			// ordered prefix. Count only when a short page needs exhaustion proof;
+			// counting first repeats the candidate scan on every ordinary page.
+			if len(items) >= wanted {
+				return nil
+			}
+			return tx.Raw(candidateSQLPrefix + " SELECT count(*) FROM candidates").Scan(&candidateCount).Error
 		}, &sql.TxOptions{ReadOnly: true, Isolation: sql.LevelRepeatableRead}); err != nil {
 			return nil, false, fmt.Errorf("grouped candidate prefix: %w", err)
 		}
