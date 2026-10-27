@@ -24,7 +24,7 @@ type Policy struct {
 	excludeAdult        bool
 	processorExclusions bool
 	strongPattern       string
-	candidatePattern    string
+	candidateNeedles    []string
 	mediaExtensions     []string
 	names               *namepolicy.Policy
 }
@@ -48,7 +48,7 @@ func NewPolicy(cfg Config, strongKeywords, mediaExtensions []string, names ...*n
 	pattern := strings.ReplaceAll(r.String(), `\p{L}`, postgresLetterRanges())
 	pattern = strings.ReplaceAll(pattern, `\d`, `0-9`)
 	p := &Policy{processorExclusions: cfg.ProcessorExclusions, excludeAdult: cfg.ExcludeAdult, strongPattern: pattern, mediaExtensions: append([]string(nil), mediaExtensions...)}
-	p.candidatePattern = candidatePattern(r.String())
+	p.candidateNeedles = candidateForPattern(r.String()).needles
 	if len(names) == 1 {
 		p.names = names[0]
 	}
@@ -147,10 +147,10 @@ func (p *Policy) TorrentCondition(table string) clause.Expr {
 		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(p.mediaExtensions)), ",")
 		nameMatch, nameArgs := p.strongMatchSQL(`CASE WHEN serving_t.files_status = 'single' AND serving_t.extension IS NOT NULL
    THEN left(serving_t.name, greatest(char_length(serving_t.name)-char_length(serving_t.extension)-1, 0))
-   ELSE serving_t.name END`)
+   ELSE serving_t.name END`, "serving_t.name")
 		fileMatch, fileArgs := p.strongMatchSQL(`CASE WHEN serving_f.extension IS NOT NULL
      THEN left(serving_f.path, greatest(char_length(serving_f.path)-char_length(serving_f.extension)-1, 0))
-     ELSE serving_f.path END`)
+     ELSE serving_f.path END`, "serving_f.path")
 		sql += ` AND NOT EXISTS (
  SELECT 1 FROM torrents serving_t WHERE serving_t.info_hash = ` + root + `
   AND (CASE WHEN serving_t.files_status = 'single'

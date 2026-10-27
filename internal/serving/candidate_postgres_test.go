@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -40,14 +41,16 @@ func TestCandidatePostgresPreservesTheAuthoritativeMatch(t *testing.T) {
 		t.Run(fmt.Sprintf("rules_%d", i), func(t *testing.T) {
 			p, e := NewPolicy(Config{ExcludeAdult: true}, group, []string{"mkv"})
 			require.NoError(t, e)
-			coarse := p.candidatePattern
-			if coarse == "" {
-				coarse = ".*"
+			filtered, args := p.strongMatchSQL("value", "value")
+			for i := range args {
+				filtered = strings.Replace(filtered, "?", fmt.Sprintf("$%d", i+2), 1)
 			}
+			params := append([]any{p.strongPattern}, args...)
+			params = append(params, names)
 			rows, e := db.Query(ctx, `SELECT value,
  COALESCE(value ~* $1, FALSE),
- COALESCE(CASE WHEN value ~* $2 THEN value ~* $1 ELSE FALSE END, FALSE)
- FROM (SELECT unnest($3::text[]) AS value UNION ALL SELECT NULL) samples`, p.strongPattern, coarse, names)
+ COALESCE(`+filtered+`, FALSE)
+ FROM (SELECT unnest($`+fmt.Sprint(len(params))+`::text[]) AS value UNION ALL SELECT NULL) samples`, params...)
 			require.NoError(t, e)
 			defer rows.Close()
 			count := 0

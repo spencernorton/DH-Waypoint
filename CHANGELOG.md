@@ -6,6 +6,10 @@
   small key set before fetching rows. Page hydration can use the existing
   identity indexes instead of scanning the catalogue; full v2 identities,
   direct keys and duplicate handling retain their existing behavior.
+- Filename evidence uses literal contains checks for necessary ASCII
+  substrings before invoking the authoritative regular expression. Unicode
+  text and non-UTF-8 databases bypass this optional optimization, retaining
+  their complete existing matching behavior.
 
 ## 5.8.1 — 2026-10-26
 
