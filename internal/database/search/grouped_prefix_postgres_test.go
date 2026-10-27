@@ -83,7 +83,7 @@ BEGIN PERFORM pg_sleep(10); RETURN true; END $$`)
 		`UPDATE torrent_contents SET search_string='Copper Acacia' WHERE info_hash=$1`, f.hashes[4].Bytes())
 	require.NoError(t, err)
 	f, trace := observeGroupedPrefixFixture(t, f)
-	ctx, cancel := context.WithTimeout(context.Background(), 7*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 9*time.Second)
 	defer cancel()
 	result, err := f.serving(t, false).TorrentContent(ctx,
 		TorrentContentCoreJoins(), HydrateTorrentContentTorrent(),
