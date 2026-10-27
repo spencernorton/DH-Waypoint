@@ -141,8 +141,9 @@ func (gq *genericQuery[T]) groupedPrefixItems() ([]T, bool, error) {
 	if len(statement.Joins) != 0 || len(from.Joins) != len(joins) {
 		return nil, false, nil
 	}
-	candidateTable, candidateCTE, candidateSQL := "eligible", "", ""
+	candidateTable, candidateCTE, candidateSQL, winnerSourceSQL := "eligible", "", "", ""
 	if candidateSource != nil {
+		winnerSourceSQL = candidateSource.UnderlyingDB().ToSQL(func(tx *gorm.DB) *gorm.DB { return tx.Find(&[]interface{}{}) })
 		if err = flat.applySelect(candidateSource.UnderlyingDB(), true); err != nil {
 			return nil, false, err
 		}
@@ -167,12 +168,13 @@ func (gq *genericQuery[T]) groupedPrefixItems() ([]T, bool, error) {
 			return nil, false, nil
 		}
 		candidateTable = "candidate_source"
-		candidateCTE = ", candidate_source AS NOT MATERIALIZED (" + candidateSQL + ")"
+		candidateCTE = ", winner_source AS NOT MATERIALIZED (" + winnerSourceSQL + "), candidate_source AS NOT MATERIALIZED (" + candidateSQL + ")"
 	}
 	winnerOrder := "COALESCE(winner.seeders,-1) DESC,winner.info_hash"
 	// Separate NULL branches let each winner lookup use the ordered covering
 	// group index, while retaining SQL NULL grouping semantics for every key.
 	branches := make([]string, 0, 2)
+	fastBranches := make([]string, 0, 2)
 	for _, sourceNull := range []bool{false, true} {
 		conditions := []string{"winner.content_type=keys.content_type", "winner.content_id=keys.content_id"}
 		if sourceNull {
@@ -180,8 +182,28 @@ func (gq *genericQuery[T]) groupedPrefixItems() ([]T, bool, error) {
 		} else {
 			conditions = append(conditions, "keys.content_source IS NOT NULL", "winner.content_source=keys.content_source")
 		}
-		branches = append(branches, "(SELECT winner.* FROM eligible winner WHERE "+
-			strings.Join(conditions, " AND ")+" ORDER BY "+winnerOrder+" LIMIT 1)")
+		where := strings.Join(conditions, " AND ")
+		fallbackOnly := ""
+		if winnerSourceSQL != "" {
+			// This ordered root is only an eligibility superset. The dependent
+			// point lookup returns the fully guarded record, including all client
+			// filters. A found winner is exact because every earlier root row was
+			// tested. If these32 candidates contain no eligible row, keep the
+			// original whole-group lookup as the authoritative fallback.
+			fastBranches = append(fastBranches, "(SELECT visible.* FROM (SELECT winner.*, "+
+				"COALESCE(winner.seeders,-1) AS _winner_seeders FROM winner_source winner WHERE "+where+
+				" ORDER BY "+winnerOrder+" LIMIT 32) trial JOIN LATERAL "+
+				"(SELECT checked.* FROM eligible checked WHERE checked.id=trial.id OFFSET 0) visible ON TRUE "+
+				"ORDER BY trial._winner_seeders DESC,trial.info_hash LIMIT 1)")
+			fallbackOnly = " AND NOT EXISTS (SELECT 1 FROM fast)"
+		}
+		branches = append(branches, "(SELECT winner.* FROM eligible winner WHERE "+where+
+			fallbackOnly+" ORDER BY "+winnerOrder+" LIMIT 1)")
+	}
+	winnerSQL := strings.Join(branches, " UNION ALL ")
+	if len(fastBranches) > 0 {
+		winnerSQL = "WITH fast AS MATERIALIZED (" + strings.Join(fastBranches, " UNION ALL ") +
+			") SELECT * FROM fast UNION ALL " + winnerSQL
 	}
 	fresh := func() *gorm.DB {
 		return gq.factory(gq.ctx, gq.daoQ).UnderlyingDB().Session(&gorm.Session{NewDB: true})
@@ -212,7 +234,7 @@ func (gq *genericQuery[T]) groupedPrefixItems() ([]T, bool, error) {
 		// A common or slow probe leaves the ordered-index strategy intact and
 		// shares the original speculative budget with the subsequent prefix.
 		if probeErr == nil && matches <= 32768 {
-			candidateCTE = ", candidate_source AS MATERIALIZED (" + candidateSQL + ")"
+			candidateCTE = ", winner_source AS NOT MATERIALIZED (" + winnerSourceSQL + "), candidate_source AS MATERIALIZED (" + candidateSQL + ")"
 		}
 	}
 	outer := fresh().Table("selected")
@@ -252,7 +274,7 @@ func (gq *genericQuery[T]) groupedPrefixItems() ([]T, bool, error) {
 			")" + candidateCTE + ", candidates AS MATERIALIZED (" + dao.ToSQL(candidates) + ")"
 		prefixSQL := candidateSQLPrefix + ", keys AS MATERIALIZED (SELECT DISTINCT " + keys + " FROM candidates), " +
 			"winners AS MATERIALIZED (SELECT representative.* FROM keys JOIN LATERAL (" +
-			strings.Join(branches, " UNION ALL ") + ") representative ON TRUE), " +
+			winnerSQL + ") representative ON TRUE), " +
 			"selected AS (SELECT winners.* FROM candidates candidate JOIN winners ON winners.id=candidate.id) " + outerSQL
 		var items []T
 		var candidateCount int64

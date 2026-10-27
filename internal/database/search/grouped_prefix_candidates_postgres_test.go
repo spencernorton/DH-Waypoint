@@ -113,3 +113,24 @@ func TestGroupedPrefixPostgresDifferentCandidateRootFallsBack(t *testing.T) {
 	require.False(t, result.HasNextPage)
 	require.Zero(t, trace.prefixes.Load(), "fall back to the authoritative grouped query")
 }
+
+func TestGroupedPrefixPostgresHiddenLeadingCandidatesKeepAuthoritativeWinner(t *testing.T) {
+	f := newAdultServingPostgresFixture(t)
+	_, err := f.pool.Exec(context.Background(), `
+INSERT INTO torrents(info_hash,name,private)
+SELECT decode(md5('hidden-prefix-'||i)||'00000000','hex'),'Synthetic.Film.mkv',i<40
+FROM generate_series(0,40) i;
+INSERT INTO torrent_contents(id,info_hash,content_type,content_source,content_id,seeders)
+SELECT 'hidden-prefix-'||i,decode(md5('hidden-prefix-'||i)||'00000000','hex'),
+       'movie','synthetic','hidden-prefix-group',1000-i FROM generate_series(0,40) i;`)
+	require.NoError(t, err)
+	f, trace := observeGroupedPrefixFixture(t, f)
+	result := requireGroupedPrefixEquivalent(t, f.serving(t, true),
+		query.Where(query.DBCriteria{SQL: "torrent_contents.content_id='hidden-prefix-group'"}),
+		query.OrderBy(TorrentContentOrderBySeeders.Clauses(OrderDirectionDescending)...),
+		query.Limit(1), query.WithHasNextPage(true))
+	require.Len(t, result.Items, 1)
+	require.EqualValues(t, "hidden-prefix-40", result.Items[0].ID)
+	require.False(t, result.HasNextPage)
+	require.Positive(t, trace.prefixes.Load(), "the guarded winner below the32-row trial must be found by its full-group fallback")
+}
