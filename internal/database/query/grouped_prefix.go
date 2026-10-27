@@ -60,10 +60,17 @@ func (gq *genericQuery[T]) groupedPrefixItemsWithSearchBudget() ([]T, bool, erro
 func (gq *genericQuery[T]) groupedPrefixItems() ([]T, bool, error) {
 	b, ok := gq.builder.(optionBuilder)
 	if !ok || b.grouping == nil || !b.grouping.candidatePrefix || b.tableName != model.TableNameTorrentContent || !b.limit.Valid ||
-		b.limit.Uint == 0 || b.limit.Uint > 1000 || b.offset > 10000 || len(b.orderBy) == 0 || len(b.groupBy) > 0 {
+		b.limit.Uint == 0 || b.limit.Uint > 1000 || b.offset > 10000 || len(b.groupBy) > 0 {
 		return nil, false, nil
 	}
 	keyNames := []string{"content_type", "content_source", "content_id"}
+	// Without an explicit outer order, DISTINCT ON emits the canonical key
+	// order. Keep that same order when selecting a speculative prefix.
+	if len(b.orderBy) == 0 {
+		for _, key := range keyNames {
+			b.orderBy = append(b.orderBy, OrderByColumn{OrderByColumn: clause.OrderByColumn{Column: clause.Column{Table: b.tableName, Name: key}}})
+		}
+	}
 	qualifiedKeys := make([]string, len(keyNames))
 	for i, key := range keyNames {
 		qualifiedKeys[i] = b.tableName + "." + key

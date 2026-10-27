@@ -259,3 +259,14 @@ from generate_series(1,33000)i;`)
 	require.False(t, result.HasNextPage)
 	require.Equal(t, "ZZZ.Synthetic.Winner", result.Items[0].Torrent.Name)
 }
+
+func TestGroupedPrefixPostgresDefaultOrderKeepsCanonicalGroupPage(t *testing.T) {
+	for _, offset := range []uint{0, 1, 2} {
+		t.Run(fmt.Sprint(offset), func(t *testing.T) {
+			f := newAdultServingPostgresFixture(t)
+			f, trace := observeGroupedPrefixFixture(t, f)
+			requireGroupedPrefixEquivalent(t, f.serving(t, true), query.Offset(offset), query.Limit(2), query.WithHasNextPage(true))
+			require.Positive(t, trace.prefixes.Load())
+		})
+	}
+}
