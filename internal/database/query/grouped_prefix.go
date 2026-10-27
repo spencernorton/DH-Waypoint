@@ -140,7 +140,7 @@ func (gq *genericQuery[T]) groupedPrefixItems() ([]T, bool, error) {
 	if len(statement.Joins) != 0 || len(from.Joins) != len(joins) {
 		return nil, false, nil
 	}
-	candidateTable, candidateCTE := "eligible", ""
+	candidateTable, candidateCTE, candidateSQL := "eligible", "", ""
 	if candidateSource != nil {
 		if err = flat.applySelect(candidateSource.UnderlyingDB(), true); err != nil {
 			return nil, false, err
@@ -149,7 +149,7 @@ func (gq *genericQuery[T]) groupedPrefixItems() ([]T, bool, error) {
 			return nil, false, err
 		}
 		var candidateRendered *gorm.DB
-		candidateSQL := candidateSource.UnderlyingDB().ToSQL(func(tx *gorm.DB) *gorm.DB {
+		candidateSQL = candidateSource.UnderlyingDB().ToSQL(func(tx *gorm.DB) *gorm.DB {
 			candidateRendered = tx.Find(&[]interface{}{})
 			return candidateRendered
 		})
@@ -184,6 +184,29 @@ func (gq *genericQuery[T]) groupedPrefixItems() ([]T, bool, error) {
 	}
 	fresh := func() *gorm.DB {
 		return gq.factory(gq.ctx, gq.daoQ).UnderlyingDB().Session(&gorm.Session{NewDB: true})
+	}
+	if candidateSQL != "" && b.tsquery != "" {
+		// For a selective text query, letting ORDER/LIMIT pull through this
+		// source can choose a long walk of the seeder index instead of the GIN
+		// match set. A bounded, cheap superset probe distinguishes that case
+		// from common terms, which should retain their ordered-index strategy.
+		// This is a cost hint only: no result/exhaustion decision uses the count.
+		var matches int64
+		executionDB := fresh()
+		if _, inTransaction := executionDB.Statement.ConnPool.(gorm.TxCommitter); inTransaction {
+			return nil, false, nil
+		}
+		if err = executionDB.Transaction(func(tx *gorm.DB) error {
+			if settingErr := tx.Exec("SET LOCAL jit = off").Error; settingErr != nil {
+				return settingErr
+			}
+			return tx.Raw("SELECT count(*) FROM (" + candidateSQL + " LIMIT 32769) bounded_matches").Scan(&matches).Error
+		}, &sql.TxOptions{ReadOnly: true}); err != nil {
+			return nil, false, fmt.Errorf("grouped candidate match probe: %w", err)
+		}
+		if matches <= 32768 {
+			candidateCTE = ", candidate_source AS MATERIALIZED (" + candidateSQL + ")"
+		}
 	}
 	outer := fresh().Table("selected")
 	if err = b.applyPost(outer); err != nil {
