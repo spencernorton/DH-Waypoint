@@ -47,6 +47,15 @@ python3 scripts/check_headless_boundary.py
 CI also runs PostgreSQL regressions for purge, matching, LLM-stage and capture
 packages against a disposable database, scans called Go dependencies, and
 builds the supported `linux/amd64` image. Do not attach production state to CI.
+The required container check also starts that candidate through the root
+Compose quickstart against an empty database. It imports synthetic public and
+private metadata, requires the queue and shipped regex plugin to persist a
+movie classification and remux tag, checks REST/GraphQL/Torznab results and
+Torznab authentication, and restarts the backend to verify persistence. Run it
+locally after building an image with
+`python3 scripts/check_runtime.py --image <candidate> --evidence out/runtime`.
+Each run removes its own containers and volumes and saves diagnostics on
+failure. It starts no public DHT crawler and needs no external API keys.
 Run tests for the affected package while iterating, then run the required checks
 before submitting.
 

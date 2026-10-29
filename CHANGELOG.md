@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Require a real candidate-container import, queue/plugin processing, public
+  API/search, private-result exclusion and restart-persistence check before
+  merging or releasing. Retain failure diagnostics and remove disposable
+  containers and volumes on every exit.
+
 ## 5.8.7 — 2026-10-27
 
 - Processor workers keep draining when a step's lease turns out to be stale,

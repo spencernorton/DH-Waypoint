@@ -91,18 +91,11 @@ jobs:
           docker build --platform linux/amd64 -f adapters/armiger/Dockerfile --tag dh-waypoint-armiger:ci .
           docker run --rm --network none --read-only --cap-drop ALL \
             --security-opt no-new-privileges dh-waypoint-armiger:ci --help
-      - name: Start the root Compose quickstart with the regex template on
-        run: |
-          cp examples/.env.example .env
-          sed -i 's/^POSTGRES_PASSWORD=$/POSTGRES_PASSWORD=ci-only-password/' .env
-          sed -i 's/^enabled: false$/enabled: true/' plugins/regex-classifier.plugin.yml
-          printf '%s\n' 'services:' '  dh-waypoint:' '    image: dh-waypoint:ci' \
-            '    command: [worker, run, --keys, http_server, --keys, queue_server, --keys, processors]' > compose.ci.yml
-          compose() { docker compose -f docker-compose.yml -f compose.ci.yml "$@"; }
-          compose up -d --wait --wait-timeout 180
-          # /status turns 200 once each health check has run, about a minute after start.
-          for i in $(seq 1 40); do curl --fail --silent --output /dev/null http://127.0.0.1:3333/status && break; sleep 3; done
-          curl --fail --silent --show-error http://127.0.0.1:3333/status
-          for i in $(seq 1 20); do compose exec -T dh-waypoint dh-waypoint plugin list | grep -q '^regex-classifier' && break; sleep 3; done
-          compose exec -T dh-waypoint dh-waypoint plugin list | grep '^regex-classifier'
-          compose down -v
+      - name: Prove import, processing, public search and restart persistence
+        run: python3 scripts/check_runtime.py --image dh-waypoint:ci --evidence out/runtime
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: backend-runtime-evidence
+          path: out/runtime/
+          retention-days: 14
