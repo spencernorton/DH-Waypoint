@@ -197,7 +197,7 @@ func normalizedDriver(driver string) string {
 // Matches reports whether the registry entry already carries exactly
 // the deployment settings this file declares.
 func (f PluginFile) Matches(e Entry) bool {
-	if e.Source != "file" {
+	if e.Source != "file" || e.LastError == "service_identity_mismatch" {
 		return false
 	}
 	if e.ID != f.ID ||

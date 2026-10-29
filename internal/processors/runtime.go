@@ -40,6 +40,7 @@ func (s *Store) Worker() worker.Worker {
 			}
 		})
 		launch(30*time.Second, func(ctx context.Context) {
+			_ = s.Refresh(ctx)
 			if err := s.SyncPluginDir(ctx); err != nil {
 				s.log().Warnw("plugin directory sync", "error", err)
 			}

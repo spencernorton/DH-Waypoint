@@ -153,20 +153,39 @@ type armigerRequest struct {
 }
 
 type armigerResponse struct {
+	Junk  string `json:"junk"`
 	Heads struct {
 		Category struct {
 			Label      string  `json:"label"`
 			Confidence float64 `json:"confidence"`
 		} `json:"category"`
+		Junk struct {
+			Label string `json:"label"`
+		} `json:"junk"`
 	} `json:"heads"`
+	HoneypotTrap struct {
+		IsHoneypotTrap bool `json:"is_honeypot_trap"`
+	} `json:"honeypot_trap"`
+	CSAMSafety struct {
+		IsSafe *bool `json:"is_safe"`
+	} `json:"csam_safety"`
 }
 
 // classify maps Armiger's category head onto one classify proposal. Labels the
-// backend has no content type for (course, unknown) and low confidence abstain.
+// backend has no content type for (course, unknown), unsafe/junk items, and low
+// confidence abstain.
 func (s *Service) classify(ctx context.Context, j v1.Job) v1.Result {
 	in := armigerRequest{Name: j.Input.Name, Size: j.Input.Size, Files: []armigerFile{}}
 	for _, f := range j.Input.Files {
 		in.Files = append(in.Files, armigerFile{Path: f.Path, Size: f.Size})
+	}
+	if len(in.Files) == 0 && j.Input.Extension != nil && strings.TrimSpace(*j.Input.Extension) != "" {
+		ext := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(*j.Input.Extension)), ".")
+		path := j.Input.Name
+		if ext != "" && !strings.HasSuffix(strings.ToLower(path), "."+ext) {
+			path = path + "." + ext
+		}
+		in.Files = append(in.Files, armigerFile{Path: path, Size: j.Input.Size})
 	}
 	body, err := json.Marshal(in)
 	if err != nil || len(body) > 1<<20 {
@@ -192,6 +211,12 @@ func (s *Service) classify(ctx context.Context, j v1.Job) v1.Result {
 	var out armigerResponse
 	if err != nil || len(raw) > 1<<20 || json.Unmarshal(raw, &out) != nil {
 		return resultFor(j, v1.Failed, "armiger_response_invalid")
+	}
+	if (out.CSAMSafety.IsSafe != nil && !*out.CSAMSafety.IsSafe) ||
+		out.HoneypotTrap.IsHoneypotTrap ||
+		out.Junk == "junk" ||
+		out.Heads.Junk.Label == "junk" {
+		return resultFor(j, v1.Abstained, "unsafe_or_junk")
 	}
 	label, confidence := out.Heads.Category.Label, out.Heads.Category.Confidence
 	if !slices.Contains(v1.ValidContentTypes, label) {

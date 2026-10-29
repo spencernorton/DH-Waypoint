@@ -15,7 +15,7 @@ the core's `classify` jobs by calling the Armiger container's
 
 Compose then starts two services: `armiger-ultra`, the published
 `ghcr.io/spencernorton/armiger` image pinned by `ARMIGER_VERSION` (default
-`3.2.1`), and `armiger`, the bridge, built from this repository. The bridge
+`3.8.1`), and `armiger`, the bridge, built from this repository. The bridge
 shares the `dh-waypoint` container's network namespace, listens on
 `127.0.0.1:8095` and reaches Armiger over the Compose network.
 
@@ -43,8 +43,8 @@ reads its `category` head:
 - If Armiger cannot be reached, the job is deferred and retried.
 
 The core validates the proposal as it does for any processor, and no plugin
-can delete a record. Armiger's other heads (adult, junk, anime, languages and
-swarm viability) are not used.
+can delete a record. Items flagged by Armiger's `csam_safety`, `honeypot_trap`
+or `junk` checks abstain with reason `unsafe_or_junk`.
 
 ## Limits
 
@@ -57,6 +57,6 @@ the catalogue, set `mode: shadow` in the plugin file.
 ## Changing the Armiger version
 
 Set `ARMIGER_VERSION` in `.env` and run `docker compose up -d`. The bridge
-reports the version in its identity, so DH-Waypoint stops sending it work until
-the plugin is registered again: move the plugin file out of `plugins/` for 30
-seconds, then back.
+reports the version in its identity; on the next 30-second plugin sync tick,
+DH-Waypoint detects the identity change and re-registers the file-managed
+plugin automatically.
