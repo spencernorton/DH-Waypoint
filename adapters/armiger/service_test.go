@@ -41,6 +41,9 @@ func TestClassifyMapsArmigerCategory(t *testing.T) {
 		contentType string
 	}{
 		{"confident", `{"category":"tv_show","heads":{"category":{"label":"tv_show","confidence":0.99}}}`, 200, v1.Completed, "armiger_category", "tv_show"},
+		{"junk head", `{"junk":"junk","heads":{"category":{"label":"movie","confidence":0.99},"junk":{"label":"junk"}}}`, 200, v1.Abstained, "unsafe_or_junk", ""},
+		{"honeypot trap", `{"honeypot_trap":{"is_honeypot_trap":true},"heads":{"category":{"label":"movie","confidence":0.99}}}`, 200, v1.Abstained, "unsafe_or_junk", ""},
+		{"csam unsafe", `{"csam_safety":{"is_safe":false},"heads":{"category":{"label":"movie","confidence":0.99}}}`, 200, v1.Abstained, "unsafe_or_junk", ""},
 		{"no content type", `{"heads":{"category":{"label":"course","confidence":0.97}}}`, 200, v1.Abstained, "category_outside_content_types", ""},
 		{"low confidence", `{"heads":{"category":{"label":"movie","confidence":0.41}}}`, 200, v1.Abstained, "low_confidence", ""},
 		{"rejected metadata", `{"error":"invalid_metadata"}`, 400, v1.Abstained, "armiger_rejected_metadata", ""},
@@ -130,5 +133,33 @@ func TestJobAndStartupValidation(t *testing.T) {
 	network.Token = strings.Repeat("t", 32)
 	if _, err := New(network); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestSingleFileExtensionSynthesizedForArmiger(t *testing.T) {
+	var got armigerRequest
+	armiger := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&got)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"heads":{"category":{"label":"audiobook","confidence":0.95}}}`))
+	}))
+	defer armiger.Close()
+	cfg := DefaultConfig()
+	cfg.ArmigerURL = armiger.URL
+	s, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	j := testJob(s)
+	j.Input.Name = "Brandon Sanderson - The Way of Kings"
+	j.Input.Files = nil
+	ext := "m4b"
+	j.Input.Extension = &ext
+	code, r := post(t, s, j)
+	if code != http.StatusOK || r.Outcome != v1.Completed || r.Proposal == nil || r.Proposal.ContentType != "audiobook" {
+		t.Fatalf("got %d %+v", code, r)
+	}
+	if len(got.Files) != 1 || got.Files[0].Path != "Brandon Sanderson - The Way of Kings.m4b" || got.Files[0].Size != j.Input.Size {
+		t.Fatalf("expected synthesized single file, got %+v", got.Files)
 	}
 }

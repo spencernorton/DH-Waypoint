@@ -84,6 +84,10 @@ def qualify(image, evidence):
             service["restart"] = "no"
             service["ports"] = []
         app = model["services"]["dh-waypoint"]
+        expected_version = "v" + (ROOT / "VERSION").read_text().strip()
+        expected_image = f"ghcr.io/spencernorton/dh-waypoint:{expected_version}"
+        if app["image"] != expected_image:
+            raise AssertionError(f"docker-compose.yml default image {app['image']!r} disagrees with VERSION ({expected_image!r})")
         app["image"] = image
         app["command"] = ["worker", "run", "--keys", "http_server", "--keys", "queue_server", "--keys", "processors"]
         app["ports"] = [{"target": 3333, "published": "0", "host_ip": "127.0.0.1"}]

@@ -144,6 +144,9 @@ configuration: {reason: test}
 		Configuration: []byte(`{"reason":"test"}`),
 	}
 	require.True(t, spec.Matches(entry), "identical spec and entry should match")
+	entry.LastError = "service_identity_mismatch"
+	require.False(t, spec.Matches(entry), "service identity mismatch must trigger file re-registration")
+	entry.LastError = ""
 	entry.Priority = 5
 	require.False(t, spec.Matches(entry), "priority drift must be detected")
 }

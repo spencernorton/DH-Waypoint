@@ -15,8 +15,9 @@ template's header has its three set-up steps.
 
 Check what is registered with
 `docker compose exec dh-waypoint dh-waypoint plugin list`. If you change the
-model or Armiger version behind a plugin, move its file out of this folder for
-30 seconds and back in, so DH-Waypoint registers the new version.
+model or Armiger version behind a file-managed plugin, DH-Waypoint detects the
+new service identity on the next 30-second sync tick and re-registers it
+automatically.
 
 Writing your own: [plugin files](../docs/processors/plugin-files.md) and the
 [processor protocol](../docs/processors/v1.md).

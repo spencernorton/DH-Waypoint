@@ -13,7 +13,7 @@
 services:
 
   dh-waypoint:
-    image: ghcr.io/spencernorton/dh-waypoint:${DH_WAYPOINT_VERSION:-v5.8.0}
+    image: ghcr.io/spencernorton/dh-waypoint:${DH_WAYPOINT_VERSION:-v5.8.7}
     container_name: dh-waypoint
     restart: unless-stopped
     depends_on:
@@ -136,7 +136,7 @@ services:
 
   armiger-ultra:
     profiles: [armiger]
-    image: ghcr.io/spencernorton/armiger:${ARMIGER_VERSION:-3.2.1}
+    image: ghcr.io/spencernorton/armiger:${ARMIGER_VERSION:-3.8.1}
     restart: unless-stopped
 
   armiger:
@@ -154,7 +154,7 @@ services:
         condition: service_started
     environment:
       ARMIGER_URL: http://armiger-ultra:8096
-      ARMIGER_VERSION: ${ARMIGER_VERSION:-3.2.1}
+      ARMIGER_VERSION: ${ARMIGER_VERSION:-3.8.1}
       ARMIGER_MIN_CONFIDENCE: ${ARMIGER_MIN_CONFIDENCE:-0.6}
 
 volumes:

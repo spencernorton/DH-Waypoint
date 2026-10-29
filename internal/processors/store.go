@@ -46,6 +46,9 @@ type Entry struct {
 	// Source is "api" or "file" (plugins directory). Directory sync
 	// only modifies "file" rows; see plugindir.go.
 	Source string `json:"source,omitempty"`
+	// LastError is the most recent Refresh error code; excluded from JSON
+	// plan digests so transient health checks never alter PipelineRevision.
+	LastError string `json:"-"`
 }
 type Step struct {
 	Entry        Entry      `json:"entry"`
@@ -137,7 +140,7 @@ func rollback(tx pgx.Tx) {
 func entries(ctx context.Context, q interface {
 	Query(context.Context, string, ...any) (pgx.Rows, error)
 }) ([]Entry, error) {
-	rows, e := q.Query(ctx, `SELECT id,generation,execution_generation,driver,endpoint,auth_env,mode,state,priority,selector,learning,manifest,configuration,source FROM processor_registry ORDER BY priority,id`)
+	rows, e := q.Query(ctx, `SELECT id,generation,execution_generation,driver,endpoint,auth_env,mode,state,priority,selector,learning,manifest,configuration,source,last_error FROM processor_registry ORDER BY priority,id`)
 	if e != nil {
 		return nil, e
 	}
@@ -147,7 +150,7 @@ func entries(ctx context.Context, q interface {
 		var x Entry
 		var driver string
 		var m, selRaw, learnRaw []byte
-		if e = rows.Scan(&x.ID, &x.Generation, &x.ExecutionGeneration, &driver, &x.Endpoint, &x.AuthEnv, &x.Mode, &x.State, &x.Priority, &selRaw, &learnRaw, &m, &x.Configuration, &x.Source); e != nil {
+		if e = rows.Scan(&x.ID, &x.Generation, &x.ExecutionGeneration, &driver, &x.Endpoint, &x.AuthEnv, &x.Mode, &x.State, &x.Priority, &selRaw, &learnRaw, &m, &x.Configuration, &x.Source, &x.LastError); e != nil {
 			return nil, e
 		}
 		if driver != "" && driver != v1.DriverHTTP {
@@ -221,6 +224,7 @@ func readPlan(ctx context.Context, tx pgx.Tx, policy string) (Plan, bool, error)
 		draining = draining || entry.State == "draining"
 		entry.Generation = entry.ExecutionGeneration
 		entry.State = "active"
+		entry.LastError = ""
 		st := Step{
 			Entry: entry,
 			Stage: entry.Manifest.Capabilities[0],
