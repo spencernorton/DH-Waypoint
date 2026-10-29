@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Publish the exact runtime-tested container candidate, verifying its checksum,
+  source metadata and image ID instead of rebuilding after the tests.
+
 - Require a real candidate-container import, queue/plugin processing, public
   API/search, private-result exclusion and restart-persistence check before
   merging or releasing. Retain failure diagnostics and remove disposable

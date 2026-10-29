@@ -40,7 +40,11 @@ jobs:
           test "$RELEASE_TAG" = "v$VERSION"
       - name: Create release asset directory
         run: mkdir -p release-assets
-      - name: Build and publish tagged container
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: dh-waypoint-tested-image
+          path: tested-image
+      - name: Publish the runtime-qualified container
         env:
           REGISTRY_TOKEN: ${{ github.token }}
         run: |
@@ -48,9 +52,9 @@ jobs:
           IMAGE=$(printf 'ghcr.io/%s' "$RELEASE_REPOSITORY" | tr '[:upper:]' '[:lower:]')
           BUILD_DATE=$(git show -s --format=%cI HEAD)
           BUILD_SOURCE="https://github.com/$RELEASE_REPOSITORY"
-          docker build --platform linux/amd64 --build-arg VERSION="$RELEASE_TAG" \
-            --build-arg COMMIT="$GITHUB_SHA" --build-arg BUILD_DATE="$BUILD_DATE" \
-            --build-arg SOURCE="$BUILD_SOURCE" --tag "$IMAGE:$RELEASE_TAG" .
+          TESTED_ID=$(python3 scripts/tested_image.py load --dir tested-image \
+            --source "$BUILD_SOURCE" --revision "$GITHUB_SHA" --version "$RELEASE_TAG")
+          docker tag "$TESTED_ID" "$IMAGE:$RELEASE_TAG"
           test "$(docker image inspect "$IMAGE:$RELEASE_TAG" --format '{{.Os}}/{{.Architecture}}')" = 'linux/amd64'
           test "$(docker image inspect "$IMAGE:$RELEASE_TAG" --format '{{index .Config.Labels "org.opencontainers.image.version"}}')" = "$RELEASE_TAG"
           test "$(docker image inspect "$IMAGE:$RELEASE_TAG" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "$GITHUB_SHA"
@@ -61,6 +65,7 @@ jobs:
           docker tag "$IMAGE:$RELEASE_TAG" "$IMAGE:latest"
           docker push "$IMAGE:latest"
           docker image inspect "$IMAGE:$RELEASE_TAG" --format '{{index .RepoDigests 0}}' > release-assets/IMAGE_DIGEST.txt
+          cp tested-image/receipt.json release-assets/TESTED_IMAGE.json
           docker logout ghcr.io
       - name: Package the exact public source
         run: |

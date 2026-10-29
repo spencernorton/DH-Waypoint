@@ -87,3 +87,8 @@ processing and do not depend on a particular deployment.
 DH-Waypoint and its upstream [bitmagnet](https://github.com/bitmagnet-io/bitmagnet)
 are MIT-licensed. Preserve attribution in [NOTICE](NOTICE). Contributions are
 released under the same terms; no CLA is required.
+
+Release CI exports each successful runtime candidate with its acceptance proof,
+archive checksum and immutable Docker image ID. The publisher downloads that
+candidate from the same workflow run and verifies its source revision, version,
+platform and identity before tagging and pushing it. It does not rebuild it.

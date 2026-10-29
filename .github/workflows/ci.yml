@@ -93,6 +93,32 @@ jobs:
             --security-opt no-new-privileges dh-waypoint-armiger:ci --help
       - name: Prove import, processing, public search and restart persistence
         run: python3 scripts/check_runtime.py --image dh-waypoint:ci --evidence out/runtime
+      - name: Export the exact runtime-qualified image
+        env:
+          BUILD_SOURCE: https://github.com/${{ github.repository }}
+        run: |
+          python3 scripts/tested_image.py export --image dh-waypoint:ci \
+            --runtime out/runtime/runtime.json --dir out/tested-image \
+            --source "$BUILD_SOURCE" --revision "$(git rev-parse HEAD)" --version "v$(cat VERSION)"
+          CANDIDATE_ID=$(docker image inspect dh-waypoint:ci --format '{{.Id}}')
+          docker image rm dh-waypoint:ci
+          if docker image inspect "$CANDIDATE_ID" >/dev/null 2>&1; then
+            echo 'Candidate is still loaded; cannot prove a fresh archive import' >&2
+            exit 1
+          fi
+          LOADED_ID=$(python3 scripts/tested_image.py load --dir out/tested-image \
+            --source "$BUILD_SOURCE" --revision "$(git rev-parse HEAD)" --version "v$(tr -d '[:space:]' < VERSION)")
+          test "$LOADED_ID" = "$CANDIDATE_ID"
+          python3 scripts/test_tested_image.py out/tested-image
+          cp out/tested-image/receipt.json out/runtime/tested-image.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: success() && startsWith(github.ref, 'refs/tags/v')
+        with:
+          name: dh-waypoint-tested-image
+          path: out/tested-image/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:
