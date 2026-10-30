@@ -315,6 +315,25 @@ limit $1 offset $2`
 	return out, total, nil
 }
 
+// Only qB-category evidence is considered private here.
+// Strength is not a proxy for privacy: *arr grabs have higher
+// strength but are not private. Adding a new private source
+// later should extend this query, not reuse the strength axis.
+//
+// The identities are collected into one array first: written as
+// `info_hash = $1 OR info_hash IN (subquery)` the planner turns the
+// subquery into a hashed SubPlan and sequentially scans the whole
+// evidence table on every call instead of probing its info_hash index.
+var isPrivateInfoHashSQL = `
+select exists (
+  select 1 from label_evidence
+  where info_hash = ANY(ARRAY(
+   SELECT $1::bytea
+   UNION ALL SELECT t.info_hash FROM torrents t WHERE t.info_hash_v2=$1
+   UNION ALL SELECT t.info_hash_v2 FROM torrents t WHERE t.info_hash=$1 AND t.info_hash_v2 IS NOT NULL))
+    and ` + catalogueguard.QBPrivacySQL("source", "category", "$2") + `
+)`
+
 // IsPrivateInfoHash reports whether any evidence row for the
 // infohash was produced by a private tracker — i.e. a qBittorrent
 // category of 'private' or 'bitgrab', or any source whose strength
@@ -334,20 +353,8 @@ func (s *Store) IsPrivateInfoHash(ctx context.Context, infoHash []byte) (bool, e
 	if err != nil {
 		return false, fmt.Errorf("evidence: acquire pool: %w", err)
 	}
-	// Only qB-category evidence is considered private here.
-	// Strength is not a proxy for privacy: *arr grabs have higher
-	// strength but are not private. Adding a new private source
-	// later should extend this query, not reuse the strength axis.
-	q := `
-select exists (
-  select 1 from label_evidence
-  where (info_hash = $1 OR info_hash IN (
-   SELECT t.info_hash FROM torrents t WHERE t.info_hash_v2=$1
-   UNION ALL SELECT t.info_hash_v2 FROM torrents t WHERE t.info_hash=$1 AND t.info_hash_v2 IS NOT NULL))
-    and ` + catalogueguard.QBPrivacySQL("source", "category", "$2") + `
-)`
 	var isPrivate bool
-	if err := pool.QueryRow(ctx, q, infoHash, catalogueguard.TagWhitespace).Scan(&isPrivate); err != nil {
+	if err := pool.QueryRow(ctx, isPrivateInfoHashSQL, infoHash, catalogueguard.TagWhitespace).Scan(&isPrivate); err != nil {
 		return false, fmt.Errorf("evidence: is_private lookup: %w", err)
 	}
 	return isPrivate, nil

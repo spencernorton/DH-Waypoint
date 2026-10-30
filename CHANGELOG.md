@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Check private qBittorrent evidence through the `label_evidence` info-hash
+  index. The identity-alias predicate (`info_hash = $1 OR info_hash IN (...)`)
+  became a hashed SubPlan that sequentially scanned the whole evidence table on
+  every content-filter privacy check; the identities are now gathered into one
+  array first. Results are unchanged.
+
 - Publish the exact runtime-tested container candidate, verifying its checksum,
   source metadata and image ID instead of rebuilding after the tests.
 
