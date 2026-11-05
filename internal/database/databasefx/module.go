@@ -45,7 +45,7 @@ func New() fx.Option {
 		),
 		fx.Provide(fx.Annotated{
 			Group:  "http_server_options",
-			Target: policyhttp.NewPublicHash,
+			Target: policyhttp.NewPublicHashWithReview,
 		}),
 		fx.Provide(fx.Annotated{
 			Group:  "prometheus_collectors,flatten",

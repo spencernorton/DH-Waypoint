@@ -13,6 +13,7 @@ import (
 	"github.com/spencernorton/DH-Waypoint/internal/processingstate"
 	"github.com/spencernorton/DH-Waypoint/internal/processor"
 	"github.com/spencernorton/DH-Waypoint/internal/processors"
+	"github.com/spencernorton/DH-Waypoint/internal/serving"
 	"github.com/spencernorton/DH-Waypoint/internal/worker"
 	"go.uber.org/fx"
 	"go.uber.org/zap"
@@ -22,6 +23,7 @@ type storeParams struct {
 	fx.In
 
 	Config     processors.Config
+	Serving    serving.Config
 	Processing processor.Config
 	Pool       lazy.Lazy[*pgxpool.Pool]
 	Classifier classifier.Config
@@ -39,6 +41,9 @@ func New() fx.Option {
 				return nil, err
 			}
 			s.SetLogger(p.Logger)
+			if err = s.SetPublicationConfig(p.Serving); err != nil {
+				return nil, err
+			}
 			if p.Evidence != nil {
 				p.Evidence.AddPostInsertHook(s.HandleEvidence)
 			}

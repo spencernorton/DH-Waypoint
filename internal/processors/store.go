@@ -18,6 +18,7 @@ import (
 	"github.com/spencernorton/DH-Waypoint/internal/classifier/contentfilter"
 	"github.com/spencernorton/DH-Waypoint/internal/lazy"
 	"github.com/spencernorton/DH-Waypoint/internal/namepolicy"
+	"github.com/spencernorton/DH-Waypoint/internal/serving"
 	v1 "github.com/spencernorton/DH-Waypoint/processorapi/v1"
 	"go.uber.org/zap"
 )
@@ -82,6 +83,7 @@ type Store struct {
 	singleEpisodeMax int64
 	names            *namepolicy.Policy
 	active           atomic.Bool
+	publication      serving.Config
 	pool             lazy.Lazy[*pgxpool.Pool]
 	cfg              Config
 	policy           string

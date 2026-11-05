@@ -143,9 +143,10 @@ func (tx *fakeApplyTx) QueryRow(_ context.Context, sql string, args ...any) pgx.
 	}
 	// readSource snapshot.
 	return fakeApplyRow{scan: func(dest ...any) error {
-		if len(dest) != 1 {
+		if len(dest) != 2 {
 			return fmt.Errorf("source scan: %d dest", len(dest))
 		}
+		*(dest[1].(*int64)) = 1
 		*(dest[0].(*[]byte)) = append([]byte(nil), tx.sourceRaw...)
 		return nil
 	}}

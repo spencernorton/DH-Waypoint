@@ -17,8 +17,24 @@ import (
 	v1 "github.com/spencernorton/DH-Waypoint/processorapi/v1"
 )
 
+func publicationBody(c *gin.Context, value any, limit int64) bool {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, limit)
+	d := json.NewDecoder(c.Request.Body)
+	d.DisallowUnknownFields()
+	if err := d.Decode(value); err != nil {
+		c.AbortWithStatusJSON(400, gin.H{"error": "invalid_request"})
+		return false
+	}
+	if d.Decode(new(any)) != io.EOF {
+		c.AbortWithStatusJSON(400, gin.H{"error": "invalid_request"})
+		return false
+	}
+	return true
+}
+
 func (s *Store) Key() string { return "processors" }
 func (s *Store) Apply(e *gin.Engine) error {
+	s.applyPayloadHTTP(e)
 	g := e.Group("/api/processors/v1", func(c *gin.Context) {
 		if s.cfg.AdminToken == "" {
 			c.AbortWithStatusJSON(503, gin.H{"error": "administration_disabled"})
@@ -34,6 +50,7 @@ func (s *Store) Apply(e *gin.Engine) error {
 		c.Request = c.Request.WithContext(ctx)
 		c.Next()
 	})
+	s.applyPublicationAdminHTTP(g)
 	g.GET("/status", func(c *gin.Context) {
 		status, err := s.Status(c.Request.Context())
 		if err != nil {

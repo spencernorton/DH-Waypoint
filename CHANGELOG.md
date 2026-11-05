@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+## 5.9.0 — 2026-11-05
+
+- Add an optional, fail-closed publication gate requiring a completed policy
+  review by an explicitly pinned processor artifact and active execution.
+  Applications and canonical matches alone never grant publication. Material
+  metadata changes invalidate reviews atomically, including in-flight results.
+  The same authority controls consumer search, counts, files, indexer feeds and
+  public hash grants. Existing rows receive no automatic approval.
+- Review canonical matches through policy-only steps, prioritize new source
+  changes, keep policy failures retryable, and prevent terminal job history from
+  starving fresh reviews. Require complete file metadata and reject executable,
+  scripted or archived payloads masquerading as video before granting approval.
+- Optionally require a separately pinned payload verifier. Dedicated authenticated
+  leases bind bounded, hash-verified torrent pieces and sandbox decoder reports
+  to every primary media file and the current source revision. Movie and TV
+  receipts also require trusted identity/availability constraints. Unknown,
+  incomplete, expired and unsupported proofs remain unavailable. Proofs expire
+  after seven days; deferred work retries after five minutes. New arrivals take
+  priority while every fourth payload admission reserves backlog progress.
+- Add revision-checked, idempotent publication holds and append-only hold events.
+  Removing a hold requires new review. Export pending-admission depth/age and
+  required-review settings. Sampled format and availability evidence do not
+  certify authorship, depicted content or the absence of malware.
+
 - Check private qBittorrent evidence through the `label_evidence` info-hash
   index. The identity-alias predicate (`info_hash = $1 OR info_hash IN (...)`)
   became a hashed SubPlan that sequentially scanned the whole evidence table on

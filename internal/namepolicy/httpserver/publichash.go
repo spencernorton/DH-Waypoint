@@ -13,6 +13,7 @@ import (
 	"github.com/spencernorton/DH-Waypoint/internal/lazy"
 	"github.com/spencernorton/DH-Waypoint/internal/namepolicy"
 	"github.com/spencernorton/DH-Waypoint/internal/protocol"
+	"github.com/spencernorton/DH-Waypoint/internal/serving"
 )
 
 const publicHashBodyLimit = 4096
@@ -23,9 +24,15 @@ func NewPublicHash(s lazy.Lazy[search.ServingSearch], policy *namepolicy.Policy)
 	return publicHashBuilder{search: s, policy: policy}
 }
 
+func NewPublicHashWithReview(s lazy.Lazy[search.ServingSearch], policy *namepolicy.Policy, review serving.Config) httpserver.Option {
+	return publicHashBuilder{search: s, policy: policy, reviewRequired: review.RequiredProcessor != "", payloadRequired: review.RequiredPayloadVerifierArtifactDigest != ""}
+}
+
 type publicHashBuilder struct {
-	search lazy.Lazy[search.ServingSearch]
-	policy *namepolicy.Policy
+	search          lazy.Lazy[search.ServingSearch]
+	policy          *namepolicy.Policy
+	reviewRequired  bool
+	payloadRequired bool
 }
 
 func (publicHashBuilder) Key() string { return "name-policy-public-hash" }
@@ -103,5 +110,12 @@ func (b publicHashBuilder) check(c *gin.Context) {
 	}
 	// Result positions alone bind responses to the caller's request. Names and
 	// hashes, including missing or suppressed records, are never echoed.
+	if b.reviewRequired {
+		c.Header("X-Publication-Review", serving.PublicationReviewContract)
+	}
+	if b.payloadRequired {
+		c.Header("X-Publication-Payload", serving.PayloadEvidenceContract)
+	}
+	c.Header("Cache-Control", "no-store")
 	c.JSON(http.StatusOK, Response{Enabled: true, Version: namepolicy.Version, Results: results})
 }

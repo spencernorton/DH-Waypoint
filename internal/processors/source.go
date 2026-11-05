@@ -23,6 +23,8 @@ import (
 
 // A single SQL snapshot binds metadata, file evidence, catalogue facts and
 // independent privacy/authority. Volatile counts and timestamps are excluded.
+var errSourceTooLarge = errors.New("source_too_large")
+
 var sourceSQL = `SELECT jsonb_build_object(
  'name',t.name,'size',t.size,'private',t.private,'files_status',t.files_status,
  'file_count',t.files_count,'extension',t.extension,
@@ -41,7 +43,9 @@ var sourceSQL = `SELECT jsonb_build_object(
  OR EXISTS(SELECT 1 FROM torrent_canonical_labels pc WHERE ` + catalogueguard.IdentityMatchSQL("pc.info_hash", "t.info_hash") + ` AND lower(btrim(pc.category)) IN('private','bitgrab')),
  'held',EXISTS(SELECT 1 FROM torrent_verdict_state WHERE info_hash=t.info_hash AND verdict IN('quarantined','blacklisted','tombstoned'))
  OR EXISTS(SELECT 1 FROM junkpurge_quarantine WHERE info_hash=t.info_hash AND expired_at IS NULL)
+ OR EXISTS(SELECT 1 FROM processor_publication_holds WHERE info_hash=t.info_hash AND held)
 ) || CASE WHEN t.info_hash_v2 IS NOT NULL THEN jsonb_build_object('info_hash_v2',encode(t.info_hash_v2,'hex')) ELSE '{}'::jsonb END
+,COALESCE((SELECT revision FROM processor_publication_sources WHERE info_hash=t.info_hash),1)
  FROM torrents t WHERE t.info_hash=$1`
 
 type sourceFile struct {
@@ -51,21 +55,22 @@ type sourceFile struct {
 	Extension *string `json:"extension"`
 }
 type source struct {
-	InfoHashV2      *string           `json:"info_hash_v2"`
-	Receipt         json.RawMessage   `json:"receipt"`
-	Name            string            `json:"name"`
-	Size            int64             `json:"size"`
-	Private         bool              `json:"private"`
-	FilesStatus     string            `json:"files_status"`
-	FileCount       *int64            `json:"file_count"`
-	Extension       *string           `json:"extension"`
-	Files           []sourceFile      `json:"files"`
-	Hint            json.RawMessage   `json:"hint"`
-	Contents        []json.RawMessage `json:"contents"`
-	Tags            []string          `json:"tags"`
-	Canonical       json.RawMessage   `json:"canonical"`
-	PrivateEvidence bool              `json:"private_evidence"`
-	Held            bool              `json:"held"`
+	PublicationRevision int64             `json:"-"`
+	InfoHashV2          *string           `json:"info_hash_v2"`
+	Receipt             json.RawMessage   `json:"receipt"`
+	Name                string            `json:"name"`
+	Size                int64             `json:"size"`
+	Private             bool              `json:"private"`
+	FilesStatus         string            `json:"files_status"`
+	FileCount           *int64            `json:"file_count"`
+	Extension           *string           `json:"extension"`
+	Files               []sourceFile      `json:"files"`
+	Hint                json.RawMessage   `json:"hint"`
+	Contents            []json.RawMessage `json:"contents"`
+	Tags                []string          `json:"tags"`
+	Canonical           json.RawMessage   `json:"canonical"`
+	PrivateEvidence     bool              `json:"private_evidence"`
+	Held                bool              `json:"held"`
 }
 type contentFact struct {
 	ID        string         `json:"id"`
@@ -122,17 +127,25 @@ func readSource(ctx context.Context, tx pgx.Tx, hash []byte, lock bool) (source,
 				}
 			}
 		}
+		// Lock the revision after existing child rows: source writers can finish
+		// first, while later changes cannot commit under the approval's revision.
+		if _, e := tx.Exec(ctx, `INSERT INTO processor_publication_sources(info_hash,revision) SELECT info_hash,1 FROM torrents WHERE info_hash=$1 ON CONFLICT DO NOTHING`, hash); e != nil {
+			return out, nil, e
+		}
+		if _, e := tx.Exec(ctx, `SELECT revision FROM processor_publication_sources WHERE info_hash=$1 FOR UPDATE`, hash); e != nil {
+			return out, nil, e
+		}
 		if _, e := tx.Exec(ctx, `SET LOCAL lock_timeout TO DEFAULT`); e != nil {
 			return out, nil, e
 		}
 	}
 	q := strings.Replace(sourceSQL, "%s", catalogueguard.QBPrivacySQL("source", "category", "$2"), 1)
 	var raw []byte
-	if e := tx.QueryRow(ctx, q, hash, catalogueguard.TagWhitespace).Scan(&raw); e != nil {
+	if e := tx.QueryRow(ctx, q, hash, catalogueguard.TagWhitespace).Scan(&raw, &out.PublicationRevision); e != nil {
 		return out, nil, e
 	}
 	if len(raw) > 262144 {
-		return out, nil, errors.New("source_too_large")
+		return out, nil, errSourceTooLarge
 	}
 	if e := json.Unmarshal(raw, &out); e != nil {
 		return out, nil, e
@@ -153,9 +166,6 @@ func (s source) admitted() bool {
 		Category *string `json:"category"`
 	}
 	_ = json.Unmarshal(s.Canonical, &c)
-	if c.MediaID != nil && *c.MediaID != "" {
-		return false
-	}
 	if c.Category != nil {
 		cat := strings.ToLower(strings.TrimSpace(*c.Category))
 		if cat == "private" || cat == "bitgrab" {
