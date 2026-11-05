@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 5.9.1 — 2026-11-05
+
+- Plan required publication approvals before catalogue exclusion checks. Broad
+  searches on large catalogues with few approved releases no longer exhaust
+  their query budget before checking the approval set. Review, payload, private,
+  quarantine and hold conditions remain mandatory. No schema change.
+
 ## 5.9.0 — 2026-11-05
 
 - Add an optional, fail-closed publication gate requiring a completed policy

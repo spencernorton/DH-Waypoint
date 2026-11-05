@@ -113,12 +113,42 @@ func (p *Policy) TorrentCondition(table string) clause.Expr {
 		panic("invalid serving torrent table")
 	}
 	root := table + ".info_hash"
+	// Keep positive-review joins ahead of the many anti-joins. PostgreSQL's
+	// bounded join-order search otherwise starts with the catalogue and can
+	// scan it before discovering that no current approval exists.
+	sql := "TRUE"
+	args := []any{}
+	if p.requiredProcessor != "" {
+		// A semi-join starts from the small set of explicit approvals; an
+		// application, catalogue match or old registry identity cannot grant access.
+		sql += ` AND ` + root + ` IN (
+ SELECT review.info_hash FROM processor_publication_reviews review
+ JOIN processor_publication_sources reviewed_t ON reviewed_t.info_hash=review.info_hash
+ JOIN processor_registry reviewer ON reviewer.id=review.processor_id
+ WHERE review.processor_id=? AND review.approved
+ AND review.policy_contract=?
+ AND review.source_revision=reviewed_t.revision
+ AND reviewer.mode='apply' AND reviewer.state='active'
+ AND reviewer.execution_generation=review.execution_generation
+ AND reviewer.manifest->'processor'=review.processor_identity
+ AND review.processor_identity->>'artifact_digest'=?
+ AND jsonb_exists(reviewer.manifest->'capabilities','policy'))`
+		args = append(args, p.requiredProcessor, PublicationReviewPolicy, p.requiredArtifact)
+	}
+	if p.requiredPayloadArtifact != "" {
+		sql += ` AND ` + root + ` IN (
+ SELECT payload.info_hash FROM processor_payload_reviews payload
+ JOIN processor_publication_sources payload_source ON payload_source.info_hash=payload.info_hash
+ WHERE payload.approved AND payload.source_revision=payload_source.revision
+ AND payload.verifier_artifact=? AND payload.policy=? AND payload.expires_at>CURRENT_TIMESTAMP)`
+		args = append(args, p.requiredPayloadArtifact, PayloadEvidenceContract)
+	}
 	// Authentic source snapshots were added with the complete recovery producer.
 	// Do not silently elevate legacy marker-only records into consumer authority.
 	// Keep the qualifying snapshot durable rather than depending on a capture
 	// receipt that may have a shorter retention period. Shape and hash bindings
 	// reject incomplete/mismatched snapshots without unsafe JSON casts.
-	sql := "NOT EXISTS (SELECT 1 FROM junkpurge_quarantine serving_q WHERE serving_q.info_hash = " + root + `
+	sql += " AND NOT EXISTS (SELECT 1 FROM junkpurge_quarantine serving_q WHERE serving_q.info_hash = " + root + `
  AND jsonb_typeof(serving_q.sources_snapshot) = 'array'
  AND jsonb_typeof(serving_q.torrent_snapshot) = 'object'
  AND serving_q.torrent_snapshot->>'info_hash' = chr(92) || 'x' || encode(serving_q.info_hash, 'hex')
@@ -155,34 +185,9 @@ func (p *Policy) TorrentCondition(table string) clause.Expr {
 		sql += " AND NOT EXISTS(SELECT 1 FROM processor_exclusions serving_processor WHERE " + catalogueguard.IdentityMatchSQL("serving_processor.info_hash", root) + ")"
 	}
 	sql += " AND NOT EXISTS(SELECT 1 FROM processor_publication_holds serving_hold WHERE " + catalogueguard.IdentityMatchSQL("serving_hold.info_hash", root) + " AND serving_hold.held)"
-	args := []any{catalogueguard.TagWhitespace, catalogueguard.TagWhitespace,
+	args = append(args, catalogueguard.TagWhitespace, catalogueguard.TagWhitespace,
 		catalogueguard.TagWhitespace, catalogueguard.TagWhitespace, catalogueguard.TagWhitespace,
-		catalogueguard.TagWhitespace}
-	if p.requiredProcessor != "" {
-		// A semi-join starts from the small set of explicit approvals; an
-		// application, catalogue match or old registry identity cannot grant access.
-		sql += ` AND ` + root + ` IN (
- SELECT review.info_hash FROM processor_publication_reviews review
- JOIN processor_publication_sources reviewed_t ON reviewed_t.info_hash=review.info_hash
- JOIN processor_registry reviewer ON reviewer.id=review.processor_id
- WHERE review.processor_id=? AND review.approved
- AND review.policy_contract=?
- AND review.source_revision=reviewed_t.revision
- AND reviewer.mode='apply' AND reviewer.state='active'
- AND reviewer.execution_generation=review.execution_generation
- AND reviewer.manifest->'processor'=review.processor_identity
- AND review.processor_identity->>'artifact_digest'=?
- AND jsonb_exists(reviewer.manifest->'capabilities','policy'))`
-		args = append(args, p.requiredProcessor, PublicationReviewPolicy, p.requiredArtifact)
-	}
-	if p.requiredPayloadArtifact != "" {
-		sql += ` AND ` + root + ` IN (
- SELECT payload.info_hash FROM processor_payload_reviews payload
- JOIN processor_publication_sources payload_source ON payload_source.info_hash=payload.info_hash
- WHERE payload.approved AND payload.source_revision=payload_source.revision
- AND payload.verifier_artifact=? AND payload.policy=? AND payload.expires_at>CURRENT_TIMESTAMP)`
-		args = append(args, p.requiredPayloadArtifact, PayloadEvidenceContract)
-	}
+		catalogueguard.TagWhitespace)
 	if p.excludeAdult {
 		sql += ` AND NOT EXISTS (
  SELECT 1 FROM torrent_contents serving_tc
