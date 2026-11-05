@@ -6,15 +6,17 @@ import (
 )
 
 type Metrics struct {
-	attempts  *prometheus.CounterVec
-	outcomes  *prometheus.CounterVec
-	wait      *prometheus.HistogramVec
-	duration  *prometheus.HistogramVec
-	admission *prometheus.CounterVec
-	jobs      *prometheus.GaugeVec
-	registry  *prometheus.GaugeVec
-	mu        sync.Mutex
-	seen      map[string][]string
+	attempts           *prometheus.CounterVec
+	outcomes           *prometheus.CounterVec
+	wait               *prometheus.HistogramVec
+	duration           *prometheus.HistogramVec
+	admission          *prometheus.CounterVec
+	jobs               *prometheus.GaugeVec
+	registry           *prometheus.GaugeVec
+	publicationPending prometheus.Gauge
+	publicationOldest  prometheus.Gauge
+	mu                 sync.Mutex
+	seen               map[string][]string
 }
 
 func NewMetrics() *Metrics {
@@ -26,11 +28,13 @@ func NewMetrics() *Metrics {
 		prometheus.NewCounterVec(prometheus.CounterOpts{Name: "dh_waypoint_processors_admission_total", Help: "Optional admission decisions"}, []string{"outcome"}),
 		prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "dh_waypoint_processors_jobs", Help: "Retained durable optional jobs"}, []string{"state"}),
 		prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "dh_waypoint_processors_registry_info", Help: "Active registry execution versions"}, []string{"processor_id", "generation", "version", "model_version", "policy_version"}),
+		prometheus.NewGauge(prometheus.GaugeOpts{Name: "dh_waypoint_publication_pending_admission", Help: "Source changes awaiting bounded processor admission"}),
+		prometheus.NewGauge(prometheus.GaugeOpts{Name: "dh_waypoint_publication_oldest_pending_admission_seconds", Help: "Age of oldest source change awaiting processor admission"}),
 		sync.Mutex{}, map[string][]string{},
 	}
 }
 func (m *Metrics) Collectors() []prometheus.Collector {
-	return []prometheus.Collector{m.attempts, m.outcomes, m.wait, m.duration, m.admission, m.jobs, m.registry}
+	return []prometheus.Collector{m.attempts, m.outcomes, m.wait, m.duration, m.admission, m.jobs, m.registry, m.publicationPending, m.publicationOldest}
 }
 
 func (m *Metrics) note(id, generation string) {

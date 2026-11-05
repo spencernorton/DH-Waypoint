@@ -130,9 +130,9 @@ own inference runtimes, prompts, credentials, caches and budgets. See
 | `PROCESSORS_CREDENTIAL_DIRECTORY` | `/run/secrets/dh-waypoint-processors` | Dedicated read-only transport secret directory; files read per request. |
 | `PROCESSORS_CONCURRENCY` | `2` | Global active optional requests across replicas sharing this database. |
 | `PROCESSORS_QUEUE_CAPACITY` | `1000` | Pending optional pipeline jobs. |
-| `PROCESSORS_RETAINED_JOBS` | `10000` | Maximum retained optional jobs; admission pauses at the bound. |
+| `PROCESSORS_RETAINED_JOBS` | `10000` | Maximum retained optional jobs. Oldest terminal history is evicted within bounded admission to make room; live jobs are retained. |
 | `PROCESSORS_REQUEST_TIMEOUT` | `10s` | Hard request deadline; allowed 100ms–60s. |
-| `PROCESSORS_MAX_ATTEMPTS` | `3` | Per-step dispatch limit, at most 5. |
+| `PROCESSORS_MAX_ATTEMPTS` | `3` | Per-step dispatch limit, at most 5. Apply-mode policy failures remain deferred after each bounded retry group with a 30s cooldown. |
 | `PROCESSORS_POLL_INTERVAL` | `1s` | Optional admission/worker cadence. A worker runs ready steps back to back while they succeed, settles stale leases without waiting, and waits one interval when the queue is empty or a step fails. |
 | `PROCESSORS_SCAN_BATCH` | `32` | Maximum existing torrents inspected per catch-up scan, at most 256. |
 | `PROCESSORS_RETENTION` | `168h` | Terminal job retention, at most 30 days. |
@@ -142,6 +142,37 @@ must include it once when migrating the core. Registrations are stored in
 PostgreSQL and discovered without a subsequent restart. The core and optional
 queues have independent worker slots. Transport authentication references
 `DH_WAYPOINT_PROCESSOR_TOKEN_*`; no credential value is returned by the registry.
+
+## Required publication review
+
+Set both `SERVING_REQUIRED_PROCESSOR` and
+`SERVING_REQUIRED_PROCESSOR_ARTIFACT_DIGEST` to require a policy-capable
+processor's approval before any public consumer result or hash grant. The
+digest is the manifest's exact 64-character lowercase SHA-256 artifact identity,
+not an image tag. An incomplete or malformed pair prevents startup. With both
+unset, independently deployed backends retain optional-processor behavior.
+
+Approval requires a validated completed apply-mode policy result, complete file
+metadata and the current active registry execution/identity. Video releases with
+executable, scripted or archived file payloads cannot receive approval. This
+evaluates metadata; it does not certify payload bytes or guarantee model accuracy.
+Canonical identity protects enrichment but never bypasses policy review.
+
+Migration 73 creates explicit revision-bound proofs without grandfathering any
+existing application. Historical releases remain hidden until reviewed. New and
+changed source rows receive bounded priority alongside catch-up scanning. Material
+source changes, a different model/execution, pause or shadow mode invalidate
+publication. A separate negative hold always wins, and removing it requires a new
+review. Policy unavailability leaves unknown releases hidden and retryable.
+
+Consumers can require the `X-Publication-Review:
+required-publication-review-v1` header on authenticated public hash checks to
+refuse an older or unconfigured core. Do not reuse cached release pages after a
+source or policy change. Monitor `dh_waypoint_serving_config` with setting
+`required_publication_review`, pending-admission depth/age, queue states and
+processor failures. Pending-admission metrics cover source changes, not the
+entire historical catch-up backlog. Never disable the gate or downgrade to an
+unguarded binary as a service-restoration shortcut; pause serving during rollback.
 
 ## Private torrents and tracker
 

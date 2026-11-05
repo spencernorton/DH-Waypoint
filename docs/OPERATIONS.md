@@ -111,6 +111,10 @@ quarantined.
 
 ## Processor migration
 
+For mandatory positive review and optional piece-bound format evidence, see
+[required publication review](processors/publication.md). Publication holds
+and evidence are independent of metadata matching and retention cleanup.
+
 Read [the v5 migration and rollback procedure](processors/migration.md) before upgrading. Stop retired workers, preserve database/evidence backups and reconcile outstanding provider jobs without redispatch. No plugin is required for startup.
 
 ## Backup, upgrade and recovery

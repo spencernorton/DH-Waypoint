@@ -27,6 +27,10 @@ services:
       # basic/raw when a processor plugin or custom dataset does the
       # real classification and filtering.
       PROCESSING_MODE: "${PROCESSING_MODE:-full}"
+      SERVING_REQUIRED_PROCESSOR: "${SERVING_REQUIRED_PROCESSOR:-}"
+      SERVING_REQUIRED_PROCESSOR_ARTIFACT_DIGEST: "${SERVING_REQUIRED_PROCESSOR_ARTIFACT_DIGEST:-}"
+      SERVING_REQUIRED_PAYLOAD_VERIFIER_ARTIFACT_DIGEST: "${SERVING_REQUIRED_PAYLOAD_VERIFIER_ARTIFACT_DIGEST:-}"
+      PROCESSORS_PAYLOAD_VERIFIER_TOKEN: "${PROCESSORS_PAYLOAD_VERIFIER_TOKEN:-}"
       # Drop *.plugin.yml files into ./plugins to register plugins.
       PROCESSORS_PLUGINS_DIR: /plugins
       POSTGRES_HOST: postgres

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/spencernorton/DH-Waypoint/internal/serving"
 	v1 "github.com/spencernorton/DH-Waypoint/processorapi/v1"
 )
 
@@ -24,6 +25,7 @@ type Lease struct {
 	Hash                            []byte
 	InputRevision, PipelineRevision string
 	Epoch, Generation               int64
+	PublicationRevision             int64
 	Input                           v1.Input
 	Source                          json.RawMessage
 	Plan                            Plan
@@ -47,6 +49,19 @@ func (s *Store) Scan(ctx context.Context) (int, error) {
 	if e = tx.QueryRow(ctx, `SELECT scan_after FROM processor_control WHERE singleton FOR UPDATE`).Scan(&after); e != nil {
 		return 0, e
 	}
+	if s.publication.RequiredProcessor != "" {
+		var configured string
+		if e = tx.QueryRow(ctx, `SELECT publication_policy FROM processor_control WHERE singleton`).Scan(&configured); e != nil {
+			return 0, e
+		}
+		current := digest([]any{serving.PublicationReviewPolicy, s.publication.RequiredProcessor, s.publication.RequiredProcessorArtifactDigest, s.publication.RequiredPayloadVerifierArtifactDigest})
+		if configured != current {
+			if _, e = tx.Exec(ctx, `UPDATE processor_control SET publication_policy=$1,scan_after=''::bytea WHERE singleton`, current); e != nil {
+				return 0, e
+			}
+			after = []byte{}
+		}
+	}
 	plan, draining, e := readPlan(ctx, tx, s.policy)
 	if e != nil {
 		return 0, e
@@ -65,6 +80,16 @@ func (s *Store) Scan(ctx context.Context) (int, error) {
 	var pending, total int
 	if e = tx.QueryRow(ctx, `SELECT count(*) FILTER(WHERE state IN('queued','deferred','leased')),count(*) FROM processor_jobs`).Scan(&pending, &total); e != nil {
 		return 0, e
+	}
+	// Completed audit history must not prevent a fresh release from entering
+	// the bounded work queue. Eviction advances the honest history floor.
+	room := min(s.cfg.ScanBatch, s.cfg.QueueCapacity-pending)
+	if room > 0 && total+room > s.cfg.RetainedJobs {
+		removed, err := makePublicationRoom(ctx, tx, min(128, total+room-s.cfg.RetainedJobs))
+		if err != nil {
+			return 0, err
+		}
+		total -= removed
 	}
 	capacity := min(s.cfg.ScanBatch, s.cfg.QueueCapacity-pending, s.cfg.RetainedJobs-total)
 	if capacity <= 0 {
@@ -87,6 +112,30 @@ func (s *Store) Scan(ctx context.Context) (int, error) {
 		}
 		hashes = append(hashes, h)
 		priority[string(h)] = true
+	}
+	rows.Close()
+	if e = rows.Err(); e != nil {
+		return 0, e
+	}
+	// Source changes and newly persisted releases precede hash-order catch-up.
+	// Keep half a scan for backfill; explicit requests retain their own priority.
+	rows, e = tx.Query(ctx, `SELECT p.info_hash FROM processor_publication_pending p
+ WHERE EXISTS(SELECT 1 FROM torrent_contents c WHERE c.info_hash=p.info_hash)
+ AND NOT EXISTS(SELECT 1 FROM processor_reprocess_requests r WHERE r.info_hash=p.info_hash AND r.state='waiting_core')
+ ORDER BY p.enqueued_at,p.info_hash LIMIT $1`, min(16, max(0, (capacity-len(hashes)+1)/2)))
+	if e != nil {
+		return 0, e
+	}
+	for rows.Next() {
+		var h []byte
+		if e = rows.Scan(&h); e != nil {
+			rows.Close()
+			return 0, e
+		}
+		if !priority[string(h)] {
+			hashes = append(hashes, h)
+			priority[string(h)] = true
+		}
 	}
 	rows.Close()
 	if e = rows.Err(); e != nil {
@@ -120,9 +169,22 @@ func (s *Store) Scan(ctx context.Context) (int, error) {
 			after = h
 		}
 		if !admittedByPolicy(h, plan.Admission) {
+			if _, err := tx.Exec(ctx, `DELETE FROM processor_publication_pending WHERE info_hash=$1`, h); err != nil {
+				return 0, err
+			}
 			continue
 		}
 		src, raw, err := readSource(ctx, tx, h, false)
+		if errors.Is(err, errSourceTooLarge) {
+			s.metrics.admission.WithLabelValues("oversize").Inc()
+			if _, err = tx.Exec(ctx, `DELETE FROM processor_publication_pending WHERE info_hash=$1 AND source_revision<=$2`, h, src.PublicationRevision); err != nil {
+				return 0, err
+			}
+			if _, err = tx.Exec(ctx, `UPDATE processor_reprocess_requests SET state='held',state_reason='source_too_large',updated_at=clock_timestamp() WHERE info_hash=$1 AND state='ready'`, h); err != nil {
+				return 0, err
+			}
+			continue
+		}
 		if err != nil {
 			return 0, err
 		}
@@ -132,6 +194,9 @@ func (s *Store) Scan(ctx context.Context) (int, error) {
 					return 0, err
 				}
 			}
+			if _, err = tx.Exec(ctx, `DELETE FROM processor_publication_pending WHERE info_hash=$1 AND source_revision<=$2`, h, src.PublicationRevision); err != nil {
+				return 0, err
+			}
 			continue
 		}
 		if !src.admittedByNames(s.names, h) {
@@ -140,30 +205,56 @@ func (s *Store) Scan(ctx context.Context) (int, error) {
 					return 0, err
 				}
 			}
+			if _, err = tx.Exec(ctx, `DELETE FROM processor_publication_pending WHERE info_hash=$1 AND source_revision<=$2`, h, src.PublicationRevision); err != nil {
+				return 0, err
+			}
 			continue
 		}
-		effectivePlan := planForIdentity(plan, h)
+		effectivePlan := planForSource(planForIdentity(plan, h), src)
 		if len(effectivePlan.Steps) == 0 {
+			if _, err = tx.Exec(ctx, `DELETE FROM processor_publication_pending WHERE info_hash=$1 AND source_revision<=$2`, h, src.PublicationRevision); err != nil {
+				return 0, err
+			}
 			continue
 		}
-		revision, pipeline := digest(raw), digest(effectivePlan)
+		// Pipeline identity describes the configured registry. Source authority
+		// may narrow execution to policy-only without changing that identity.
+		revision, pipeline := digest(raw), digest(planForIdentity(plan, h))
 		var already bool
 		err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM processor_applications WHERE info_hash=$1 AND applied_revision=$2 AND pipeline_revision=$3)`, h, revision, pipeline).Scan(&already)
 		if err != nil {
 			return 0, err
 		}
 		if already {
-			continue
+			already, err = s.publicationReviewsCurrent(ctx, tx, h, src.PublicationRevision, effectivePlan)
+			if err != nil {
+				return 0, err
+			}
+			if already {
+				if err = s.enqueuePayload(ctx, tx, h, src.PublicationRevision); err != nil {
+					return 0, err
+				}
+				if _, err = tx.Exec(ctx, `DELETE FROM processor_publication_pending WHERE info_hash=$1 AND source_revision<=$2`, h, src.PublicationRevision); err != nil {
+					return 0, err
+				}
+				continue
+			}
 		}
 		input := src.input(h, s.policy, s.noiseV2)
 		ib, _ := json.Marshal(input)
 		pb, _ := json.Marshal(effectivePlan)
 		if len(ib) > 100000 {
 			s.metrics.admission.WithLabelValues("oversize").Inc()
+			if _, err = tx.Exec(ctx, `DELETE FROM processor_publication_pending WHERE info_hash=$1 AND source_revision<=$2`, h, src.PublicationRevision); err != nil {
+				return 0, err
+			}
+			if _, err = tx.Exec(ctx, `UPDATE processor_reprocess_requests SET state='held',state_reason='input_too_large',updated_at=clock_timestamp() WHERE info_hash=$1 AND state='ready'`, h); err != nil {
+				return 0, err
+			}
 			continue
 		}
-		id := digest([]any{hex.EncodeToString(h), revision, pipeline})
-		tag, err := tx.Exec(ctx, `INSERT INTO processor_jobs(job_id,info_hash,input_revision,pipeline_revision,epoch,input,source,plan) VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT DO NOTHING`, id, h, revision, pipeline, plan.Epoch, string(ib), string(raw), string(pb))
+		id := digest([]any{hex.EncodeToString(h), revision, pipeline, src.PublicationRevision})
+		tag, err := tx.Exec(ctx, `INSERT INTO processor_jobs(job_id,info_hash,input_revision,pipeline_revision,epoch,input,source,plan,publication_revision) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT DO NOTHING`, id, h, revision, pipeline, plan.Epoch, string(ib), string(raw), string(pb), src.PublicationRevision)
 		if err != nil {
 			return 0, err
 		}
@@ -174,6 +265,9 @@ func (s *Store) Scan(ctx context.Context) (int, error) {
 			if err != nil {
 				return 0, err
 			}
+		}
+		if _, err = tx.Exec(ctx, `DELETE FROM processor_publication_pending WHERE info_hash=$1 AND source_revision<=$2`, h, src.PublicationRevision); err != nil {
+			return 0, err
 		}
 		if admitted >= capacity {
 			break
@@ -224,7 +318,7 @@ func (s *Store) Claim(ctx context.Context) (*Lease, error) {
 	var ib, pb, rb []byte
 	e = tx.QueryRow(ctx, `UPDATE processor_jobs SET state='leased',lease_generation=lease_generation+1,lease_until=clock_timestamp()+$1::interval
  WHERE job_id=(SELECT job_id FROM processor_jobs WHERE state IN('queued','deferred') AND available_at<=clock_timestamp() AND epoch=$2 ORDER BY available_at,created_at,job_id FOR UPDATE SKIP LOCKED LIMIT 1)
- RETURNING job_id,info_hash,input_revision,pipeline_revision,epoch,lease_generation,input,source,plan,results,step,step_attempts,available_at`, (s.cfg.RequestTimeout+5*time.Second).String(), epoch).Scan(&l.ID, &l.Hash, &l.InputRevision, &l.PipelineRevision, &l.Epoch, &l.Generation, &ib, &l.Source, &pb, &rb, &l.Step, &l.StepAttempts, &l.AvailableAt)
+ RETURNING job_id,info_hash,input_revision,pipeline_revision,epoch,lease_generation,input,source,plan,results,step,step_attempts,available_at,publication_revision`, (s.cfg.RequestTimeout+5*time.Second).String(), epoch).Scan(&l.ID, &l.Hash, &l.InputRevision, &l.PipelineRevision, &l.Epoch, &l.Generation, &ib, &l.Source, &pb, &rb, &l.Step, &l.StepAttempts, &l.AvailableAt, &l.PublicationRevision)
 	if errors.Is(e, pgx.ErrNoRows) {
 		return nil, tx.Commit(ctx)
 	}
@@ -254,10 +348,13 @@ func (s *Store) fresh(ctx context.Context, tx pgx.Tx, l Lease, lock bool) (sourc
 		return source{}, ErrStale
 	}
 	src, raw, e := readSource(ctx, tx, l.Hash, lock)
+	if errors.Is(e, errSourceTooLarge) {
+		return src, ErrStale
+	}
 	if e != nil {
 		return src, e
 	}
-	if !src.admitted() || digest(raw) != l.InputRevision {
+	if !src.admitted() || digest(raw) != l.InputRevision || src.PublicationRevision != l.PublicationRevision {
 		return src, ErrStale
 	}
 	if !src.admittedByNames(s.names, l.Hash) {
@@ -442,9 +539,14 @@ func (s *Store) Finish(ctx context.Context, l Lease, j v1.Job, r v1.Result, disp
 			return e
 		}
 	}
-	if (r.Outcome == v1.Failed || r.Outcome == v1.Deferred) && l.StepAttempts+1 < s.cfg.MaxAttempts && dispatched {
+	policyRetry := l.Step < len(l.Plan.Steps) && l.Plan.Steps[l.Step].Entry.Mode == "apply" && slices.Contains(l.Plan.Steps[l.Step].EffectiveCapabilities(), v1.Policy)
+	if (r.Outcome == v1.Failed || r.Outcome == v1.Deferred) && (l.StepAttempts+1 < s.cfg.MaxAttempts || policyRetry) && dispatched {
 		delay := max(time.Second*time.Duration(1<<l.StepAttempts), time.Duration(r.RetryAfterSeconds)*time.Second)
-		_, e = tx.Exec(ctx, `UPDATE processor_jobs SET state='deferred',outcome=$3,reason='retry_scheduled',lease_until=NULL,available_at=clock_timestamp()+$4::interval WHERE job_id=$1 AND lease_generation=$2`, l.ID, l.Generation, string(r.Outcome), delay.String())
+		reset := policyRetry && l.StepAttempts+1 >= s.cfg.MaxAttempts
+		if reset {
+			delay = max(30*time.Second, time.Duration(r.RetryAfterSeconds)*time.Second)
+		}
+		_, e = tx.Exec(ctx, `UPDATE processor_jobs SET state='deferred',outcome=$3,reason='retry_scheduled',lease_until=NULL,step_attempts=CASE WHEN $5 THEN 0 ELSE step_attempts END,available_at=clock_timestamp()+$4::interval WHERE job_id=$1 AND lease_generation=$2`, l.ID, l.Generation, string(r.Outcome), delay.String(), reset)
 		if e != nil {
 			return e
 		}
@@ -515,6 +617,19 @@ func (s *Store) failPreparation(ctx context.Context, l Lease) error {
 	}
 	if epoch != l.Epoch {
 		return ErrStale
+	}
+	if l.Step < len(l.Plan.Steps) && l.Plan.Steps[l.Step].Entry.Mode == "apply" && slices.Contains(l.Plan.Steps[l.Step].EffectiveCapabilities(), v1.Policy) {
+		tag, e := tx.Exec(ctx, `UPDATE processor_jobs SET preparation_failures=CASE WHEN preparation_failures+1 >= $3 THEN 0 ELSE preparation_failures+1 END,
+ state='deferred',outcome='failed',reason='preparation_failed',lease_until=NULL,finished_at=NULL,
+ available_at=clock_timestamp()+interval '30 seconds'
+ WHERE job_id=$1 AND state='leased' AND lease_generation=$2 AND lease_until>clock_timestamp()`, l.ID, l.Generation, s.cfg.MaxAttempts)
+		if e != nil {
+			return e
+		}
+		if tag.RowsAffected() != 1 {
+			return ErrStale
+		}
+		return tx.Commit(ctx)
 	}
 	tag, err := tx.Exec(ctx, `UPDATE processor_jobs SET
  preparation_failures=preparation_failures+1,

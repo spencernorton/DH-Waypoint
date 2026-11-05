@@ -214,6 +214,13 @@ func (s *Store) updateGauges(ctx context.Context) {
 	if e != nil {
 		return
 	}
+	if pool, err := s.pool.Get(); err == nil {
+		var pending, oldest float64
+		if err = pool.QueryRow(ctx, `SELECT count(*),COALESCE(extract(epoch FROM clock_timestamp()-min(enqueued_at)),0) FROM processor_publication_pending`).Scan(&pending, &oldest); err == nil {
+			s.metrics.publicationPending.Set(pending)
+			s.metrics.publicationOldest.Set(max(0, oldest))
+		}
+	}
 	s.metrics.registry.Reset()
 	active := map[string]bool{}
 	for _, p := range status.Processors {

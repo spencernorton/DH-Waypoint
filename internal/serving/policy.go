@@ -4,6 +4,7 @@ package serving
 import (
 	"fmt"
 	"github.com/spencernorton/DH-Waypoint/internal/catalogueguard"
+	"regexp"
 	"strings"
 	"unicode"
 
@@ -12,26 +13,47 @@ import (
 	"gorm.io/gorm/clause"
 )
 
+const PublicationReviewContract = "required-publication-review-v1"
+const PublicationReviewPolicy = "core-publication-policy-v1"
+const PayloadEvidenceContract = "piece-bound-media-format-v1"
+
 // Config applies to consumer APIs, not processing or operator recovery reads.
 type Config struct {
-	ProcessorExclusions bool `yaml:"-"`
-	ExcludeAdult        bool `yaml:"exclude_adult"`
+	ProcessorExclusions                   bool   `yaml:"-"`
+	ExcludeAdult                          bool   `yaml:"exclude_adult"`
+	RequiredProcessor                     string `yaml:"required_processor"`
+	RequiredProcessorArtifactDigest       string `yaml:"required_processor_artifact_digest"`
+	RequiredPayloadVerifierArtifactDigest string `yaml:"required_payload_verifier_artifact_digest"`
 }
 
 // Policy retains source-complete quarantine exclusion and optionally excludes
 // known adult releases. Legacy incomplete snapshots need separate review.
 type Policy struct {
-	excludeAdult        bool
-	processorExclusions bool
-	strongPattern       string
-	candidateNeedles    []string
-	mediaExtensions     []string
-	names               *namepolicy.Policy
+	excludeAdult            bool
+	processorExclusions     bool
+	requiredProcessor       string
+	requiredArtifact        string
+	requiredPayloadArtifact string
+	strongPattern           string
+	candidateNeedles        []string
+	mediaExtensions         []string
+	names                   *namepolicy.Policy
 }
 
 // NewPolicy uses only the core classifier's precision-vetted strong keywords.
 // Weak keywords and the matcher's abstention heuristic are not serving evidence.
 func NewPolicy(cfg Config, strongKeywords, mediaExtensions []string, names ...*namepolicy.Policy) (*Policy, error) {
+	if cfg.RequiredProcessor != "" {
+		if !regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,95}$`).MatchString(cfg.RequiredProcessor) ||
+			!regexp.MustCompile(`^[a-f0-9]{64}$`).MatchString(cfg.RequiredProcessorArtifactDigest) {
+			return nil, fmt.Errorf("required publication processor needs a valid ID and pinned artifact digest")
+		}
+	} else if cfg.RequiredProcessorArtifactDigest != "" {
+		return nil, fmt.Errorf("publication artifact digest needs a required processor")
+	}
+	if cfg.RequiredPayloadVerifierArtifactDigest != "" && (cfg.RequiredProcessor == "" || !regexp.MustCompile(`^[a-f0-9]{64}$`).MatchString(cfg.RequiredPayloadVerifierArtifactDigest)) {
+		return nil, fmt.Errorf("payload evidence needs a required processor and pinned verifier artifact digest")
+	}
 	if len(names) > 1 {
 		return nil, fmt.Errorf("serving name policy must be a single instance")
 	}
@@ -48,6 +70,8 @@ func NewPolicy(cfg Config, strongKeywords, mediaExtensions []string, names ...*n
 	pattern := strings.ReplaceAll(r.String(), `\p{L}`, postgresLetterRanges())
 	pattern = strings.ReplaceAll(pattern, `\d`, `0-9`)
 	p := &Policy{processorExclusions: cfg.ProcessorExclusions, excludeAdult: cfg.ExcludeAdult, strongPattern: pattern, mediaExtensions: append([]string(nil), mediaExtensions...)}
+	p.requiredProcessor, p.requiredArtifact = cfg.RequiredProcessor, cfg.RequiredProcessorArtifactDigest
+	p.requiredPayloadArtifact = cfg.RequiredPayloadVerifierArtifactDigest
 	p.candidateNeedles = candidateForPattern(r.String()).needles
 	if len(names) == 1 {
 		p.names = names[0]
@@ -127,12 +151,38 @@ func (p *Policy) TorrentCondition(table string) clause.Expr {
  AND NOT EXISTS (SELECT 1 FROM label_evidence serving_e WHERE ` + catalogueguard.IdentityMatchSQL("serving_e.info_hash", root) + ` AND ` + catalogueguard.QBPrivacySQL("serving_e.source", "serving_e.category", "?") + `)
  AND NOT EXISTS (SELECT 1 FROM torrent_tags serving_tag WHERE serving_tag.info_hash = ` + root + ` AND ` + catalogueguard.PrivacyTagSQL("serving_tag.name", "?") + `)
  AND NOT EXISTS (SELECT 1 FROM torrent_canonical_labels serving_label WHERE ` + catalogueguard.IdentityMatchSQL("serving_label.info_hash", root) + ` AND lower(btrim(serving_label.category,?)) IN ('private','bitgrab'))`
-	if p.processorExclusions {
+	if p.processorExclusions || p.requiredProcessor != "" {
 		sql += " AND NOT EXISTS(SELECT 1 FROM processor_exclusions serving_processor WHERE " + catalogueguard.IdentityMatchSQL("serving_processor.info_hash", root) + ")"
 	}
+	sql += " AND NOT EXISTS(SELECT 1 FROM processor_publication_holds serving_hold WHERE " + catalogueguard.IdentityMatchSQL("serving_hold.info_hash", root) + " AND serving_hold.held)"
 	args := []any{catalogueguard.TagWhitespace, catalogueguard.TagWhitespace,
 		catalogueguard.TagWhitespace, catalogueguard.TagWhitespace, catalogueguard.TagWhitespace,
 		catalogueguard.TagWhitespace}
+	if p.requiredProcessor != "" {
+		// A semi-join starts from the small set of explicit approvals; an
+		// application, catalogue match or old registry identity cannot grant access.
+		sql += ` AND ` + root + ` IN (
+ SELECT review.info_hash FROM processor_publication_reviews review
+ JOIN processor_publication_sources reviewed_t ON reviewed_t.info_hash=review.info_hash
+ JOIN processor_registry reviewer ON reviewer.id=review.processor_id
+ WHERE review.processor_id=? AND review.approved
+ AND review.policy_contract=?
+ AND review.source_revision=reviewed_t.revision
+ AND reviewer.mode='apply' AND reviewer.state='active'
+ AND reviewer.execution_generation=review.execution_generation
+ AND reviewer.manifest->'processor'=review.processor_identity
+ AND review.processor_identity->>'artifact_digest'=?
+ AND jsonb_exists(reviewer.manifest->'capabilities','policy'))`
+		args = append(args, p.requiredProcessor, PublicationReviewPolicy, p.requiredArtifact)
+	}
+	if p.requiredPayloadArtifact != "" {
+		sql += ` AND ` + root + ` IN (
+ SELECT payload.info_hash FROM processor_payload_reviews payload
+ JOIN processor_publication_sources payload_source ON payload_source.info_hash=payload.info_hash
+ WHERE payload.approved AND payload.source_revision=payload_source.revision
+ AND payload.verifier_artifact=? AND payload.policy=? AND payload.expires_at>CURRENT_TIMESTAMP)`
+		args = append(args, p.requiredPayloadArtifact, PayloadEvidenceContract)
+	}
 	if p.excludeAdult {
 		sql += ` AND NOT EXISTS (
  SELECT 1 FROM torrent_contents serving_tc

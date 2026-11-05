@@ -329,7 +329,7 @@ func (s *Store) apply(ctx context.Context, tx pgx.Tx, l Lease, src source) error
 			return e
 		}
 	}
-	_, after, e := readSource(ctx, tx, l.Hash, false)
+	afterSource, after, e := readSource(ctx, tx, l.Hash, false)
 	if e != nil {
 		return e
 	}
@@ -346,6 +346,12 @@ func (s *Store) apply(ctx context.Context, tx pgx.Tx, l Lease, src source) error
 	var finalMatch *v1.MatchRef
 	if tc.ContentSource.Valid && tc.ContentID.Valid {
 		finalMatch = &v1.MatchRef{Source: tc.ContentSource.String, ID: tc.ContentID.String}
+	}
+	if e = s.recordPublicationReviews(ctx, tx, l, afterSource, finalType, stepOutcomes, canEnrich && !finalExcluded); e != nil {
+		return e
+	}
+	if _, e = tx.Exec(ctx, `DELETE FROM processor_publication_pending WHERE info_hash=$1 AND source_revision<=$2`, l.Hash, afterSource.PublicationRevision); e != nil {
+		return e
 	}
 	return s.recordExecutionFeedback(ctx, tx, l, stepOutcomes, finalType, finalMatch, finalExcluded)
 }

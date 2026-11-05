@@ -13,7 +13,7 @@
 services:
 
   dh-waypoint:
-    image: ghcr.io/spencernorton/dh-waypoint:${DH_WAYPOINT_VERSION:-v5.8.7}
+    image: ghcr.io/spencernorton/dh-waypoint:${DH_WAYPOINT_VERSION:-v5.9.0}
     container_name: dh-waypoint
     restart: unless-stopped
     depends_on:
@@ -32,6 +32,10 @@ services:
       # Processing mode: full | basic | raw. basic stamps only a coarse
       # category in core and leaves real classification to plugins.
       PROCESSING_MODE: "${PROCESSING_MODE:-basic}"
+      SERVING_REQUIRED_PROCESSOR: "${SERVING_REQUIRED_PROCESSOR:-}"
+      SERVING_REQUIRED_PROCESSOR_ARTIFACT_DIGEST: "${SERVING_REQUIRED_PROCESSOR_ARTIFACT_DIGEST:-}"
+      SERVING_REQUIRED_PAYLOAD_VERIFIER_ARTIFACT_DIGEST: "${SERVING_REQUIRED_PAYLOAD_VERIFIER_ARTIFACT_DIGEST:-}"
+      PROCESSORS_PAYLOAD_VERIFIER_TOKEN: "${PROCESSORS_PAYLOAD_VERIFIER_TOKEN:-}"
       # Drop *.plugin.yml files into ./plugins to register plugins.
       PROCESSORS_PLUGINS_DIR: /plugins
       PROCESSORS_ADMIN_TOKEN: ${PROCESSORS_ADMIN_TOKEN:-}

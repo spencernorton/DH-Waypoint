@@ -119,6 +119,7 @@ CREATE TABLE content_collections_content (
 );
 CREATE TABLE torrent_hints (info_hash bytea PRIMARY KEY);
 CREATE TABLE torrent_tags (info_hash bytea, name text);
+CREATE TABLE processor_publication_holds (info_hash bytea PRIMARY KEY, held boolean NOT NULL);
 INSERT INTO metadata_sources VALUES ('synthetic', 'Synthetic metadata');
 INSERT INTO torrent_sources (key, name) VALUES ('synthetic', 'Synthetic source');
 INSERT INTO content (type, source, id, title, adult) VALUES

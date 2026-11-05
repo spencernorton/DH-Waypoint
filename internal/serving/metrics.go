@@ -16,6 +16,16 @@ func NewMetrics(cfg Config) *Metrics {
 		adult = 1
 	}
 	m.config.WithLabelValues("exclude_adult").Set(adult)
+	var review float64
+	if cfg.RequiredProcessor != "" {
+		review = 1
+	}
+	m.config.WithLabelValues("required_publication_review").Set(review)
+	var payload float64
+	if cfg.RequiredPayloadVerifierArtifactDigest != "" {
+		payload = 1
+	}
+	m.config.WithLabelValues("required_payload_evidence").Set(payload)
 	return m
 }
 

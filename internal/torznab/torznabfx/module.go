@@ -71,7 +71,7 @@ func New() fx.Option {
 			},
 			httpserver.NewMetrics,
 			fx.Annotate(
-				httpserver.New,
+				httpserver.NewWithReview,
 				fx.ResultTags(`group:"http_server_options"`),
 			),
 		),
