@@ -8,11 +8,12 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	mi "github.com/anacrolix/torrent/metainfo"
 	"path"
+	"slices"
 	"strings"
 	"time"
 
+	mi "github.com/anacrolix/torrent/metainfo"
 	"github.com/spencernorton/DH-Waypoint/internal/model"
 	"github.com/spencernorton/DH-Waypoint/internal/protocol"
 	"github.com/spencernorton/DH-Waypoint/internal/protocol/metainfo"
@@ -195,7 +196,7 @@ func validatePayloadEvidence(hash []byte, src source, kind string, evidence payl
 			return bad("file_tree_changed")
 		}
 	}
-	rawFiles := meta.Info.UpvertedV1Files()
+	rawFiles := slices.Collect(meta.Info.UpvertedV1Files())
 	total := int64(0)
 	for _, f := range rawFiles {
 		if strings.ContainsAny(f.Attr, "lx") || len(f.SymlinkPath) > 0 {

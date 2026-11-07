@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Upgrade the BitTorrent decoder and compression dependencies to resolve
+  upstream Go security advisories GO-2026-6894 and GO-2026-6865.
+
 ## 5.9.1 — 2026-11-05
 
 - Plan required publication approvals before catalogue exclusion checks. Broad

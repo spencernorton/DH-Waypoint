@@ -153,7 +153,7 @@ func parseInfoBytes(raw []byte) (ValidatedInfo, error) {
 		if _, ok := fields["file tree"]; ok {
 			return result, errors.New("file tree without meta version 2")
 		}
-		result.Files = info.UpvertedV1Files()
+		result.Files = slices.Collect(info.UpvertedV1Files())
 	}
 	result.Info = info
 	result.InfoBytes = bytes.Clone(raw)
@@ -175,7 +175,7 @@ func validateV1(info Info) error {
 	}
 	var total int64
 	seen := map[string]struct{}{}
-	for _, f := range info.UpvertedV1Files() {
+	for f := range info.UpvertedV1Files() {
 		if f.Length < 0 || f.Length > math.MaxInt64-total {
 			return errors.New("file length overflows total")
 		}
@@ -289,12 +289,11 @@ func parseFileTree(raw []byte) ([]mi.FileInfo, error) {
 }
 
 func validateHybrid(info Info, v2 []mi.FileInfo) error {
-	v1 := info.UpvertedV1Files()
 	var offset int64
 	j := 0
-	for i, f := range v1 {
+	for f := range info.UpvertedV1Files() {
 		if strings.Contains(f.Attr, "p") {
-			if i == 0 || f.Length <= 0 || f.Length != (info.PieceLength-offset%info.PieceLength)%info.PieceLength {
+			if j == 0 || f.Length <= 0 || f.Length != (info.PieceLength-offset%info.PieceLength)%info.PieceLength {
 				return errors.New("invalid hybrid padding alignment")
 			}
 			offset += f.Length
