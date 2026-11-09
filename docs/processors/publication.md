@@ -59,8 +59,10 @@ authenticated report is part of this trust boundary. Format samples and trusted
 availability constraints do not prove the identity of depicted content or the
 absence of malware in unsampled bytes. Unverifiable releases remain unavailable.
 
-Approved evidence expires after seven days; deferred work retries after five
-minutes. Source changes, artifact changes, negative policy and holds take effect
+Approved evidence expires after seven days; deferred work becomes due again
+after five minutes. A bounded walk re-queues due work only while the release's
+publication approval is current, so on a large queue a retry can take a few
+minutes longer. Source changes, artifact changes, negative policy and holds take effect
 immediately in consumer SQL. `X-Publication-Payload: piece-bound-media-format-v1`
 on the actual response confirms that this stronger gate is configured. Missing
 headers or upstream failures must fail closed in downstream applications.
