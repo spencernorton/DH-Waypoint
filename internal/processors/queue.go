@@ -331,8 +331,7 @@ func (s *Store) pruneOutbox(ctx context.Context) {
 	}
 	defer rollback(tx)
 	at, after := s.outboxCursor.get()
-	rows, e := tx.Query(ctx, `SELECT p.info_hash,p.enqueued_at,NOT EXISTS(SELECT 1 FROM torrent_contents c WHERE c.info_hash=p.info_hash)
- FROM processor_publication_pending p WHERE (p.enqueued_at,p.info_hash)>($1,$2) ORDER BY p.enqueued_at,p.info_hash LIMIT $3`, at, after, outboxPruneWindow)
+	rows, e := tx.Query(ctx, pruneWindowSQL, at, after, outboxPruneWindow)
 	if e != nil {
 		return
 	}
@@ -363,10 +362,10 @@ func (s *Store) pruneOutbox(ctx context.Context) {
 		// One statement would miss an insert committed between its snapshot
 		// and its lock. Rows held by another transaction are skipped.
 		var held [][]byte
-		if e = queryHashes(ctx, tx, &held, `SELECT info_hash FROM processor_publication_pending WHERE info_hash=ANY($1) FOR UPDATE SKIP LOCKED`, empty); e != nil {
+		if e = queryHashes(ctx, tx, &held, pruneLockSQL, empty); e != nil {
 			return
 		}
-		if _, e = tx.Exec(ctx, `DELETE FROM processor_publication_pending p WHERE p.info_hash=ANY($1) AND NOT EXISTS(SELECT 1 FROM torrent_contents c WHERE c.info_hash=p.info_hash)`, held); e != nil {
+		if _, e = tx.Exec(ctx, pruneDeleteSQL, held); e != nil {
 			return
 		}
 	}
@@ -375,7 +374,13 @@ func (s *Store) pruneOutbox(ctx context.Context) {
 	}
 }
 
-const outboxPruneWindow = 1024
+const (
+	outboxPruneWindow = 1024
+	pruneWindowSQL    = `SELECT p.info_hash,p.enqueued_at,NOT EXISTS(SELECT 1 FROM torrent_contents c WHERE c.info_hash=p.info_hash)
+ FROM processor_publication_pending p WHERE (p.enqueued_at,p.info_hash)>($1,$2) ORDER BY p.enqueued_at,p.info_hash LIMIT $3`
+	pruneLockSQL   = `SELECT info_hash FROM processor_publication_pending WHERE info_hash=ANY($1) FOR UPDATE SKIP LOCKED`
+	pruneDeleteSQL = `DELETE FROM processor_publication_pending p WHERE p.info_hash=ANY($1) AND NOT EXISTS(SELECT 1 FROM torrent_contents c WHERE c.info_hash=p.info_hash)`
+)
 
 func queryHashes(ctx context.Context, tx pgx.Tx, out *[][]byte, sql string, args ...any) error {
 	rows, e := tx.Query(ctx, sql, args...)
