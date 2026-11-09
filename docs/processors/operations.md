@@ -169,8 +169,11 @@ requirements. After optional settlement, inspect the job's results/outcome;
 completed scientific qualification or indexer delivery.
 
 Other request states are explicit: `core_only` means normal processing completed
-with no active optional plan; `held` denotes unavailable correlated evidence or
-current authority/cohort denial; `deferred` denotes incomplete or expired normal
+with no active optional plan (`no_active_processors`), or with no active step
+that applies to the torrent (`no_applicable_processors`); `held` denotes
+unavailable correlated evidence or source, a source or processor input over its
+size limit, or current authority or admission denial (outside the rollout
+cohort, or while draining); `deferred` denotes incomplete or expired normal
 work/admission; `failed` denotes a failed core job; `stale` denotes a changed
 source or pipeline; `canceled` records operator cancellation. Requests cannot
 bypass a rollout cohort. Changing registration/admission may stale the request;

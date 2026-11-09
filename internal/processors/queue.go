@@ -9,6 +9,7 @@ import (
 	"slices"
 	"sort"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -38,6 +39,7 @@ type Lease struct {
 // The control row serializes admission across replicas. With no enabled service
 // it performs no catalogue scan and makes no network request.
 func (s *Store) Scan(ctx context.Context) (int, error) {
+	s.pruneOutbox(ctx)
 	ctx, c := context.WithTimeout(ctx, 2*time.Second)
 	defer c()
 	tx, e := s.begin(ctx)
@@ -49,6 +51,7 @@ func (s *Store) Scan(ctx context.Context) (int, error) {
 	if e = tx.QueryRow(ctx, `SELECT scan_after FROM processor_control WHERE singleton FOR UPDATE`).Scan(&after); e != nil {
 		return 0, e
 	}
+	locked := time.Now()
 	if s.publication.RequiredProcessor != "" {
 		var configured string
 		if e = tx.QueryRow(ctx, `SELECT publication_policy FROM processor_control WHERE singleton`).Scan(&configured); e != nil {
@@ -117,6 +120,7 @@ func (s *Store) Scan(ctx context.Context) (int, error) {
 	if e = rows.Err(); e != nil {
 		return 0, e
 	}
+	requested := len(hashes)
 	// Source changes and newly persisted releases precede hash-order catch-up.
 	// Keep half a scan for backfill; explicit requests retain their own priority.
 	rows, e = tx.Query(ctx, `SELECT p.info_hash FROM processor_publication_pending p
@@ -141,8 +145,11 @@ func (s *Store) Scan(ctx context.Context) (int, error) {
 	if e = rows.Err(); e != nil {
 		return 0, e
 	}
-	rows, e = tx.Query(ctx, `SELECT t.info_hash FROM torrents t WHERE t.info_hash>$1 AND EXISTS(SELECT 1 FROM torrent_contents c WHERE c.info_hash=t.info_hash)
- AND NOT EXISTS(SELECT 1 FROM processor_reprocess_requests r WHERE r.info_hash=t.info_hash AND r.state='waiting_core')
+	changed := len(hashes)
+	// The repeated cursor bound keeps both probes on index ranges: without it
+	// the plan merge-joins from the start of the hash space.
+	rows, e = tx.Query(ctx, `SELECT t.info_hash FROM torrents t WHERE t.info_hash>$1 AND EXISTS(SELECT 1 FROM torrent_contents c WHERE c.info_hash=t.info_hash AND c.info_hash>$1)
+ AND NOT EXISTS(SELECT 1 FROM processor_reprocess_requests r WHERE r.info_hash=t.info_hash AND r.state='waiting_core' AND r.info_hash>$1)
  ORDER BY t.info_hash LIMIT $2`, after, s.cfg.ScanBatch-len(hashes))
 	if e != nil {
 		return 0, e
@@ -163,8 +170,24 @@ func (s *Store) Scan(ctx context.Context) (int, error) {
 	if e = rows.Err(); e != nil {
 		return 0, e
 	}
-	admitted := 0
-	for _, h := range hashes {
+	admitted, bounded := 0, false
+	for i := 0; i < len(hashes); i++ {
+		// Bound the hold, but process at least the first hash of each class
+		// (requests, source changes, catch-up) so every class advances. The
+		// cursor only moves past processed hashes.
+		if i != 0 && i != requested && i != changed && time.Since(locked) > s.scanHold {
+			bounded = true
+			if i < requested {
+				i = requested - 1
+				continue
+			}
+			if i < changed {
+				i = changed - 1
+				continue
+			}
+			break
+		}
+		h := hashes[i]
 		if !priority[string(h)] {
 			after = h
 		}
@@ -181,6 +204,14 @@ func (s *Store) Scan(ctx context.Context) (int, error) {
 				return 0, err
 			}
 			if _, err = tx.Exec(ctx, `UPDATE processor_reprocess_requests SET state='held',state_reason='source_too_large',updated_at=clock_timestamp() WHERE info_hash=$1 AND state='ready'`, h); err != nil {
+				return 0, err
+			}
+			continue
+		}
+		if errors.Is(err, pgx.ErrNoRows) {
+			// The torrent is gone. Hold its request, as settleReprocessing does for
+			// a waiting one, instead of failing every tick until the request expires.
+			if _, err = tx.Exec(ctx, `UPDATE processor_reprocess_requests SET state='held',state_reason='source_unavailable',updated_at=clock_timestamp() WHERE info_hash=$1 AND state='ready'`, h); err != nil {
 				return 0, err
 			}
 			continue
@@ -212,6 +243,15 @@ func (s *Store) Scan(ctx context.Context) (int, error) {
 		}
 		effectivePlan := planForSource(planForIdentity(plan, h), src)
 		if len(effectivePlan.Steps) == 0 {
+			if priority[string(h)] {
+				// No active step applies to this torrent. Settle it as core_only, as
+				// settleReprocessing does for a waiting one with no active plan: a
+				// request left ready would head its class every tick and, once the
+				// hold bound stops the class after its first hash, block the rest.
+				if _, err = tx.Exec(ctx, `UPDATE processor_reprocess_requests SET state='core_only',state_reason='no_applicable_processors',updated_at=clock_timestamp() WHERE info_hash=$1 AND state='ready'`, h); err != nil {
+					return 0, err
+				}
+			}
 			if _, err = tx.Exec(ctx, `DELETE FROM processor_publication_pending WHERE info_hash=$1 AND source_revision<=$2`, h, src.PublicationRevision); err != nil {
 				return 0, err
 			}
@@ -283,8 +323,109 @@ func (s *Store) Scan(ctx context.Context) (int, error) {
 	e = tx.Commit(ctx)
 	if e == nil {
 		s.metrics.admission.WithLabelValues("queued").Add(float64(admitted))
+		if bounded {
+			s.metrics.admission.WithLabelValues("bounded").Inc()
+		}
 	}
 	return admitted, e
+}
+
+// scanHoldBound is how long Scan keeps admitting hashes while it holds the
+// control row. Each hash can cost 10-25 ms on the already-current path.
+const scanHoldBound = 150 * time.Millisecond
+
+// pruneOutbox removes content-less rows from a bounded window of the
+// publication outbox before Scan takes the control row. Scan admits only
+// torrents with contents, and a later contents insert re-enrols the torrent
+// through its trigger, so these rows only slow Scan's held outbox query.
+// A failure skips the prune, never the Scan.
+func (s *Store) pruneOutbox(ctx context.Context) {
+	ctx, c := context.WithTimeout(ctx, 500*time.Millisecond)
+	defer c()
+	tx, e := s.begin(ctx)
+	if e != nil {
+		return
+	}
+	defer rollback(tx)
+	at, after := s.outboxCursor.get()
+	rows, e := tx.Query(ctx, pruneWindowSQL, at, after, outboxPruneWindow)
+	if e != nil {
+		return
+	}
+	var empty [][]byte
+	n := 0
+	for rows.Next() {
+		var contentless bool
+		if e = rows.Scan(&after, &at, &contentless); e != nil {
+			rows.Close()
+			return
+		}
+		n++
+		if contentless {
+			empty = append(empty, after)
+		}
+	}
+	rows.Close()
+	if rows.Err() != nil {
+		return
+	}
+	if n < outboxPruneWindow {
+		at, after = time.Time{}, nil
+	}
+	if len(empty) > 0 {
+		// Lock, then delete in a new statement. The delete's snapshot sees
+		// every contents insert committed before it; a later insert's trigger
+		// waits on this row lock and re-enrols the torrent once it is gone.
+		// One statement would miss an insert committed between its snapshot
+		// and its lock. Rows held by another transaction are skipped.
+		var held [][]byte
+		if e = queryHashes(ctx, tx, &held, pruneLockSQL, empty); e != nil {
+			return
+		}
+		if _, e = tx.Exec(ctx, pruneDeleteSQL, held); e != nil {
+			return
+		}
+	}
+	if tx.Commit(ctx) == nil {
+		s.outboxCursor.set(at, after)
+	}
+}
+
+const (
+	outboxPruneWindow = 1024
+	pruneWindowSQL    = `SELECT p.info_hash,p.enqueued_at,NOT EXISTS(SELECT 1 FROM torrent_contents c WHERE c.info_hash=p.info_hash)
+ FROM processor_publication_pending p WHERE (p.enqueued_at,p.info_hash)>($1,$2) ORDER BY p.enqueued_at,p.info_hash LIMIT $3`
+	pruneLockSQL   = `SELECT info_hash FROM processor_publication_pending WHERE info_hash=ANY($1) FOR UPDATE SKIP LOCKED`
+	pruneDeleteSQL = `DELETE FROM processor_publication_pending p WHERE p.info_hash=ANY($1) AND NOT EXISTS(SELECT 1 FROM torrent_contents c WHERE c.info_hash=p.info_hash)`
+)
+
+func queryHashes(ctx context.Context, tx pgx.Tx, out *[][]byte, sql string, args ...any) error {
+	rows, e := tx.Query(ctx, sql, args...)
+	if e != nil {
+		return e
+	}
+	*out, e = pgx.CollectRows(rows, pgx.RowTo[[]byte])
+	return e
+}
+
+// keyset is an in-memory resume point for a bounded walk over an
+// (timestamp, info_hash) index. The zero value starts from the beginning.
+type keyset struct {
+	mu   sync.Mutex
+	at   time.Time
+	hash []byte
+}
+
+func (k *keyset) get() (time.Time, []byte) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	return k.at, append([]byte{}, k.hash...)
+}
+
+func (k *keyset) set(at time.Time, hash []byte) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	k.at, k.hash = at, hash
 }
 
 func (s *Store) Claim(ctx context.Context) (*Lease, error) {

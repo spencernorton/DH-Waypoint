@@ -271,6 +271,8 @@ func (s *Store) settleReprocessing(ctx context.Context, tx pgx.Tx, plan Plan, dr
 			src, _, readErr := readSource(ctx, tx, x.hash, false)
 			if errors.Is(readErr, pgx.ErrNoRows) {
 				state, reason = "held", "source_unavailable"
+			} else if errors.Is(readErr, errSourceTooLarge) {
+				state, reason = "held", "source_too_large"
 			} else if readErr != nil {
 				return readErr
 			} else if !src.admitted() || !src.admittedByNames(s.names, x.hash) {

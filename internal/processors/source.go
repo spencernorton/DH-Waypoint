@@ -81,17 +81,27 @@ type contentFact struct {
 }
 
 func readSource(ctx context.Context, tx pgx.Tx, hash []byte, lock bool) (source, json.RawMessage, error) {
-	var out source
+	lockTimeout := ""
 	if lock {
+		lockTimeout = "2s"
+	}
+	return readSourceWait(ctx, tx, hash, lockTimeout)
+}
+
+// readSourceWait reads the source snapshot. A non-empty lockTimeout freezes
+// the hash first, waiting at most that long for each row lock.
+func readSourceWait(ctx context.Context, tx pgx.Tx, hash []byte, lockTimeout string) (source, json.RawMessage, error) {
+	var out source
+	if lockTimeout != "" {
 		// Freeze this hash only: the parent row lock also blocks new
 		// foreign-key children, and FOR SHARE locks freeze the existing
 		// authority and catalogue rows the snapshot reads, including rows
 		// keyed by the validated v2 alias. Writers for other hashes never
 		// wait on these locks. The short transaction has a deadline and no
 		// network I/O, so its wait is bounded whatever the caller's
-		// deadline; the rest of the transaction keeps the session's
-		// lock_timeout.
-		if _, e := tx.Exec(ctx, `SET LOCAL lock_timeout='2s'`); e != nil {
+		// deadline; the rest of the transaction runs with the connection's
+		// default lock_timeout.
+		if _, e := tx.Exec(ctx, `SELECT set_config('lock_timeout',$1,true)`, lockTimeout); e != nil {
 			return out, nil, e
 		}
 		var v2 []byte
