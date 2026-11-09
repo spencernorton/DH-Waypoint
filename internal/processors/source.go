@@ -99,8 +99,8 @@ func readSourceWait(ctx context.Context, tx pgx.Tx, hash []byte, lockTimeout str
 		// keyed by the validated v2 alias. Writers for other hashes never
 		// wait on these locks. The short transaction has a deadline and no
 		// network I/O, so its wait is bounded whatever the caller's
-		// deadline; the rest of the transaction keeps the session's
-		// lock_timeout.
+		// deadline; the rest of the transaction runs with the connection's
+		// default lock_timeout.
 		if _, e := tx.Exec(ctx, `SELECT set_config('lock_timeout',$1,true)`, lockTimeout); e != nil {
 			return out, nil, e
 		}

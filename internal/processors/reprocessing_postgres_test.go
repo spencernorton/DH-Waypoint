@@ -262,3 +262,25 @@ func TestPostgresReprocessingWorksWithoutPluginsAndCannotBypassCapacity(t *testi
 	_, err = fresh.Reprocess(testContext, origin, w)
 	require.NoError(t, err)
 }
+
+// A waiting request whose source grew past the snapshot limit after its core
+// receipt is held, as a ready one is, instead of failing every Scan tick until
+// the request expires.
+func TestPostgresReprocessingHoldsWaitingRequestWhoseSourceIsTooLarge(t *testing.T) {
+	s, p, _ := fixture(t)
+	origin, h := reprocessOrigin(t, s, p)
+	w := reprocessWrite(t, s, origin, "b")
+	r, err := s.Reprocess(testContext, origin, w)
+	require.NoError(t, err)
+	recordReprocessCore(t, s, p, h, w.RequestID, "completed")
+	_, err = p.Exec(testContext, `UPDATE queue_jobs SET status='processed',ran_at=clock_timestamp() WHERE id=$1`, r.CoreJobID)
+	require.NoError(t, err)
+	_, err = p.Exec(testContext, `INSERT INTO torrent_files(info_hash,"index",path,size,created_at,updated_at)
+ SELECT $1,i,repeat('x',1100)||i,1,now(),now() FROM generate_series(1,257) i`, h)
+	require.NoError(t, err)
+	_, err = s.Scan(testContext)
+	require.NoError(t, err)
+	r, err = s.Reprocessing(testContext, w.RequestID)
+	require.NoError(t, err)
+	require.Equal(t, []string{"held", "source_too_large"}, []string{r.State, r.StateReason})
+}

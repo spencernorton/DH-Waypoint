@@ -184,9 +184,11 @@ func (lwHook) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {
 // lwTracedStore is a second store on s's schema and configuration whose
 // connections run hook first, so a test can stop or cancel a lease at an
 // exact statement.
-func lwTracedStore(t *testing.T, s *Store, p *pgxpool.Pool, hook lwHook) *Store {
+func lwTracedStore(t *testing.T, s *Store, hook lwHook) *Store {
 	t.Helper()
-	cfg := p.Config()
+	sp, err := s.pool.Get()
+	require.NoError(t, err)
+	cfg := sp.Config()
 	cfg.ConnConfig.Tracer = hook
 	pool, err := pgxpool.NewWithConfig(testContext, cfg)
 	require.NoError(t, err)
@@ -443,7 +445,7 @@ func TestLeaseDropRaceWithFinishReapprovalAtSameRevision(t *testing.T) {
 	release := sync.OnceFunc(func() { close(resume) })
 	defer release()
 	var once sync.Once
-	leaser := lwTracedStore(t, s, p, func(conn *pgx.Conn, sql string) {
+	leaser := lwTracedStore(t, s, func(conn *pgx.Conn, sql string) {
 		if strings.HasPrefix(sql, "DELETE FROM processor_payload_pending WHERE info_hash IN (") {
 			once.Do(func() { paused <- conn.PgConn().PID(); <-resume })
 		}
@@ -518,7 +520,7 @@ func TestLeaseSourceLockCancelFailsTheCall(t *testing.T) {
 	ctx, cancel := context.WithCancel(testContext)
 	defer cancel()
 	// The caller goes away as the lease locks its first candidate's torrent.
-	leaser := lwTracedStore(t, s, p, func(_ *pgx.Conn, sql string) {
+	leaser := lwTracedStore(t, s, func(_ *pgx.Conn, sql string) {
 		if strings.HasPrefix(sql, "SELECT info_hash_v2 FROM torrents WHERE info_hash=$1 FOR UPDATE") {
 			cancel()
 		}
@@ -618,8 +620,9 @@ func TestLeaseSourceLockTriesTheFourthCandidate(t *testing.T) {
 }
 
 // After a skip (ROLLBACK TO SAVEPOINT) and after a success (RELEASE), the
-// lease transaction is back on the session's lock_timeout, the locks the
-// successful read took are still held, and nothing leaks into the session.
+// lease transaction is back on the connection's default lock_timeout, the
+// locks the successful read took are still held, and nothing leaks into the
+// session.
 func TestLeaseSourceLockRestoresLockTimeout(t *testing.T) {
 	s, p, _ := fixture(t)
 	for _, session := range []string{"", "5s"} {
@@ -627,8 +630,8 @@ func TestLeaseSourceLockRestoresLockTimeout(t *testing.T) {
 			want, base := "0", byte(0x10)
 			sp, err := s.pool.Get()
 			require.NoError(t, err)
-			cfg := sp.Config().Copy() // the Store's own protocol and settings
-			cfg.MaxConns = 1 // the check after commit sees the lease's own connection
+			cfg := sp.Config() // a copy: the Store's own protocol and settings
+			cfg.MaxConns = 1   // the check after commit sees the lease's own connection
 			if session != "" {
 				cfg.ConnConfig.RuntimeParams["lock_timeout"] = session
 				want, base = session, 0x20

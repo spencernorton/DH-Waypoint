@@ -25,6 +25,9 @@
 - A ready reprocess request whose torrent was deleted is now held
   (`source_unavailable`), as a waiting one already was. It used to fail every
   scan until the request expired after an hour.
+- A waiting reprocess request whose source has grown past the 256 KiB snapshot
+  limit is now held (`source_too_large`), as a ready one already was. It too
+  used to fail every scan until the request expired.
 - Upgrade the BitTorrent decoder and compression dependencies to resolve
   upstream Go security advisories GO-2026-6894 and GO-2026-6865.
 
