@@ -556,3 +556,103 @@ func TestLeaseSourceLockOtherServerErrorsFailTheCall(t *testing.T) {
 		})
 	}
 }
+
+func TestLeaseWindowLeasesInEnqueueOrderWithinPriority(t *testing.T) {
+	s, p := lwSetup(t)
+	rows := lwRows(t, s, p, 1, 3, 1)
+	order := [][]byte{rows[2], rows[0], rows[1]}
+	lwQueue(t, s, p, 1, 10, order...)
+	for i, want := range order {
+		lease, err := s.leasePayload(testContext)
+		require.NoError(t, err)
+		require.Equal(t, hex.EncodeToString(want), lease.InfoHash, "lease %d", i)
+	}
+}
+
+// The second priority's walk starts from its own beginning, not after the
+// first priority's last visited row.
+func TestLeaseWindowRestartsTheWalkForEachPriority(t *testing.T) {
+	s, p := lwSetup(t)
+	low := lwRows(t, s, p, 1, 1, 0)[0]
+	busy := lwRows(t, s, p, 100, 1, 1)[0] // enqueued after low
+	lwWork(t, p, busy, 0, s.publication.RequiredPayloadVerifierArtifactDigest, "1 minute", "1 minute")
+	lease, err := s.leasePayload(testContext) // payload_leases=0: priority 1 first
+	require.NoError(t, err)
+	require.Equal(t, hex.EncodeToString(low), lease.InfoHash)
+}
+
+// A fifth eligible row behind four locked ones waits for the next call.
+func TestLeaseSourceLockTriesAtMostFourCandidates(t *testing.T) {
+	s, p := lwSetup(t)
+	rows := lwRows(t, s, p, 1, payloadLeaseAttempts+1, 1)
+	holder := lwHold(t, p)
+	for _, h := range rows[:payloadLeaseAttempts] {
+		lwLock(t, holder, lwLocks[0].sql, h)
+	}
+	_, _, err := lwLease(s)
+	require.ErrorIs(t, err, pgx.ErrNoRows)
+	leases, work := lwWritten(t, p)
+	require.Zero(t, leases)
+	require.Zero(t, work)
+}
+
+// After a skip (ROLLBACK TO SAVEPOINT) and after a success (RELEASE), the
+// lease transaction is back on the session's lock_timeout, and the locks the
+// successful read took are still held.
+func TestLeaseSourceLockRestoresLockTimeout(t *testing.T) {
+	s, p, _ := fixture(t)
+	for _, session := range []string{"", "5s"} {
+		t.Run("session="+session, func(t *testing.T) {
+			store, want, base := s, "0", byte(0x10)
+			if session != "" {
+				cfg := p.Config().Copy()
+				cfg.ConnConfig.RuntimeParams["lock_timeout"] = session
+				pool, err := pgxpool.NewWithConfig(testContext, cfg)
+				require.NoError(t, err)
+				t.Cleanup(pool.Close)
+				store, err = NewStore(s.cfg, lazy.New(func() (*pgxpool.Pool, error) { return pool, nil }), s.policy)
+				require.NoError(t, err)
+				want, base = session, 0x20
+			}
+			a := seedTorrent(t, p, base+1, "movie")
+			b := seedTorrent(t, p, base+2, "movie")
+			show := func(tx pgx.Tx) string {
+				var v string
+				require.NoError(t, tx.QueryRow(testContext, `SHOW lock_timeout`).Scan(&v))
+				return v
+			}
+			holder := lwHold(t, p)
+			lwLock(t, holder, `SELECT 1 FROM torrents WHERE info_hash=$1 FOR UPDATE`, a)
+
+			tx, err := store.begin(testContext)
+			require.NoError(t, err)
+			defer rollback(tx)
+			require.Equal(t, want, show(tx))
+			start := time.Now()
+			_, ok, err := leaseSource(testContext, tx, a)
+			require.NoError(t, err)
+			require.False(t, ok, "a locked candidate is skipped")
+			require.Less(t, time.Since(start), lwPrompt)
+			require.Equal(t, want, show(tx), "ROLLBACK TO SAVEPOINT restores lock_timeout")
+			_, ok, err = leaseSource(testContext, tx, b)
+			require.NoError(t, err)
+			require.True(t, ok)
+			require.Equal(t, want, show(tx), "the success path restores it too")
+			// A later statement may wait on a's row lock past 10 ms and still succeed.
+			released := make(chan struct{})
+			go func() { defer close(released); time.Sleep(300 * time.Millisecond); rollback(holder) }()
+			start = time.Now()
+			_, err = tx.Exec(testContext, `SELECT 1 FROM torrents WHERE info_hash=$1 FOR UPDATE`, a)
+			<-released
+			require.NoError(t, err)
+			require.Greater(t, time.Since(start), 200*time.Millisecond)
+			// b's locks survived the RELEASE.
+			other := lwHold(t, p)
+			_, err = other.Exec(testContext, `SET LOCAL lock_timeout='50ms'`)
+			require.NoError(t, err)
+			_, err = other.Exec(testContext, `SELECT 1 FROM torrents WHERE info_hash=$1 FOR UPDATE`, b)
+			require.ErrorContains(t, err, "55P03")
+			require.NoError(t, tx.Commit(testContext))
+		})
+	}
+}

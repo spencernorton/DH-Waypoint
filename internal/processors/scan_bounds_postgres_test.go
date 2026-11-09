@@ -2,6 +2,7 @@ package processors
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/json"
@@ -107,6 +108,19 @@ func sbSession(p *pgxpool.Pool, sql string, args ...any) (<-chan int32, <-chan e
 		}()
 	}()
 	return pid, done
+}
+
+// sbPid returns the session's backend pid, or fails if the session ended
+// without sending one.
+func sbPid(t *testing.T, pid <-chan int32, done <-chan error) int32 {
+	t.Helper()
+	select {
+	case id := <-pid:
+		return id
+	case err := <-done:
+		require.FailNow(t, "the session ended before it reported its pid", "%v", err)
+		return 0
+	}
 }
 
 // sbSlowDeletes makes each DELETE statement on table sleep first. Statement
@@ -350,7 +364,7 @@ func TestSbPruneRacingContentsInsertKeepsEnrolment(t *testing.T) {
 	require.NoError(t, queryHashes(testContext, tx, &held, pruneLockSQL, empty))
 	require.Equal(t, empty, held)
 	pid, inserted := sbSession(p, sbAddContents, y)
-	sbWait(t, p, `SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE pid=$1 AND wait_event_type='Lock')`, <-pid)
+	sbWait(t, p, `SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE pid=$1 AND wait_event_type='Lock')`, sbPid(t, pid, inserted))
 	tag, e = tx.Exec(testContext, pruneDeleteSQL, held)
 	require.NoError(t, e)
 	require.EqualValues(t, 1, tag.RowsAffected(), "the uncommitted contents are invisible to the delete")
@@ -594,4 +608,65 @@ func TestSbScanBoundCursorNeverPassesUnprocessedHash(t *testing.T) {
 			require.Equal(t, bounded+1, sbAdmission(s, "bounded"), "the bound, not the batch, ended the tick")
 		}
 	}
+}
+
+// The prune commits on its own before Scan waits for the control row, so it
+// still runs while another session holds that row.
+func TestSbPruneRunsBeforeScanTakesControlRow(t *testing.T) {
+	s, p, _ := fixture(t)
+	bare := sbBare(t, p, 0x81)
+	holder := lwHold(t, p)
+	_, e := holder.Exec(testContext, `SELECT 1 FROM processor_control WHERE singleton FOR UPDATE`)
+	require.NoError(t, e)
+	ctx, cancel := context.WithTimeout(testContext, 300*time.Millisecond)
+	defer cancel()
+	_, e = s.Scan(ctx)
+	require.Error(t, e, "Scan cannot take the held control row")
+	_, ok := sbOutbox(t, p, bare)
+	require.False(t, ok, "the prune ran before Scan waited for the control row")
+}
+
+// A ready request whose source leaves no applicable step (here a canonical
+// media id with no Policy-capable processor) settles as core_only, as it does
+// with no active plan. Left ready, it would head the request class on every
+// tick, and the bound would stop the class after it.
+func TestSbScanBoundSettlesRequestsWithNoApplicablePlan(t *testing.T) {
+	s, p, _ := fixture(t)
+	s.scanHold = scanHoldBound
+	sbClassifier(t, s)
+	var requests [][]byte
+	for n := byte(0x01); n <= 0x04; n++ {
+		requests = append(requests, seedTorrent(t, p, n, "movie"))
+	}
+	_, e := p.Exec(testContext, `INSERT INTO torrent_canonical_labels(info_hash,media_type,media_id,resolved_source,resolved_strength,resolved_at) VALUES($1,'movie','tmdb:990001','synthetic',60,now())`, requests[0])
+	require.NoError(t, e)
+	sbReady(t, s, p, requests...)
+	_, e = p.Exec(testContext, `UPDATE processor_reprocess_requests SET created_at=created_at-interval '10 minutes' WHERE info_hash=$1`, requests[0])
+	require.NoError(t, e)
+	_, e = p.Exec(testContext, `DELETE FROM processor_publication_pending`)
+	require.NoError(t, e)
+	_, e = p.Exec(testContext, `UPDATE processor_control SET scan_after=$1`, []byte{0xff})
+	require.NoError(t, e)
+	// Every tick passes the bound before its second hash.
+	sbSlowDeletes(t, p, "processor_jobs", 0.2)
+	states := func() []string {
+		var out []string
+		require.NoError(t, p.QueryRow(testContext, `SELECT array_agg(state ORDER BY created_at) FROM processor_reprocess_requests`).Scan(&out))
+		return out
+	}
+
+	n, e := s.Scan(testContext)
+	require.NoError(t, e)
+	require.Zero(t, n)
+	require.Equal(t, []string{"core_only", "ready", "ready", "ready"}, states(), "the head settles; the bound stops the rest")
+	var reason string
+	require.NoError(t, p.QueryRow(testContext, `SELECT state_reason FROM processor_reprocess_requests WHERE info_hash=$1`, requests[0]).Scan(&reason))
+	require.Equal(t, "no_active_processors", reason)
+	for tick := 2; tick <= 4; tick++ {
+		n, e = s.Scan(testContext)
+		require.NoError(t, e)
+		require.Equal(t, 1, n, "tick %d queues the next request", tick)
+	}
+	require.Equal(t, []string{"core_only", "queued", "queued", "queued"}, states())
+	require.Equal(t, 3.0, sbAdmission(s, "bounded"), "ticks with more than one request were bounded")
 }

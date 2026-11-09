@@ -17,6 +17,10 @@
   its publication review is repeated; it could not lease before either. The
   priority alternation, lease and result contracts, and the schema are
   unchanged.
+- A ready reprocess request whose torrent has no applicable processor step now
+  settles as `core_only` when the scan reaches it, as it already did when no
+  processor was active. It used to stay ready until it expired after an hour,
+  heading the request queue on every scan.
 - Upgrade the BitTorrent decoder and compression dependencies to resolve
   upstream Go security advisories GO-2026-6894 and GO-2026-6865.
 
