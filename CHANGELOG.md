@@ -19,8 +19,9 @@
   unchanged.
 - A ready reprocess request whose torrent has no applicable processor step now
   settles as `core_only` (`no_applicable_processors`) when the scan reaches it,
-  as it already did when no processor was active. It used to stay ready until
-  it expired after an hour, heading the request queue on every scan.
+  as a waiting one already did when no processor was active. It used to stay
+  ready until it expired after an hour, heading the request queue on every
+  scan.
 - A ready reprocess request whose torrent was deleted is now held
   (`source_unavailable`), as a waiting one already was. It used to fail every
   scan until the request expired after an hour.

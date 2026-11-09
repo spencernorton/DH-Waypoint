@@ -603,6 +603,20 @@ func TestLeaseSourceLockTriesAtMostFourCandidates(t *testing.T) {
 	require.Equal(t, hex.EncodeToString(rows[payloadLeaseAttempts]), lease.InfoHash)
 }
 
+// With the first three eligible rows locked, the call still tries the fourth
+// and leases it: the cap holds from below as well as above.
+func TestLeaseSourceLockTriesTheFourthCandidate(t *testing.T) {
+	s, p := lwSetup(t)
+	rows := lwRows(t, s, p, 1, payloadLeaseAttempts, 1)
+	holder := lwHold(t, p)
+	for _, h := range rows[:payloadLeaseAttempts-1] {
+		lwLock(t, holder, lwLocks[0].sql, h)
+	}
+	lease, _, err := lwLease(s)
+	require.NoError(t, err)
+	require.Equal(t, hex.EncodeToString(rows[payloadLeaseAttempts-1]), lease.InfoHash)
+}
+
 // After a skip (ROLLBACK TO SAVEPOINT) and after a success (RELEASE), the
 // lease transaction is back on the session's lock_timeout, the locks the
 // successful read took are still held, and nothing leaks into the session.
@@ -611,7 +625,9 @@ func TestLeaseSourceLockRestoresLockTimeout(t *testing.T) {
 	for _, session := range []string{"", "5s"} {
 		t.Run("session="+session, func(t *testing.T) {
 			want, base := "0", byte(0x10)
-			cfg := p.Config().Copy()
+			sp, err := s.pool.Get()
+			require.NoError(t, err)
+			cfg := sp.Config().Copy() // the Store's own protocol and settings
 			cfg.MaxConns = 1 // the check after commit sees the lease's own connection
 			if session != "" {
 				cfg.ConnConfig.RuntimeParams["lock_timeout"] = session

@@ -627,8 +627,8 @@ func TestSbPruneRunsBeforeScanTakesControlRow(t *testing.T) {
 }
 
 // A ready request whose source leaves no applicable step (here a canonical
-// media id with no Policy-capable processor) settles as core_only, as it does
-// with no active plan. Left ready, it would head the request class on every
+// media id with no Policy-capable processor) settles as core_only, as a waiting
+// one does with no active plan. Left ready, it would head the request class on every
 // tick, and the bound would stop the class after it.
 func TestSbScanBoundSettlesRequestsWithNoApplicablePlan(t *testing.T) {
 	s, p, _ := fixture(t)

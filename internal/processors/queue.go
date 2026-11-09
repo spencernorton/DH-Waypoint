@@ -245,9 +245,9 @@ func (s *Store) Scan(ctx context.Context) (int, error) {
 		if len(effectivePlan.Steps) == 0 {
 			if priority[string(h)] {
 				// No active step applies to this torrent. Settle it as core_only, as
-				// settleReprocessing does with no active plan: a request left ready
-				// would head its class every tick and, once the hold bound stops the
-				// class after its first hash, block the rest.
+				// settleReprocessing does for a waiting one with no active plan: a
+				// request left ready would head its class every tick and, once the
+				// hold bound stops the class after its first hash, block the rest.
 				if _, err = tx.Exec(ctx, `UPDATE processor_reprocess_requests SET state='core_only',state_reason='no_applicable_processors',updated_at=clock_timestamp() WHERE info_hash=$1 AND state='ready'`, h); err != nil {
 					return 0, err
 				}
