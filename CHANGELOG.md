@@ -5,12 +5,17 @@
 ## 5.9.3 — 2026-11-09
 
 - Upgrade `golang.org/x/net` from 0.60.0 to 0.62.0 for GO-2026-6860
-  (CVE-2026-78661) and GO-2026-6866 (CVE-2026-97045) in its HTML parser.
+  (CVE-2026-78661) and GO-2026-6866 (CVE-2026-97045) in its `html` package.
   govulncheck finds neither reachable from DH-Waypoint, but scanners that
   match module versions report 5.9.2's binary as carrying a fixable HIGH
   vulnerability. The upgrade brings the matching `golang.org/x` crypto, sync,
   sys, term, text, tools and telemetry releases. There is no behaviour change
   from 5.9.2.
+- Known gap: the runtime image's Alpine base still carries `musl` and
+  `musl-utils` 1.2.5-r23 (CVE-2026-107891, fixed in 1.2.5-r24) and `zlib`
+  1.3.2-r0 (CVE-2026-85091, fixed in 1.3.2-r1). The static `dh-waypoint`
+  binary links neither; they serve the image's shell, `curl` and `apk`. The
+  base image refresh follows in 5.10.0.
 
 ## 5.9.2 — 2026-11-09
 
