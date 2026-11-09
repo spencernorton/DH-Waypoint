@@ -204,7 +204,9 @@ func lwBlockedBy(t *testing.T, p *pgxpool.Pool, pid uint32, done <-chan error) s
 	deadline := time.Now().Add(10 * time.Second)
 	for {
 		var query string
-		err := p.QueryRow(testContext, `SELECT query FROM pg_stat_activity WHERE $1::int=ANY(pg_blocking_pids(pid)) LIMIT 1`, int32(pid)).Scan(&query)
+		// Only control-row statements: other test schemas' migrations in the
+		// same database (CREATE INDEX CONCURRENTLY) can also wait on the lease.
+		err := p.QueryRow(testContext, `SELECT query FROM pg_stat_activity WHERE $1::int=ANY(pg_blocking_pids(pid)) AND query LIKE '%processor_control%' LIMIT 1`, int32(pid)).Scan(&query)
 		if err == nil {
 			return query
 		}
