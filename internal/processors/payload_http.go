@@ -12,6 +12,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/spencernorton/DH-Waypoint/internal/protocol"
 	"github.com/spencernorton/DH-Waypoint/internal/serving"
 )
@@ -115,70 +116,64 @@ func (s *Store) leasePayload(ctx context.Context) (payloadLease, error) {
 	if err = tx.QueryRow(ctx, `SELECT payload_leases FROM processor_control WHERE singleton FOR UPDATE`).Scan(&admissions); err != nil {
 		return out, err
 	}
-	// Expiry uses an indexed bounded refill. New model approvals enter this
-	// outbox in their application transaction; browsing never schedules probes.
-	_, err = tx.Exec(ctx, `INSERT INTO processor_payload_pending(info_hash,source_revision,priority)
- SELECT proof.info_hash,proof.source_revision,CASE WHEN proof.approved OR t.created_at>=CURRENT_TIMESTAMP-interval '24 hours' THEN 1 ELSE 0 END
- FROM processor_payload_reviews proof JOIN torrents t ON t.info_hash=proof.info_hash
- JOIN processor_publication_sources source ON source.info_hash=proof.info_hash AND source.revision=proof.source_revision
- WHERE proof.expires_at<=CURRENT_TIMESTAMP AND NOT EXISTS(SELECT 1 FROM processor_payload_pending p WHERE p.info_hash=proof.info_hash)
- ORDER BY proof.expires_at,proof.info_hash LIMIT 32 ON CONFLICT DO NOTHING`)
-	if err != nil {
+	// Drops and the refill trust the registry to agree with the configured
+	// artifact. Every writer of these registry fields holds the control row,
+	// so this holds for the whole call. Without it no row could lease anyway.
+	var current bool
+	if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM processor_registry WHERE id=$1 AND state='active' AND mode='apply' AND manifest->'processor'->>'artifact_digest'=$2)`, s.publication.RequiredProcessor, s.publication.RequiredProcessorArtifactDigest).Scan(&current); err != nil {
 		return out, err
 	}
-	var hash []byte
-	err = tx.QueryRow(ctx, `SELECT review.info_hash,review.source_revision
- FROM processor_payload_pending pending
- JOIN processor_publication_reviews review ON review.info_hash=pending.info_hash AND review.source_revision=pending.source_revision
- JOIN processor_publication_sources source ON source.info_hash=review.info_hash AND source.revision=review.source_revision
- JOIN processor_registry registry ON registry.id=review.processor_id
- LEFT JOIN processor_payload_work work ON work.info_hash=review.info_hash
- WHERE review.processor_id=$1 AND review.approved AND registry.state='active' AND registry.mode='apply'
- AND review.policy_contract=$5
- AND registry.execution_generation=review.execution_generation AND registry.manifest->'processor'=review.processor_identity
- AND review.processor_identity->>'artifact_digest'=$2
- AND NOT EXISTS(SELECT 1 FROM processor_payload_reviews proof WHERE proof.info_hash=review.info_hash AND proof.source_revision=review.source_revision AND proof.verifier_artifact=$3 AND proof.policy=$4 AND proof.approved AND proof.expires_at>CURRENT_TIMESTAMP)
- AND NOT EXISTS(SELECT 1 FROM processor_publication_holds h WHERE h.info_hash=review.info_hash AND h.held)
- AND NOT EXISTS(SELECT 1 FROM processor_exclusions h WHERE h.info_hash=review.info_hash)
- AND (work.info_hash IS NULL OR work.source_revision<>review.source_revision OR work.verifier_artifact<>$3 OR (work.lease_until<CURRENT_TIMESTAMP AND work.available_at<=CURRENT_TIMESTAMP))
- ORDER BY CASE WHEN $6 THEN pending.priority ELSE -pending.priority END DESC,pending.enqueued_at,review.info_hash LIMIT 1`, s.publication.RequiredProcessor, s.publication.RequiredProcessorArtifactDigest, out.VerifierArtifact, PayloadEvidenceContract, serving.PublicationReviewPolicy, admissions%4 != 3).Scan(&hash, &out.SourceRevision)
-	if errors.Is(err, pgx.ErrNoRows) {
-		if e := tx.Commit(ctx); e != nil {
-			return out, e
-		}
-		return out, err
-	}
-	if err != nil {
-		return out, err
-	}
-	src, _, err := readSource(ctx, tx, hash, true)
-	if err != nil {
-		return out, err
-	}
-	if src.PublicationRevision != out.SourceRevision || !src.admitted() || !src.admittedByNames(s.names, hash) {
-		// A changed name policy or protected source cannot permanently block
-		// the head of this outbox. A future source/review change enrolls it again.
-		if _, err = tx.Exec(ctx, `DELETE FROM processor_payload_pending WHERE info_hash=$1 AND source_revision=$2`, hash, out.SourceRevision); err != nil {
-			return out, err
-		}
-		if err = tx.Commit(ctx); err != nil {
-			return out, err
-		}
+	if !current {
 		return out, pgx.ErrNoRows
 	}
-	var alreadyValid bool
-	if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM processor_payload_reviews WHERE info_hash=$1 AND source_revision=$2 AND verifier_artifact=$3 AND policy=$4 AND approved AND expires_at>clock_timestamp())`, hash, out.SourceRevision, out.VerifierArtifact, PayloadEvidenceContract).Scan(&alreadyValid); err != nil {
+	// New model approvals enter this outbox in their application transaction;
+	// browsing never schedules probes.
+	if err = s.refillPayload(ctx, tx); err != nil {
 		return out, err
 	}
-	if alreadyValid {
-		if _, err = tx.Exec(ctx, `DELETE FROM processor_payload_pending WHERE info_hash=$1 AND source_revision=$2`, hash, out.SourceRevision); err != nil {
-			return out, err
-		}
-		if err = tx.Commit(ctx); err != nil {
-			return out, err
-		}
-		return out, pgx.ErrNoRows
+	candidates, err := s.payloadCandidates(ctx, tx, admissions%4 != 3)
+	if err != nil {
+		return out, err
 	}
+	for _, c := range candidates {
+		var src source
+		var ok bool
+		if src, ok, err = leaseSource(ctx, tx, c.hash); err != nil {
+			return out, err
+		}
+		if !ok {
+			continue
+		}
+		hash := c.hash
+		out.SourceRevision = c.revision
+		if src.PublicationRevision != out.SourceRevision || !src.admitted() || !src.admittedByNames(s.names, hash) {
+			// A changed name policy or protected source cannot permanently block
+			// the head of this outbox. A future source/review change enrolls it again.
+			if _, err = tx.Exec(ctx, `DELETE FROM processor_payload_pending WHERE info_hash=$1 AND source_revision=$2`, hash, out.SourceRevision); err != nil {
+				return out, err
+			}
+			continue
+		}
+		var alreadyValid bool
+		if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM processor_payload_reviews WHERE info_hash=$1 AND source_revision=$2 AND verifier_artifact=$3 AND policy=$4 AND approved AND expires_at>clock_timestamp())`, hash, out.SourceRevision, out.VerifierArtifact, PayloadEvidenceContract).Scan(&alreadyValid); err != nil {
+			return out, err
+		}
+		if alreadyValid {
+			if _, err = tx.Exec(ctx, `DELETE FROM processor_payload_pending WHERE info_hash=$1 AND source_revision=$2`, hash, out.SourceRevision); err != nil {
+				return out, err
+			}
+			continue
+		}
+		return s.issuePayloadLease(ctx, tx, out, hash, src)
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return out, err
+	}
+	return out, pgx.ErrNoRows
+}
+
+func (s *Store) issuePayloadLease(ctx context.Context, tx pgx.Tx, out payloadLease, hash []byte, src source) (payloadLease, error) {
+	var err error
 	var content struct {
 		Type string `json:"content_type"`
 	}
@@ -212,6 +207,174 @@ func (s *Store) leasePayload(ctx context.Context) (payloadLease, error) {
 		return out, err
 	}
 	return out, tx.Commit(ctx)
+}
+
+// Lease reads may not wait on row locks while the control row is held.
+const leaseLockTimeout = "10ms"
+
+// leaseSource reads and locks a candidate's source inside a savepoint. ok is
+// false when a lock was not available within leaseLockTimeout or the torrent
+// is gone; the savepoint rollback releases what it had locked. Cancels and
+// deadlocks still fail the call.
+func leaseSource(ctx context.Context, tx pgx.Tx, hash []byte) (source, bool, error) {
+	sp, err := tx.Begin(ctx)
+	if err != nil {
+		return source{}, false, err
+	}
+	src, _, err := readSourceWait(ctx, sp, hash, leaseLockTimeout)
+	var pgErr *pgconn.PgError
+	if errors.Is(err, pgx.ErrNoRows) || (errors.As(err, &pgErr) && pgErr.Code == "55P03") {
+		return src, false, sp.Rollback(ctx)
+	}
+	if err != nil {
+		return src, false, err
+	}
+	return src, true, sp.Commit(ctx)
+}
+
+type payloadCandidate struct {
+	hash     []byte
+	revision int64
+}
+
+const (
+	payloadWalkBudget     = 512
+	payloadLeaseAttempts  = 4
+	payloadRefillWindow   = 1024
+	payloadRefillRequeues = 32
+)
+
+// payloadClassify labels a keyset window of one outbox priority. A row is
+// eligible under the historical lease predicate, busy when only its work row
+// (leased, or not yet available) holds it back, and dropped otherwise. The
+// review join pins the one row the predicate may use; COALESCE makes the
+// labels total over missing rows.
+const payloadClassify = `WITH w AS MATERIALIZED (
+ SELECT info_hash,source_revision,enqueued_at FROM processor_payload_pending
+ WHERE priority=$1 AND (enqueued_at,info_hash)>($2,$3) ORDER BY enqueued_at,info_hash LIMIT $4)
+SELECT w.info_hash,w.source_revision,w.enqueued_at,CASE
+ WHEN NOT COALESCE(review.approved AND source.info_hash IS NOT NULL AND registry.state='active' AND registry.mode='apply'
+  AND review.policy_contract=$9 AND registry.execution_generation=review.execution_generation
+  AND registry.manifest->'processor'=review.processor_identity AND review.processor_identity->>'artifact_digest'=$6
+  AND NOT EXISTS(SELECT 1 FROM processor_payload_reviews proof WHERE proof.info_hash=w.info_hash AND proof.source_revision=w.source_revision AND proof.verifier_artifact=$7 AND proof.policy=$8 AND proof.approved AND proof.expires_at>CURRENT_TIMESTAMP)
+  AND NOT EXISTS(SELECT 1 FROM processor_publication_holds h WHERE h.info_hash=w.info_hash AND h.held)
+  AND NOT EXISTS(SELECT 1 FROM processor_exclusions x WHERE x.info_hash=w.info_hash),false) THEN 'drop'
+ WHEN work.info_hash IS NULL OR work.source_revision<>w.source_revision OR work.verifier_artifact<>$7 OR (work.lease_until<CURRENT_TIMESTAMP AND work.available_at<=CURRENT_TIMESTAMP) THEN 'eligible'
+ ELSE 'busy' END
+FROM w
+LEFT JOIN processor_publication_reviews review ON review.info_hash=w.info_hash AND review.processor_id=$5 AND review.source_revision=w.source_revision
+LEFT JOIN processor_publication_sources source ON source.info_hash=w.info_hash AND source.revision=w.source_revision
+LEFT JOIN processor_registry registry ON registry.id=review.processor_id
+LEFT JOIN processor_payload_work work ON work.info_hash=w.info_hash
+ORDER BY w.enqueued_at,w.info_hash`
+
+// payloadCandidates walks the outbox in lease order: priorities in the
+// alternation order, then (enqueued_at, info_hash). It classifies at most
+// payloadWalkBudget rows, deletes the rows that cannot lease, and returns up
+// to payloadLeaseAttempts eligible rows from the first window holding one.
+// Lease drops are safe because every enqueuePayload caller holds the control
+// row this call holds FOR UPDATE; rows another transaction holds are skipped.
+func (s *Store) payloadCandidates(ctx context.Context, tx pgx.Tx, highFirst bool) ([]payloadCandidate, error) {
+	priorities := []int{1, 0}
+	if !highFirst {
+		priorities = []int{0, 1}
+	}
+	budget := payloadWalkBudget
+	for _, priority := range priorities {
+		at, after := time.Time{}, []byte{}
+		for _, size := range []int{64, payloadWalkBudget - 64} {
+			n := min(size, budget)
+			if n == 0 {
+				return nil, nil
+			}
+			rows, err := tx.Query(ctx, payloadClassify, priority, at, after, n, s.publication.RequiredProcessor, s.publication.RequiredProcessorArtifactDigest,
+				s.publication.RequiredPayloadVerifierArtifactDigest, PayloadEvidenceContract, serving.PublicationReviewPolicy)
+			if err != nil {
+				return nil, err
+			}
+			var eligible []payloadCandidate
+			var dropHashes [][]byte
+			var dropRevisions []int64
+			seen := 0
+			for rows.Next() {
+				var revision int64
+				var class string
+				if err = rows.Scan(&after, &revision, &at, &class); err != nil {
+					rows.Close()
+					return nil, err
+				}
+				seen++
+				switch {
+				case class == "eligible" && len(eligible) < payloadLeaseAttempts:
+					eligible = append(eligible, payloadCandidate{hash: after, revision: revision})
+				case class == "drop":
+					dropHashes, dropRevisions = append(dropHashes, after), append(dropRevisions, revision)
+				}
+			}
+			rows.Close()
+			if err = rows.Err(); err != nil {
+				return nil, err
+			}
+			budget -= seen
+			if len(dropHashes) > 0 {
+				if _, err = tx.Exec(ctx, `DELETE FROM processor_payload_pending WHERE info_hash IN (
+ SELECT info_hash FROM processor_payload_pending WHERE (info_hash,source_revision) IN (SELECT * FROM unnest($1::bytea[],$2::bigint[]))
+ FOR UPDATE SKIP LOCKED)`, dropHashes, dropRevisions); err != nil {
+					return nil, err
+				}
+			}
+			if len(eligible) > 0 {
+				return eligible, nil
+			}
+			if seen < n {
+				break
+			}
+		}
+	}
+	return nil, nil
+}
+
+// refillPayload re-queues expired payload reviews whose publication approval
+// is current, walking a bounded window of the expiry index from an in-memory
+// keyset cursor that wraps once it reaches the present. Rows that cannot
+// lease stay out until enqueuePayload sees a new approval.
+func (s *Store) refillPayload(ctx context.Context, tx pgx.Tx) error {
+	at, after := s.refillCursor.get()
+	var seen, queued int
+	var lastAt, queuedAt *time.Time
+	var lastHash, queuedHash []byte
+	err := tx.QueryRow(ctx, `WITH w AS MATERIALIZED (
+ SELECT info_hash,source_revision,approved,expires_at FROM processor_payload_reviews
+ WHERE (expires_at,info_hash)>($1,$2) AND expires_at<=CURRENT_TIMESTAMP ORDER BY expires_at,info_hash LIMIT $3),
+due AS MATERIALIZED (SELECT w.* FROM w WHERE NOT EXISTS(SELECT 1 FROM processor_payload_pending p WHERE p.info_hash=w.info_hash)),
+ok AS MATERIALIZED (
+ SELECT due.info_hash,due.source_revision,due.expires_at,CASE WHEN due.approved OR t.created_at>=CURRENT_TIMESTAMP-interval '24 hours' THEN 1 ELSE 0 END AS priority
+ FROM due JOIN torrents t ON t.info_hash=due.info_hash
+ JOIN processor_publication_sources source ON source.info_hash=due.info_hash AND source.revision=due.source_revision
+ JOIN processor_publication_reviews review ON review.info_hash=due.info_hash AND review.processor_id=$4 AND review.source_revision=due.source_revision
+ JOIN processor_registry registry ON registry.id=review.processor_id
+ WHERE review.approved AND review.policy_contract=$6 AND registry.execution_generation=review.execution_generation
+ AND registry.manifest->'processor'=review.processor_identity AND review.processor_identity->>'artifact_digest'=$5
+ ORDER BY due.expires_at,due.info_hash LIMIT $7),
+queued AS (INSERT INTO processor_payload_pending(info_hash,source_revision,priority) SELECT info_hash,source_revision,priority FROM ok ON CONFLICT DO NOTHING)
+SELECT (SELECT count(*) FROM w),(SELECT expires_at FROM w ORDER BY expires_at DESC,info_hash DESC LIMIT 1),(SELECT info_hash FROM w ORDER BY expires_at DESC,info_hash DESC LIMIT 1),
+ (SELECT count(*) FROM ok),(SELECT expires_at FROM ok ORDER BY expires_at DESC,info_hash DESC LIMIT 1),(SELECT info_hash FROM ok ORDER BY expires_at DESC,info_hash DESC LIMIT 1)`,
+		at, after, payloadRefillWindow, s.publication.RequiredProcessor, s.publication.RequiredProcessorArtifactDigest, serving.PublicationReviewPolicy, payloadRefillRequeues).
+		Scan(&seen, &lastAt, &lastHash, &queued, &queuedAt, &queuedHash)
+	if err != nil {
+		return err
+	}
+	switch {
+	case queued == payloadRefillRequeues:
+		// Resume right after the last re-queued row, so a burst of expiries
+		// is never skipped.
+		s.refillCursor.set(*queuedAt, queuedHash)
+	case seen < payloadRefillWindow:
+		s.refillCursor.set(time.Time{}, nil)
+	default:
+		s.refillCursor.set(*lastAt, lastHash)
+	}
+	return nil
 }
 
 var publicationReason = regexp.MustCompile(`^[a-z][a-z0-9_]{0,127}$`)

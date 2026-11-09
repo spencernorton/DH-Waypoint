@@ -89,6 +89,8 @@ type Store struct {
 	policy           string
 	transport        *Transport
 	metrics          *Metrics
+	// Resume points of the bounded outbox walks; a restart starts a new cycle.
+	outboxCursor, refillCursor keyset
 }
 
 func NewStore(c Config, p lazy.Lazy[*pgxpool.Pool], policy string) (*Store, error) {
