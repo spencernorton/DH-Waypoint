@@ -91,6 +91,7 @@ type Store struct {
 	metrics          *Metrics
 	// Resume points of the bounded outbox walks; a restart starts a new cycle.
 	outboxCursor, refillCursor keyset
+	scanHold                   time.Duration // scanHoldBound outside tests
 }
 
 func NewStore(c Config, p lazy.Lazy[*pgxpool.Pool], policy string) (*Store, error) {
@@ -99,7 +100,7 @@ func NewStore(c Config, p lazy.Lazy[*pgxpool.Pool], policy string) (*Store, erro
 	}
 	transport := NewTransport(c.RequestTimeout)
 	transport.CredentialDirectory = c.CredentialDirectory
-	return &Store{pool: p, cfg: c, policy: policy, transport: transport, metrics: NewMetrics()}, nil
+	return &Store{pool: p, cfg: c, policy: policy, transport: transport, metrics: NewMetrics(), scanHold: scanHoldBound}, nil
 }
 
 // SetLogger attaches a logger for background work (plugin directory

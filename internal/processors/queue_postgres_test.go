@@ -68,6 +68,9 @@ func fixtureAt(t *testing.T, version int64) (*Store, *pgxpool.Pool, *goose.Provi
 	conf.Concurrency = 1
 	s, e := NewStore(conf, lazy.New(func() (*pgxpool.Pool, error) { return pool, nil }), "synthetic-core-v1")
 	require.NoError(t, e)
+	// Tests count whole ticks; under -race a tick can pass the production bound,
+	// which scan_bounds_postgres_test.go covers on its own.
+	s.scanHold = time.Hour
 	return s, pool, provider
 }
 func seedTorrent(t *testing.T, p *pgxpool.Pool, n byte, kind any) []byte {

@@ -128,13 +128,15 @@ func (s *Store) leasePayload(ctx context.Context) (payloadLease, error) {
 	}
 	// New model approvals enter this outbox in their application transaction;
 	// browsing never schedules probes.
-	if err = s.refillPayload(ctx, tx); err != nil {
+	advance, err := s.refillPayload(ctx, tx)
+	if err != nil {
 		return out, err
 	}
 	candidates, err := s.payloadCandidates(ctx, tx, admissions%4 != 3)
 	if err != nil {
 		return out, err
 	}
+	leased := false
 	for _, c := range candidates {
 		var src source
 		var ok bool
@@ -164,12 +166,20 @@ func (s *Store) leasePayload(ctx context.Context) (payloadLease, error) {
 			}
 			continue
 		}
-		return s.issuePayloadLease(ctx, tx, out, hash, src)
+		if out, err = s.issuePayloadLease(ctx, tx, out, hash, src); err != nil {
+			return out, err
+		}
+		leased = true
+		break
 	}
 	if err = tx.Commit(ctx); err != nil {
 		return out, err
 	}
-	return out, pgx.ErrNoRows
+	advance() // only once the re-queues are durable; a failed call retries its window
+	if !leased {
+		return out, pgx.ErrNoRows
+	}
+	return out, nil
 }
 
 func (s *Store) issuePayloadLease(ctx context.Context, tx pgx.Tx, out payloadLease, hash []byte, src source) (payloadLease, error) {
@@ -203,10 +213,8 @@ func (s *Store) issuePayloadLease(ctx context.Context, tx pgx.Tx, out payloadLea
 	if err != nil {
 		return out, err
 	}
-	if _, err = tx.Exec(ctx, `UPDATE processor_control SET payload_leases=payload_leases+1 WHERE singleton`); err != nil {
-		return out, err
-	}
-	return out, tx.Commit(ctx)
+	_, err = tx.Exec(ctx, `UPDATE processor_control SET payload_leases=payload_leases+1 WHERE singleton`)
+	return out, err
 }
 
 // Lease reads may not wait on row locks while the control row is held.
@@ -338,7 +346,7 @@ func (s *Store) payloadCandidates(ctx context.Context, tx pgx.Tx, highFirst bool
 // is current, walking a bounded window of the expiry index from an in-memory
 // keyset cursor that wraps once it reaches the present. Rows that cannot
 // lease stay out until enqueuePayload sees a new approval.
-func (s *Store) refillPayload(ctx context.Context, tx pgx.Tx) error {
+func (s *Store) refillPayload(ctx context.Context, tx pgx.Tx) (func(), error) {
 	at, after := s.refillCursor.get()
 	var seen, queued int
 	var lastAt, queuedAt *time.Time
@@ -362,19 +370,19 @@ SELECT (SELECT count(*) FROM w),(SELECT expires_at FROM w ORDER BY expires_at DE
 		at, after, payloadRefillWindow, s.publication.RequiredProcessor, s.publication.RequiredProcessorArtifactDigest, serving.PublicationReviewPolicy, payloadRefillRequeues).
 		Scan(&seen, &lastAt, &lastHash, &queued, &queuedAt, &queuedHash)
 	if err != nil {
-		return err
+		return nil, err
 	}
+	// The caller moves the cursor after its commit.
 	switch {
 	case queued == payloadRefillRequeues:
 		// Resume right after the last re-queued row, so a burst of expiries
 		// is never skipped.
-		s.refillCursor.set(*queuedAt, queuedHash)
+		return func() { s.refillCursor.set(*queuedAt, queuedHash) }, nil
 	case seen < payloadRefillWindow:
-		s.refillCursor.set(time.Time{}, nil)
+		return func() { s.refillCursor.set(time.Time{}, nil) }, nil
 	default:
-		s.refillCursor.set(*lastAt, lastHash)
+		return func() { s.refillCursor.set(*lastAt, lastHash) }, nil
 	}
-	return nil
 }
 
 var publicationReason = regexp.MustCompile(`^[a-z][a-z0-9_]{0,127}$`)

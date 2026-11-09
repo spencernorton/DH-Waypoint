@@ -175,7 +175,7 @@ func (s *Store) Scan(ctx context.Context) (int, error) {
 		// Bound the hold, but process at least the first hash of each class
 		// (requests, source changes, catch-up) so every class advances. The
 		// cursor only moves past processed hashes.
-		if i != 0 && i != requested && i != changed && time.Since(locked) > scanHoldBound {
+		if i != 0 && i != requested && i != changed && time.Since(locked) > s.scanHold {
 			bounded = true
 			if i < requested {
 				i = requested - 1
