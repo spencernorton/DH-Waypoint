@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## 5.9.3 — 2026-11-09
+
+- Upgrade `golang.org/x/net` from 0.60.0 to 0.62.0 for GO-2026-6860
+  (CVE-2026-78661) and GO-2026-6866 (CVE-2026-97045) in its HTML parser.
+  govulncheck finds neither reachable from DH-Waypoint, but scanners that
+  match module versions report 5.9.2's binary as carrying a fixable HIGH
+  vulnerability. The upgrade brings the matching `golang.org/x` crypto, sync,
+  sys, term, text, tools and telemetry releases. There is no behaviour change
+  from 5.9.2.
+
 ## 5.9.2 — 2026-11-09
 
 - Bound how long the processor scan and the payload lease hold the processor
