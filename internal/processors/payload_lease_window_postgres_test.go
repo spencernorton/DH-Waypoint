@@ -581,7 +581,8 @@ func TestLeaseWindowRestartsTheWalkForEachPriority(t *testing.T) {
 	require.Equal(t, hex.EncodeToString(low), lease.InfoHash)
 }
 
-// A fifth eligible row behind four locked ones waits for the next call.
+// With the first four eligible rows locked, a call returns 204 without trying
+// the fifth, although the fifth could lease.
 func TestLeaseSourceLockTriesAtMostFourCandidates(t *testing.T) {
 	s, p := lwSetup(t)
 	rows := lwRows(t, s, p, 1, payloadLeaseAttempts+1, 1)
@@ -594,26 +595,36 @@ func TestLeaseSourceLockTriesAtMostFourCandidates(t *testing.T) {
 	leases, work := lwWritten(t, p)
 	require.Zero(t, leases)
 	require.Zero(t, work)
+	// Positive control: with the four locked rows out of the queue, the fifth leases.
+	_, err = p.Exec(testContext, `DELETE FROM processor_payload_pending WHERE info_hash=ANY($1)`, rows[:payloadLeaseAttempts])
+	require.NoError(t, err)
+	lease, _, err := lwLease(s)
+	require.NoError(t, err)
+	require.Equal(t, hex.EncodeToString(rows[payloadLeaseAttempts]), lease.InfoHash)
 }
 
 // After a skip (ROLLBACK TO SAVEPOINT) and after a success (RELEASE), the
-// lease transaction is back on the session's lock_timeout, and the locks the
-// successful read took are still held.
+// lease transaction is back on the session's lock_timeout, the locks the
+// successful read took are still held, and nothing leaks into the session.
 func TestLeaseSourceLockRestoresLockTimeout(t *testing.T) {
 	s, p, _ := fixture(t)
 	for _, session := range []string{"", "5s"} {
 		t.Run("session="+session, func(t *testing.T) {
-			store, want, base := s, "0", byte(0x10)
+			want, base := "0", byte(0x10)
+			cfg := p.Config().Copy()
+			cfg.MaxConns = 1 // the check after commit sees the lease's own connection
 			if session != "" {
-				cfg := p.Config().Copy()
 				cfg.ConnConfig.RuntimeParams["lock_timeout"] = session
-				pool, err := pgxpool.NewWithConfig(testContext, cfg)
-				require.NoError(t, err)
-				t.Cleanup(pool.Close)
-				store, err = NewStore(s.cfg, lazy.New(func() (*pgxpool.Pool, error) { return pool, nil }), s.policy)
-				require.NoError(t, err)
 				want, base = session, 0x20
 			}
+			pool, err := pgxpool.NewWithConfig(testContext, cfg)
+			require.NoError(t, err)
+			t.Cleanup(pool.Close)
+			store, err := NewStore(s.cfg, lazy.New(func() (*pgxpool.Pool, error) { return pool, nil }), s.policy)
+			require.NoError(t, err)
+			// A deadline turns a regressed lock wait into a failure, not a hang.
+			ctx, cancel := context.WithTimeout(testContext, 5*time.Second)
+			defer cancel()
 			a := seedTorrent(t, p, base+1, "movie")
 			b := seedTorrent(t, p, base+2, "movie")
 			show := func(tx pgx.Tx) string {
@@ -624,17 +635,17 @@ func TestLeaseSourceLockRestoresLockTimeout(t *testing.T) {
 			holder := lwHold(t, p)
 			lwLock(t, holder, `SELECT 1 FROM torrents WHERE info_hash=$1 FOR UPDATE`, a)
 
-			tx, err := store.begin(testContext)
+			tx, err := store.begin(ctx)
 			require.NoError(t, err)
 			defer rollback(tx)
 			require.Equal(t, want, show(tx))
 			start := time.Now()
-			_, ok, err := leaseSource(testContext, tx, a)
+			_, ok, err := leaseSource(ctx, tx, a)
 			require.NoError(t, err)
 			require.False(t, ok, "a locked candidate is skipped")
 			require.Less(t, time.Since(start), lwPrompt)
 			require.Equal(t, want, show(tx), "ROLLBACK TO SAVEPOINT restores lock_timeout")
-			_, ok, err = leaseSource(testContext, tx, b)
+			_, ok, err = leaseSource(ctx, tx, b)
 			require.NoError(t, err)
 			require.True(t, ok)
 			require.Equal(t, want, show(tx), "the success path restores it too")
@@ -642,7 +653,7 @@ func TestLeaseSourceLockRestoresLockTimeout(t *testing.T) {
 			released := make(chan struct{})
 			go func() { defer close(released); time.Sleep(300 * time.Millisecond); rollback(holder) }()
 			start = time.Now()
-			_, err = tx.Exec(testContext, `SELECT 1 FROM torrents WHERE info_hash=$1 FOR UPDATE`, a)
+			_, err = tx.Exec(ctx, `SELECT 1 FROM torrents WHERE info_hash=$1 FOR UPDATE`, a)
 			<-released
 			require.NoError(t, err)
 			require.Greater(t, time.Since(start), 200*time.Millisecond)
@@ -652,7 +663,10 @@ func TestLeaseSourceLockRestoresLockTimeout(t *testing.T) {
 			require.NoError(t, err)
 			_, err = other.Exec(testContext, `SELECT 1 FROM torrents WHERE info_hash=$1 FOR UPDATE`, b)
 			require.ErrorContains(t, err, "55P03")
-			require.NoError(t, tx.Commit(testContext))
+			require.NoError(t, tx.Commit(ctx))
+			var after string
+			require.NoError(t, pool.QueryRow(ctx, `SHOW lock_timeout`).Scan(&after))
+			require.Equal(t, want, after, "the session's lock_timeout is unchanged after the lease")
 		})
 	}
 }

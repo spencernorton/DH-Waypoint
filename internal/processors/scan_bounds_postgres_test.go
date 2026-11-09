@@ -661,7 +661,7 @@ func TestSbScanBoundSettlesRequestsWithNoApplicablePlan(t *testing.T) {
 	require.Equal(t, []string{"core_only", "ready", "ready", "ready"}, states(), "the head settles; the bound stops the rest")
 	var reason string
 	require.NoError(t, p.QueryRow(testContext, `SELECT state_reason FROM processor_reprocess_requests WHERE info_hash=$1`, requests[0]).Scan(&reason))
-	require.Equal(t, "no_active_processors", reason)
+	require.Equal(t, "no_applicable_processors", reason)
 	for tick := 2; tick <= 4; tick++ {
 		n, e = s.Scan(testContext)
 		require.NoError(t, e)
@@ -669,4 +669,26 @@ func TestSbScanBoundSettlesRequestsWithNoApplicablePlan(t *testing.T) {
 	}
 	require.Equal(t, []string{"core_only", "queued", "queued", "queued"}, states())
 	require.Equal(t, 3.0, sbAdmission(s, "bounded"), "ticks with more than one request were bounded")
+}
+
+// A ready request whose torrent was deleted is held, as a waiting one is,
+// instead of failing every Scan tick until the request expires.
+func TestSbScanHoldsReadyRequestWhoseTorrentIsGone(t *testing.T) {
+	s, p, _ := fixture(t)
+	sbClassifier(t, s)
+	gone, kept := seedTorrent(t, p, 0x01, "movie"), seedTorrent(t, p, 0x02, "movie")
+	sbReady(t, s, p, gone, kept)
+	_, e := p.Exec(testContext, `DELETE FROM torrents WHERE info_hash=$1`, gone)
+	require.NoError(t, e)
+	n, e := s.Scan(testContext)
+	require.NoError(t, e)
+	require.Equal(t, 1, n)
+	read := func(h []byte) (state, reason string) {
+		require.NoError(t, p.QueryRow(testContext, `SELECT state,state_reason FROM processor_reprocess_requests WHERE info_hash=$1`, h).Scan(&state, &reason))
+		return
+	}
+	state, reason := read(gone)
+	require.Equal(t, []string{"held", "source_unavailable"}, []string{state, reason})
+	state, _ = read(kept)
+	require.Equal(t, "queued", state)
 }

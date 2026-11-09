@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-## 5.9.2 — 2026-11-10
+## 5.9.2 — 2026-11-09
 
 - Bound how long the processor scan and the payload lease hold the processor
   control row on large catalogues. Before taking the row, the scan prunes
@@ -18,9 +18,12 @@
   priority alternation, lease and result contracts, and the schema are
   unchanged.
 - A ready reprocess request whose torrent has no applicable processor step now
-  settles as `core_only` when the scan reaches it, as it already did when no
-  processor was active. It used to stay ready until it expired after an hour,
-  heading the request queue on every scan.
+  settles as `core_only` (`no_applicable_processors`) when the scan reaches it,
+  as it already did when no processor was active. It used to stay ready until
+  it expired after an hour, heading the request queue on every scan.
+- A ready reprocess request whose torrent was deleted is now held
+  (`source_unavailable`), as a waiting one already was. It used to fail every
+  scan until the request expired after an hour.
 - Upgrade the BitTorrent decoder and compression dependencies to resolve
   upstream Go security advisories GO-2026-6894 and GO-2026-6865.
 
