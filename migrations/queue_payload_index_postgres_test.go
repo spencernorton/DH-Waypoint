@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Runs the whole chain on an empty schema, then checks that 00075 removes the
+// Runs the whole chain on an empty schema, then checks that 00077 removes the
 // unused queue payload index, keeps the indexes the queue does read, restores
 // it on Down, and still applies when the index is already gone.
 func TestQueuePayloadIndexDropUpDown(t *testing.T) {
@@ -63,7 +63,7 @@ func TestQueuePayloadIndexDropUpDown(t *testing.T) {
 		return names
 	}
 
-	_, err = provider.UpTo(ctx, 74)
+	_, err = provider.UpTo(ctx, 76)
 	require.NoError(t, err)
 	before := indexes()
 	require.Contains(t, before, index)

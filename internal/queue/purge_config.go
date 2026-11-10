@@ -5,7 +5,7 @@
 //
 // Symptom that prompted it (2026-04-26 audit): 13317 processed + 1393
 // failed rows accumulated since boot, never purged, under a payload GIN
-// index larger than the data itself. Migration 00075 drops that index.
+// index larger than the data itself. Migration 00077 drops that index.
 //
 // Two-stage opt-in mirrors retention:
 //
