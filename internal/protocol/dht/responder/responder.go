@@ -22,6 +22,10 @@ type responder struct {
 	sampleInfoHashesInterval int64
 }
 
+// maxPeersPerReply bounds a get_peers reply. UDP does not prove where a query
+// came from, so a reply must stay small next to the query that asked for it.
+const maxPeersPerReply = 50
+
 var ErrMissingArguments = dht.Error{
 	Code: dht.ErrorCodeProtocolError,
 	Msg:  "missing arguments",
@@ -68,8 +72,14 @@ func (r responder) Respond(_ context.Context, msg dht.RecvMsg) (ret dht.Return, 
 		}
 
 		result := r.kTable.GetHashOrClosestNodes(args.InfoHash)
+		closestNodes := result.ClosestNodes
+
 		if result.Found {
 			hashPeers := result.Hash.Peers()
+			if len(hashPeers) > maxPeersPerReply {
+				hashPeers = hashPeers[:maxPeersPerReply]
+			}
+
 			values := make([]dht.NodeAddr, 0, len(hashPeers))
 
 			for _, p := range hashPeers {
@@ -77,9 +87,14 @@ func (r responder) Respond(_ context.Context, msg dht.RecvMsg) (ret dht.Return, 
 			}
 
 			ret.Values = values
+
+			// A hash whose peers have all expired answers like an unknown one.
+			if len(values) == 0 {
+				closestNodes = r.kTable.GetClosestNodes(args.InfoHash)
+			}
 		}
 
-		ret.Nodes = nodeInfosFromNodes(result.ClosestNodes...)
+		ret.Nodes = nodeInfosFromNodes(closestNodes...)
 		token := r.announceToken(args.InfoHash, args.ID, msg.From.Addr())
 		ret.Token = &token
 	case dht.QAnnouncePeer:

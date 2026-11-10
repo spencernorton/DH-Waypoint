@@ -29,7 +29,10 @@ curl --fail -H 'Content-Type: application/json'   --data '{"query":"{ __typename
 
 Use JSON POST. `GET /graphql` does not serve a playground in 4.x. If the request
 fails from another container, `localhost` refers to that container rather than
-the backend host. Review reverse-proxy authentication and routing independently.
+the backend host. If it is refused from another host or another Compose
+project, the port is published on `127.0.0.1` only: set
+`DH_WAYPOINT_HTTP_BIND` ([security](operations/security.md#network-attack-surface)).
+Review reverse-proxy authentication and routing independently.
 
 ## Torznab returns 401
 

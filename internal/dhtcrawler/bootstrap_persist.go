@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/spencernorton/DH-Waypoint/internal/protocol"
 )
 
 // bootstrapStore persists a small, bounded slice of known-good DHT
@@ -87,9 +89,11 @@ func (s *bootstrapStore) Load() ([]netip.AddrPort, error) {
 			continue
 		}
 		addr, parseErr := netip.ParseAddrPort(line)
-		if parseErr != nil {
-			// Skip — better to seed with 199 good addrs than fail the
-			// whole load on one garbage line from a prior crash.
+		// Skip — better to seed with 199 good addrs than fail the
+		// whole load on one garbage line from a prior crash. A
+		// non-public address is skipped too: older snapshots could
+		// hold whatever a remote node claimed.
+		if parseErr != nil || !protocol.IsPublicAddr(addr.Addr()) {
 			continue
 		}
 		addrs = append(addrs, addr)

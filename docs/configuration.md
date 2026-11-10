@@ -49,6 +49,7 @@ Two ports and a Postgres connection. The bundled Compose files set working value
 | Variable | Default | Purpose |
 |---|---|---|
 | `DH_WAYPOINT_HTTP_PORT` | `3333` | *Compose only:* host port for the HTTP API, which the binary serves on `HTTP_SERVER_LOCAL_ADDRESS` (default `:3333`). Hosts `/graphql`, `/torznab/api`, `/metrics`, `/import`, `/evidence/arr/*`. |
+| `DH_WAYPOINT_HTTP_BIND` | `127.0.0.1` | *Compose only:* host address the HTTP port is published on. The default reaches it from the host itself only. Set `0.0.0.0` or one host address for clients on another host or in another Compose project, after setting `HTTP_SERVER_API_KEY` and `TORZNAB_API_KEY`. |
 | `DH_WAYPOINT_PEER_PORT` | `3334` | *Compose only:* host port (TCP and UDP) for the BitTorrent peer protocol, which the binary serves on `DHT_SERVER_PORT` (default `3334`). Outbound-dominant; opening it inbound increases throughput but is not required. |
 | `POSTGRES_HOST` | `localhost` | Hostname or IP. The bundled Compose files set `postgres`, the service name. |
 | `POSTGRES_PORT` | `5432` | Postgres port. |
@@ -64,7 +65,8 @@ By default DH-Waypoint's HTTP server trusts whoever connects. These variables ga
 | `TORZNAB_API_KEY` | *(none)* | When set, every `/torznab/api` request must include `apikey=<value>` (or an `X-Api-Key` header). With this and `TORZNAB_API_KEYS` empty, `/torznab` is open — fine on a tailnet or behind a reverse proxy with its own auth, **not fine on the open internet.** Constant-time compare. |
 | `TORZNAB_API_KEYS` | *(none)* | Comma-separated `name:value` keys accepted alongside `TORZNAB_API_KEY`; the name labels `dh_waypoint_torznab_requests_total`. Malformed entries are skipped. |
 | `EVIDENCE_WEBHOOK_SECRET` | *(none)* | Shared secret for the `*arr` webhook ingester. Mirror this value as the `X-Evidence-Token` Custom Header on every Sonarr/Radarr/Lidarr/Readarr Connect → Webhook configuration. Empty leaves `/evidence/arr/*` unauthenticated. |
-| `HTTP_SERVER_API_KEY` | unset | Optional key gating GraphQL, `/import`, `/metrics` and `/api/v1/*` (`Authorization: Bearer` or `X-API-Key`). Torznab, tracker, processors, private and evidence APIs keep their own credentials; `/status` stays public. Unset preserves the open trusted-network posture. |
+| `HTTP_SERVER_API_KEY` | unset | Optional key gating GraphQL, `/import`, `/metrics` and `/api/v1/*` (`Authorization: Bearer` or `X-API-Key`). Torznab, tracker, processors, private and evidence APIs keep their own credentials; `/status` stays public. Unset leaves them open, which is safe only while the port stays on `127.0.0.1` or a trusted network. |
+| `HTTP_SERVER_CORS_ALLOWED_ORIGINS` | *(none)* | Comma-separated website origins, no spaces (for example `https://ui.example.com`), whose pages may read the API from a browser. Empty allows none; `*` allows every site. |
 
 ## Release-name eligibility
 

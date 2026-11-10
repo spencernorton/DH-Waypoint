@@ -26,7 +26,7 @@ func ParseTorrentFile(torrentFile []byte) (protocol.ID, metainfo.Info, error) {
 	var raw struct {
 		Info bencode.Bytes `bencode:"info"`
 	}
-	if err := bencode.Unmarshal(torrentFile, &raw); err != nil {
+	if err := protocol.UnmarshalBencode(torrentFile, &raw); err != nil {
 		return protocol.ID{}, metainfo.Info{}, fmt.Errorf("unmarshal torrent file: %w", err)
 	}
 	if len(raw.Info) == 0 {

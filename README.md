@@ -88,8 +88,9 @@ and the peer protocol on 3334 TCP and UDP. Add `http://<host>:3333/torznab/`
 as a Torznab indexer in Prowlarr or each \*arr ([per-app guides](docs/integrations/prowlarr.md)),
 and point their webhooks at `http://<host>:3333/evidence/arr/<instance>` with
 the `EVIDENCE_WEBHOOK_SECRET` from your `.env` ([evidence](docs/evidence.md)).
-Set `TORZNAB_API_KEY`, and keep the other endpoints on a trusted network or
-behind a proxy ([security](docs/operations/security.md)).
+The port is published on `127.0.0.1` only: for clients on another host or in
+another Compose project, set `TORZNAB_API_KEY` and `HTTP_SERVER_API_KEY`, then
+`DH_WAYPOINT_HTTP_BIND=0.0.0.0` ([security](docs/operations/security.md)).
 
 ### From source
 

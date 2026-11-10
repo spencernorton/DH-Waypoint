@@ -193,14 +193,14 @@ query Workers {
 | `delete` | `infoHashes: [Hash20!]!` | `Void` (currently refused; see [Error handling](#error-handling)) |
 | `setTags` | `infoHashes, tagNames` | `Void` |
 | `putTags` | `infoHashes, tagNames` | `Void` (additive) |
-| `deleteTags` | `infoHashes, tagNames` | `Void` |
+| `deleteTags` | `infoHashes, tagNames` | `Void` (needs at least one info hash; no `tagNames` removes every tag from those torrents) |
 | `reprocess` | `input: TorrentReprocessInput!` (`infoHashes` required) | `Void` |
 
 ### `QueueMutation` fields
 
 | Field | Args | Returns |
 |---|---|---|
-| `purgeJobs` | `input: QueuePurgeJobsInput!` | `Void` |
+| `purgeJobs` | `input: QueuePurgeJobsInput!` | `Void` (needs at least one queue or status) |
 | `enqueueReprocessTorrentsBatch` | `input: QueueEnqueueReprocessTorrentsBatchInput` | `Void` |
 
 ## Common mutations

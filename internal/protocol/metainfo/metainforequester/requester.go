@@ -264,6 +264,9 @@ type metadataResponseHeader struct {
 const (
 	metadataPieceSize = 16 * 1024
 	maxMetadataSize   = 10 * 1024 * 1024
+	// maxMessageSize is the largest message this requester reads into memory:
+	// one metadata piece plus its extension header.
+	maxMessageSize = metadataPieceSize + 1024
 )
 
 func exHandshake(rw io.ReadWriter) (metadataSize uint, utMetadata uint8, err error) {
@@ -284,7 +287,7 @@ func exHandshake(rw io.ReadWriter) (metadataSize uint, utMetadata uint8, err err
 	}
 
 	rRootDict := new(rootDict)
-	if unmarshalErr := bencode.Unmarshal(rExMessage[2:], rRootDict); unmarshalErr != nil {
+	if unmarshalErr := protocol.UnmarshalBencode(rExMessage[2:], rRootDict); unmarshalErr != nil {
 		err = unmarshalErr
 		return
 	}
@@ -346,8 +349,10 @@ func readAllPieces(r io.Reader, metadataSize uint) ([]byte, error) {
 		return nil, fmt.Errorf("invalid metadata size: %d", metadataSize)
 	}
 
-	metadataBytes := make([]byte, metadataSize)
+	// Pieces are kept as they arrive and joined at the end, so a peer that
+	// declares a large size and then stalls costs nothing.
 	nPieces := metadataPieceCount(metadataSize)
+	pieces := make([][]byte, nPieces)
 	seen := make([]bool, nPieces)
 
 	receivedPieces := 0
@@ -365,7 +370,10 @@ func readAllPieces(r io.Reader, metadataSize uint) ([]byte, error) {
 			TotalSize: -1,
 		}
 
-		if decodeErr := bencode.NewDecoder(rMessageBuf).Decode(&rExtDict); decodeErr != nil {
+		decoder := bencode.NewDecoder(rMessageBuf)
+		decoder.MaxStrLen = int64(len(rUmMessage))
+
+		if decodeErr := decoder.Decode(&rExtDict); decodeErr != nil {
 			return nil, fmt.Errorf("decode ut_metadata header: %w", decodeErr)
 		}
 
@@ -408,16 +416,15 @@ func readAllPieces(r io.Reader, metadataSize uint) ([]byte, error) {
 				)
 			}
 
-			end := start + expectedLength
 			if seen[piece] {
-				if !bytes.Equal(metadataBytes[start:end], metadataPiece) {
+				if !bytes.Equal(pieces[piece], metadataPiece) {
 					return nil, fmt.Errorf("ut_metadata piece %d conflicts with an earlier copy", piece)
 				}
 
 				continue
 			}
 
-			copy(metadataBytes[start:end], metadataPiece)
+			pieces[piece] = metadataPiece
 			seen[piece] = true
 			receivedPieces++
 		case 2: // reject
@@ -431,7 +438,7 @@ func readAllPieces(r io.Reader, metadataSize uint) ([]byte, error) {
 		}
 	}
 
-	return metadataBytes, nil
+	return bytes.Join(pieces, nil), nil
 }
 
 func readExMessage(r io.Reader) ([]byte, error) {
@@ -483,6 +490,14 @@ func readMessage(r io.Reader) ([]byte, error) {
 	// tightened a lot more.)
 	if length > maxMetadataSize {
 		return nil, errors.New("message is longer than max allowed metadata size")
+	}
+
+	// Nothing this requester needs is larger than a metadata piece. A longer
+	// message (a big bitfield, say) is skipped without being held in memory.
+	if length > maxMessageSize {
+		_, err := io.CopyN(io.Discard, r, int64(length))
+
+		return nil, err
 	}
 
 	messageBytes := make([]byte, length)

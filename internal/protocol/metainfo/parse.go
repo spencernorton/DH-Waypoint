@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/anacrolix/torrent/bencode"
 	mi "github.com/anacrolix/torrent/metainfo"
 	"github.com/spencernorton/DH-Waypoint/internal/protocol"
 )
@@ -32,7 +31,7 @@ func ParseMetaInfoBytes(infoHash protocol.ID, metaInfoBytes []byte) (Info, error
 	}
 
 	var info Info
-	if unmarshalErr := bencode.Unmarshal(metaInfoBytes, &info); unmarshalErr != nil {
+	if unmarshalErr := protocol.UnmarshalBencode(metaInfoBytes, &info); unmarshalErr != nil {
 		return Info{}, fmt.Errorf("error unmarshaling info bytes: %w", unmarshalErr)
 	}
 	if info.MetaVersion != 0 {

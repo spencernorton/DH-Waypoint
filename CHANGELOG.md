@@ -2,6 +2,64 @@
 
 ## Unreleased
 
+Security release. Read the first four entries before upgrading a Compose
+install: they change what a default install accepts.
+
+- **Compose publishes the HTTP port on `127.0.0.1` only.** It was published on
+  every host interface. Sonarr, Radarr, Prowlarr or Prometheus on another host
+  or in another Compose project lose access after the upgrade until `.env`
+  sets `DH_WAYPOINT_HTTP_BIND=0.0.0.0` (or one host address). Set
+  `HTTP_SERVER_API_KEY` and `TORZNAB_API_KEY` before you do. Containers on the
+  same Compose network are not affected.
+- **Compose now passes `HTTP_SERVER_API_KEY` to the container.** Both Compose
+  files left it out, so a key in `.env` protected nothing. If your `.env`
+  already has one, GraphQL, `/import`, `/metrics` and the REST API start
+  asking for it after the upgrade: add it to Prometheus and your other
+  clients.
+- **No website may read the API from a browser by default.** Every origin was
+  allowed. Name the origins of your own pages in
+  `HTTP_SERVER_CORS_ALLOWED_ORIGINS` (comma-separated, no spaces); both
+  Compose files pass it through.
+- **Two mutations refuse a call that names no target.** `queue.purgeJobs`
+  needs a queue or a status (an empty call emptied the whole queue), and
+  `torrent.deleteTags` needs at least one info hash (a call without one
+  removed the tags from every torrent).
+- The API key now covers `OPTIONS` requests, except a CORS preflight, which
+  never reaches a handler. `/metrics` and `/debug/pprof/*` answer `GET` only.
+- The payload verifier API (`/api/publication/v1/*`) and the internal
+  name-policy check (`/internal/name-policy/*`) no longer ask for the general
+  API key as well. Each keeps its own bearer token and stays refused while
+  that token is unset. With a general key set, their own token was rejected.
+- `evidence.list` and its `totalCount` leave out every row for a download that
+  qBittorrent holds in a `private` or `bitgrab` category, including the *arr
+  rows for the same torrent.
+- The request log replaces `apikey` and `passkey` query values and the passkey
+  in `/announce/<passkey>` and `/scrape/<passkey>` paths with `REDACTED`.
+- DHT: fix a data race in the routing table. A peer list or a node record
+  could be read while an announce or a reply changed it, which could stop the
+  process.
+- DHT: keep at most 200 peers per info hash, forget a peer 30 minutes after it
+  was last seen, and return at most 50 peers in one `get_peers` reply. Stored
+  peers were unbounded and never expired, and a reply carried all of them. A
+  hash whose peers have all expired is answered with the closest nodes.
+- DHT: accept a reply only from the address that was queried, add random bytes
+  to transaction IDs, and take at most 100 nodes, peers or samples from one
+  reply.
+- DHT: only public IPv4 addresses are kept as nodes or peers, whether they
+  come from a reply, from the sender of a query or from the saved bootstrap
+  list. Loopback, private, link-local, carrier-NAT and reserved addresses are
+  dropped, and so is every IPv6 address: the DHT socket is IPv4 only, and
+  several IPv6 forms can carry a private IPv4 address.
+- The metadata fetcher no longer connects to an address that fails the same
+  test. `METAINFO_REQUESTER_ALLOW_PRIVATE_ADDRS=true` turns this off for a
+  closed test network.
+- Bencode decoding is bounded by the size of the input: a length prefix can no
+  longer make the decoder reserve more memory than the message holds. Peer
+  messages larger than one metadata piece are skipped without being buffered,
+  memory for metadata is taken as its pieces arrive instead of at the size a
+  peer declares, and metadata whose nested lists and dictionaries add up to
+  more than eight times the metadata size limit is rejected.
+
 ## 5.9.3 — 2026-11-09
 
 - Upgrade `golang.org/x/net` from 0.60.0 to 0.62.0 for GO-2026-6860

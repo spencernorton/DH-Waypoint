@@ -21,9 +21,14 @@ func validateEncoding(b []byte) error {
 	return nil
 }
 
+// maxNestedBytes bounds the summed size of every list and dictionary. The
+// decoders that run after validation copy each container once per level of
+// nesting, so a deep chain around a large payload costs depth times size.
+const maxNestedBytes = 8 * MaxMetaInfoBytes
+
 type encodingScanner struct {
-	b        []byte
-	i, nodes int
+	b                []byte
+	i, nodes, nested int
 }
 
 func (s *encodingScanner) str() ([]byte, error) {
@@ -84,6 +89,7 @@ func (s *encodingScanner) value(depth int) error {
 		}
 		s.i++
 	case 'l', 'd':
+		start := s.i
 		dict := s.b[s.i] == 'd'
 		s.i++
 		var previous []byte
@@ -107,6 +113,9 @@ func (s *encodingScanner) value(depth int) error {
 			return errors.New("truncated bencoded container")
 		}
 		s.i++
+		if s.nested += s.i - start; s.nested > maxNestedBytes {
+			return errors.New("bencoded metadata exceeds structural bounds")
+		}
 	default:
 		if _, err := s.str(); err != nil {
 			return fmt.Errorf("bencoded value: %w", err)

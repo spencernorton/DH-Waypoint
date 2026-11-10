@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/anacrolix/torrent/bencode"
+	"github.com/spencernorton/DH-Waypoint/internal/protocol"
 	"github.com/spencernorton/DH-Waypoint/internal/protocol/dht"
 	"github.com/spencernorton/DH-Waypoint/internal/protocol/dht/responder"
 	"go.uber.org/zap"
@@ -26,11 +27,17 @@ type server struct {
 	localAddr        netip.AddrPort
 	socket           Socket
 	queryTimeout     time.Duration
-	queries          map[string]chan dht.RecvMsg
+	queries          map[string]pendingQuery
 	responder        responder.Responder
 	responderTimeout time.Duration
 	idIssuer         IDIssuer
 	logger           *zap.SugaredLogger
+}
+
+// pendingQuery is a query awaiting its reply from addr.
+type pendingQuery struct {
+	addr netip.AddrPort
+	ch   chan dht.RecvMsg
 }
 
 func (s *server) start() error {
@@ -92,7 +99,7 @@ func (s *server) read(ctx context.Context) {
 
 		var msg dht.Msg
 
-		err = bencode.Unmarshal(buffer[:n], &msg)
+		err = protocol.UnmarshalBencode(buffer[:n], &msg)
 		if err != nil {
 			s.logger.Debugw("could not unmarshal packet data", "error", err)
 			continue
@@ -147,11 +154,18 @@ func (s *server) handleResponse(msg dht.RecvMsg) {
 	transactionID := msg.Msg.T
 
 	s.mutex.Lock()
-	ch, ok := s.queries[transactionID]
+	query, ok := s.queries[transactionID]
 	s.mutex.Unlock()
 
-	if ok {
-		ch <- msg
+	// UDP lets anyone send a reply, so one counts only when it comes from the
+	// address that was asked.
+	if !ok || msg.From != query.addr {
+		return
+	}
+
+	select {
+	case query.ch <- msg:
+	default: // a repeat of a reply that was already delivered
 	}
 }
 
@@ -161,11 +175,16 @@ func (s *server) Query(
 	q string,
 	args dht.MsgArgs,
 ) (r dht.RecvMsg, err error) {
+	// A caller may hold an IPv4 address in its IPv6-mapped form (a bootstrap
+	// entry written as an IP literal resolves to one). The socket reports the
+	// sender in the plain form, and the reply must match it.
+	addr = netip.AddrPortFrom(addr.Addr().Unmap(), addr.Port())
+
 	transactionID := s.idIssuer.Issue()
 	ch := make(chan dht.RecvMsg, 1)
 
 	s.mutex.Lock()
-	s.queries[transactionID] = ch
+	s.queries[transactionID] = pendingQuery{addr: addr, ch: ch}
 	s.mutex.Unlock()
 
 	defer (func() {

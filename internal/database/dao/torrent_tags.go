@@ -3,6 +3,7 @@ package dao
 import (
 	"context"
 	"database/sql/driver"
+	"errors"
 
 	"github.com/spencernorton/DH-Waypoint/internal/model"
 	"github.com/spencernorton/DH-Waypoint/internal/protocol"
@@ -93,21 +94,20 @@ func (t *torrentTag) Set(ctx context.Context, infoHashes []protocol.InfoHash, ta
 	})
 }
 
+// Delete removes the named tags, or every tag when none is named, from the
+// given torrents. A call without torrents is refused: it used to strip the
+// tags from the whole catalogue.
 func (t *torrentTag) Delete(ctx context.Context, infoHashes []protocol.InfoHash, tagNames []string) error {
-	if len(infoHashes) == 0 && len(tagNames) == 0 {
-		return nil
+	if len(infoHashes) == 0 {
+		return errors.New("deleting tags needs at least one info hash")
 	}
 
-	q := t.WithContext(ctx)
-
-	if len(infoHashes) > 0 {
-		valuers := make([]driver.Valuer, 0, len(infoHashes))
-		for _, infoHash := range infoHashes {
-			valuers = append(valuers, infoHash)
-		}
-
-		q = q.Where(t.InfoHash.In(valuers...))
+	valuers := make([]driver.Valuer, 0, len(infoHashes))
+	for _, infoHash := range infoHashes {
+		valuers = append(valuers, infoHash)
 	}
+
+	q := t.WithContext(ctx).Where(t.InfoHash.In(valuers...))
 
 	if len(tagNames) > 0 {
 		q = q.Where(t.Name.In(tagNames...))

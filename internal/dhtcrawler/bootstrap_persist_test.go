@@ -28,7 +28,7 @@ func TestBootstrapStore_roundTrip(t *testing.T) {
 	original := []netip.AddrPort{
 		mustAddr(t, "198.51.100.1:6881"),
 		mustAddr(t, "198.51.100.2:6881"),
-		mustAddr(t, "[2001:db8::1]:6881"),
+		mustAddr(t, "198.51.100.3:51413"),
 	}
 
 	require.NoError(t, s.Save(original))
@@ -82,6 +82,10 @@ func TestBootstrapStore_skipsMalformedLines(t *testing.T) {
 		"not-an-address\n" +
 		"198.51.100.2:12345\n" +
 		"another garbage line without colon\n" +
+		// Not public: a snapshot must not point the crawler at the
+		// operator's own network, nor at IPv6 on an IPv4-only DHT.
+		"127.0.0.1:5432\n" +
+		netip.AddrPortFrom(netip.AddrFrom4([4]byte{192, 168, 1, 10}), 6881).String() + "\n" + // a LAN address
 		"[2001:db8::1]:6881\n"
 	require.NoError(t, os.WriteFile(path, []byte(body), 0o644))
 
@@ -92,7 +96,6 @@ func TestBootstrapStore_skipsMalformedLines(t *testing.T) {
 	assert.Equal(t, []netip.AddrPort{
 		mustAddr(t, "198.51.100.1:6881"),
 		mustAddr(t, "198.51.100.2:12345"),
-		mustAddr(t, "[2001:db8::1]:6881"),
 	}, loaded)
 }
 

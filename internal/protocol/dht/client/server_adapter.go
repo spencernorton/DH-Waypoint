@@ -4,11 +4,16 @@ import (
 	"context"
 	"errors"
 	"net/netip"
+	"slices"
 
 	"github.com/spencernorton/DH-Waypoint/internal/protocol"
 	"github.com/spencernorton/DH-Waypoint/internal/protocol/dht"
 	"github.com/spencernorton/DH-Waypoint/internal/protocol/dht/server"
 )
+
+// maxPerReply caps how many nodes, peers or samples are taken from one reply.
+// A single datagram can carry thousands; honest nodes send far fewer.
+const maxPerReply = 100
 
 type serverAdapter struct {
 	nodeID protocol.ID
@@ -93,14 +98,6 @@ func (a serverAdapter) SampleInfoHashes(
 		return SampleInfoHashesResult{}, err
 	}
 
-	var samples []protocol.ID
-	if res.Msg.R.Samples != nil {
-		samples = make([]protocol.ID, 0, len(*res.Msg.R.Samples))
-		for _, s := range *res.Msg.R.Samples {
-			samples = append(samples, s)
-		}
-	}
-
 	totalNum := 0
 	interval := 0
 
@@ -114,7 +111,7 @@ func (a serverAdapter) SampleInfoHashes(
 
 	return SampleInfoHashesResult{
 		ID:       res.Msg.R.ID,
-		Samples:  samples,
+		Samples:  extractSamples(res.Msg),
 		Nodes:    extractNodes(res.Msg),
 		Num:      totalNum,
 		Interval: interval,
@@ -122,14 +119,31 @@ func (a serverAdapter) SampleInfoHashes(
 	}, nil
 }
 
+func extractSamples(msg dht.Msg) []protocol.ID {
+	if msg.R.Samples == nil {
+		return nil
+	}
+
+	samples := *msg.R.Samples
+
+	return slices.Clone([]protocol.ID(samples[:min(len(samples), maxPerReply)]))
+}
+
 func extractNodes(msg dht.Msg) []NodeInfo {
 	if len(msg.R.Nodes) == 0 {
 		return nil
 	}
 
-	nodes := make([]NodeInfo, 0, len(msg.R.Nodes))
+	nodes := make([]NodeInfo, 0, min(len(msg.R.Nodes), maxPerReply))
 	for _, n := range msg.R.Nodes {
-		nodes = append(nodes, NodeInfo{ID: n.ID, Addr: n.Addr.ToAddrPort()})
+		if len(nodes) == maxPerReply {
+			break
+		}
+
+		// The replier chooses these addresses; only public ones are contacted.
+		if addr := n.Addr.ToAddrPort(); protocol.IsPublicAddr(addr.Addr()) {
+			nodes = append(nodes, NodeInfo{ID: n.ID, Addr: addr})
+		}
 	}
 
 	return nodes
@@ -140,9 +154,16 @@ func extractValues(msg dht.Msg) []netip.AddrPort {
 		return nil
 	}
 
-	values := make([]netip.AddrPort, 0, len(msg.R.Values))
+	values := make([]netip.AddrPort, 0, min(len(msg.R.Values), maxPerReply))
 	for _, v := range msg.R.Values {
-		values = append(values, v.ToAddrPort())
+		if len(values) == maxPerReply {
+			break
+		}
+
+		// Unmapped, so one peer has one form whichever way a node encodes it.
+		if addr := v.ToAddrPort(); protocol.IsPublicAddr(addr.Addr()) {
+			values = append(values, netip.AddrPortFrom(addr.Addr().Unmap(), addr.Port()))
+		}
 	}
 
 	return values

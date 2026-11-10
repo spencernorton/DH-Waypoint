@@ -1,7 +1,10 @@
 package metainforequester
 
 import (
+	"fmt"
 	"net"
+	"net/netip"
+	"syscall"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -31,14 +34,30 @@ type Result struct {
 	PeerRepCollectors   []prometheus.Collector `group:"prometheus_collectors,flatten"`
 }
 
+// refuseNonPublic keeps the dialer away from addresses no DHT peer can have,
+// such as the operator's own machine and network.
+func refuseNonPublic(_, address string, _ syscall.RawConn) error {
+	addr, err := netip.ParseAddrPort(address)
+	if err != nil || !protocol.IsPublicAddr(addr.Addr()) {
+		return fmt.Errorf("refusing to connect to non-public address %s", address)
+	}
+
+	return nil
+}
+
 func New(p Params) Result {
+	dialer := &net.Dialer{
+		Timeout:   3 * time.Second,
+		KeepAlive: -1,
+	}
+	if !p.Config.AllowPrivateAddrs {
+		dialer.Control = refuseNonPublic
+	}
+
 	collector := newPrometheusCollector(requester{
 		clientID: protocol.RandomPeerID(),
 		timeout:  p.Config.RequestTimeout,
-		dialer: &net.Dialer{
-			Timeout:   3 * time.Second,
-			KeepAlive: -1,
-		},
+		dialer:   dialer,
 	})
 
 	// Per-peer reputation cache. Defaults: Enabled=false, so the

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/spencernorton/DH-Waypoint/internal/concurrency"
+	"github.com/spencernorton/DH-Waypoint/internal/protocol"
 	"github.com/spencernorton/DH-Waypoint/internal/protocol/dht/ktable"
 	"go.uber.org/fx"
 )
@@ -40,6 +41,12 @@ func (c *crawler) runDiscoveredNodes(ctx context.Context) {
 
 			m := make(map[string]ktable.Node, 1)
 			for _, p := range ps {
+				// Every discovered node passes here, including the sender of
+				// an incoming query. Only public addresses are queried.
+				if !protocol.IsPublicAddr(p.Addr().Addr()) {
+					continue
+				}
+
 				if _, ok := m[p.Addr().Addr().String()]; !ok {
 					m[p.Addr().Addr().String()] = p
 					addrs = append(addrs, p.Addr().Addr())
