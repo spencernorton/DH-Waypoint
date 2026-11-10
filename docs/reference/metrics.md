@@ -105,7 +105,11 @@ Scrape-driven, 5-second per-scrape timeout.
 | `dh_waypoint_csam_blocklist_feed_refresh_duration_seconds` | histogram | `feed` | Per-feed refresh latency. |
 | `dh_waypoint_csam_blocklist_feed_entries` | gauge | `feed` | Active entries from each feed. `feed="local"` is this instance's own banned-keyword matches. |
 | `dh_waypoint_csam_blocklist_keyword_matches_total` | counter | `source` | Torrents dropped before storage because the name or a file path matched the built-in banned-keyword list. `source` is `crawler` or `import`. |
-| `dh_waypoint_csam_blocklist_stored_matches_total` | counter | `source`, `outcome` | Stored torrents that matched the built-in banned-keyword list. `source` is `processor`. `outcome` is `removed` (deleted with every row that held its name or a path) or `hidden_protected` (tied to the operator's own tools: kept, with a publication hold). |
+| `dh_waypoint_csam_blocklist_stored_matches_total` | counter | `source`, `outcome` | Stored torrents that matched the built-in banned-keyword list. `source` is `processor` or `sweep`. `outcome` is `removed` (deleted with every row that held its name or a path) or `hidden_protected` (tied to the operator's own tools: kept, with a publication hold). |
+| `dh_waypoint_csam_blocklist_sweep_rows_scanned` | gauge | `table` | Rows the sweep of stored rows has read in this pass. In a side table every row is read and only a row whose torrent is gone is tested. Saved across restarts. |
+| `dh_waypoint_csam_blocklist_sweep_matches` | gauge | `table`, `outcome` | Matches the sweep found in this pass. `outcome` is `removed` or `hidden_protected` with `CSAM_SWEEP_MODE=apply`, `would_remove` or `would_hide_protected` with `dry_run`. For a copy whose torrent is gone, `hidden_protected` means the copy was kept: there is no torrent to hold. Saved across restarts. |
+| `dh_waypoint_csam_blocklist_sweep_done` | gauge | — | 1 once the sweep has finished its pass for the current list and mode. 0 before that and with the sweep off. |
+| `dh_waypoint_csam_blocklist_sweep_batch_errors_total` | counter | — | Sweep batches that failed and are tried again after 30 seconds. It keeps rising while the sweep is stuck on one row. |
 | `dh_waypoint_csam_blocklist_entries` | gauge | — | Total bloom filter entries (all feeds plus local matches). |
 | `dh_waypoint_csam_blocklist_export_total` | counter | `outcome` | Per-export outcomes (local JSONL append + optional upstream POST). |
 
