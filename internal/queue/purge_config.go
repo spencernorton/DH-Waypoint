@@ -1,13 +1,11 @@
 // The queue purge worker (config section "queueclean") purges stale
 // queue_jobs rows. The DHT crawl pipeline writes process_torrent jobs
 // to a Postgres-backed queue; once a job moves to status='processed'
-// or 'failed' it can be safely deleted to keep the table + its 825 MB
-// queue_payload index lean.
+// or 'failed' it can be safely deleted to keep the table lean.
 //
-// Today's symptom (2026-04-26 audit): 13317 processed + 1393 failed
-// rows accumulated since boot, never purged. Index footprint
-// (queue_jobs_queue_payload_idx) grew to be larger than the data
-// itself.
+// Symptom that prompted it (2026-04-26 audit): 13317 processed + 1393
+// failed rows accumulated since boot, never purged, under a payload GIN
+// index larger than the data itself. Migration 00077 drops that index.
 //
 // Two-stage opt-in mirrors retention:
 //
