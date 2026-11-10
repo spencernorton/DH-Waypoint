@@ -118,7 +118,7 @@ type processExporterStub struct {
 	csamblocklist.Exporter
 }
 
-func (processExporterStub) Record(context.Context, protocol.InfoHash, string, []string) {}
+func (processExporterStub) Record(context.Context, model.Torrent) {}
 
 func processTestHash(prefix byte) protocol.InfoHash {
 	return protocol.InfoHash{prefix}

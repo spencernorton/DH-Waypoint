@@ -10,20 +10,16 @@ import (
 // Registered as the "csam_blocklist" configfx section; env prefix
 // CSAM_BLOCKLIST_*.
 //
-// Defaults: ENABLED with no feeds configured = NoOp until operator
-// opts in. Self-export ENABLED to a local JSONL file; outbound POST
-// is OFF by default and requires an explicit upstream URL.
+// Defaults: ENABLED with no feeds configured = no feed is fetched until
+// the operator opts in. Self-export ENABLED to a local JSONL file;
+// outbound POST is OFF by default and requires an explicit upstream URL.
 //
-// The split (Enabled-but-empty-feeds vs disabled) exists so the
-// pre-fetch infrastructure is permanently wired in the dhtcrawler.
-// Operators don't need a code change to opt into community feeds —
-// just env vars.
+// None of this switches the built-in banned-keyword check or the memory
+// of its matches (see MatchesBannedKeyword and Manager.Observe).
 type Config struct {
-	// Enabled — turn the blocklist on. When false, the package is a
-	// pure no-op: no feeds polled, no metrics emitted, IsBlocked
-	// always returns false. Default true; the safety case is strong
-	// enough that the runtime cost (one bloom filter test per
-	// discovery, no allocations) is justified.
+	// Enabled — turn the outside feeds on. When false, no feed is
+	// polled. This instance's own banned-keyword matches are
+	// remembered and rejected either way. Default true.
 	Enabled bool `yaml:"enabled"`
 
 	// FeedUrls — space-separated list of community-feed URLs. Each
@@ -34,9 +30,7 @@ type Config struct {
 	// docs/csam-defense.md and examples/csam-feed-format.md.
 	//
 	// Default empty — operator opts in. With no feeds configured the
-	// service runs in degenerate "always allow" mode and is
-	// effectively a NoOp (one extra bloom-filter test on the hot
-	// path checking an empty filter).
+	// filter holds only this instance's own banned-keyword matches.
 	//
 	// NOTE on the field-name spelling (FeedUrls, not FeedURLs): the
 	// config env resolver derives the env key from the Go FIELD NAME
@@ -118,9 +112,8 @@ type Config struct {
 	ExportUpstreamTimeout time.Duration `yaml:"export_upstream_timeout"`
 }
 
-// NewDefaultConfig returns the safe-defaults config: enabled with no
-// feeds (effective no-op until operator opts in), self-export to
-// local JSONL on, no outbound POST.
+// NewDefaultConfig returns the safe-defaults config: feeds enabled but
+// none configured, self-export to local JSONL on, no outbound POST.
 func NewDefaultConfig() Config {
 	return Config{
 		Enabled:                true,
@@ -160,15 +153,4 @@ func defaultExportFilePath() string {
 		return filepath.Join(xdg, "csam", "csam-double-hashes.jsonl")
 	}
 	return "data/csam-double-hashes.jsonl"
-}
-
-// HasAnyFeed reports whether at least one feed URL is configured.
-// Used by the factory to decide between Service and NoOp.
-func (c Config) HasAnyFeed() bool {
-	for _, u := range c.FeedUrls {
-		if u != "" {
-			return true
-		}
-	}
-	return false
 }

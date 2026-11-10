@@ -2,63 +2,32 @@
 
 ## Unreleased
 
-Security release. Read the first four entries before upgrading a Compose
-install: they change what a default install accepts.
-
-- **Compose publishes the HTTP port on `127.0.0.1` only.** It was published on
-  every host interface. Sonarr, Radarr, Prowlarr or Prometheus on another host
-  or in another Compose project lose access after the upgrade until `.env`
-  sets `DH_WAYPOINT_HTTP_BIND=0.0.0.0` (or one host address). Set
-  `HTTP_SERVER_API_KEY` and `TORZNAB_API_KEY` before you do. Containers on the
-  same Compose network are not affected.
-- **Compose now passes `HTTP_SERVER_API_KEY` to the container.** Both Compose
-  files left it out, so a key in `.env` protected nothing. If your `.env`
-  already has one, GraphQL, `/import`, `/metrics` and the REST API start
-  asking for it after the upgrade: add it to Prometheus and your other
-  clients.
-- **No website may read the API from a browser by default.** Every origin was
-  allowed. Name the origins of your own pages in
-  `HTTP_SERVER_CORS_ALLOWED_ORIGINS` (comma-separated, no spaces); both
-  Compose files pass it through.
-- **Two mutations refuse a call that names no target.** `queue.purgeJobs`
-  needs a queue or a status (an empty call emptied the whole queue), and
-  `torrent.deleteTags` needs at least one info hash (a call without one
-  removed the tags from every torrent).
-- The API key now covers `OPTIONS` requests, except a CORS preflight, which
-  never reaches a handler. `/metrics` and `/debug/pprof/*` answer `GET` only.
-- The payload verifier API (`/api/publication/v1/*`) and the internal
-  name-policy check (`/internal/name-policy/*`) no longer ask for the general
-  API key as well. Each keeps its own bearer token and stays refused while
-  that token is unset. With a general key set, their own token was rejected.
-- `evidence.list` and its `totalCount` leave out every row for a download that
-  qBittorrent holds in a `private` or `bitgrab` category, including the *arr
-  rows for the same torrent.
-- The request log replaces `apikey` and `passkey` query values and the passkey
-  in `/announce/<passkey>` and `/scrape/<passkey>` paths with `REDACTED`.
-- DHT: fix a data race in the routing table. A peer list or a node record
-  could be read while an announce or a reply changed it, which could stop the
-  process.
-- DHT: keep at most 200 peers per info hash, forget a peer 30 minutes after it
-  was last seen, and return at most 50 peers in one `get_peers` reply. Stored
-  peers were unbounded and never expired, and a reply carried all of them. A
-  hash whose peers have all expired is answered with the closest nodes.
-- DHT: accept a reply only from the address that was queried, add random bytes
-  to transaction IDs, and take at most 100 nodes, peers or samples from one
-  reply.
-- DHT: only public IPv4 addresses are kept as nodes or peers, whether they
-  come from a reply, from the sender of a query or from the saved bootstrap
-  list. Loopback, private, link-local, carrier-NAT and reserved addresses are
-  dropped, and so is every IPv6 address: the DHT socket is IPv4 only, and
-  several IPv6 forms can carry a private IPv4 address.
-- The metadata fetcher no longer connects to an address that fails the same
-  test. `METAINFO_REQUESTER_ALLOW_PRIVATE_ADDRS=true` turns this off for a
-  closed test network.
-- Bencode decoding is bounded by the size of the input: a length prefix can no
-  longer make the decoder reserve more memory than the message holds. Peer
-  messages larger than one metadata piece are skipped without being buffered,
-  memory for metadata is taken as its pieces arrive instead of at the size a
-  peer declares, and metadata whose nested lists and dictionaries add up to
-  more than eight times the metadata size limit is rejected.
+- Apply the built-in banned-keyword list before a torrent is stored, in every
+  processing mode. The list only ran inside the classifier, so `raw` and
+  `basic` (the default) never applied it, and in `full` the row was already
+  stored when it matched. The crawler now tests the fetched name and every
+  file path right after the name policy, the import API tests each item in its
+  gate, and the quarantine restore tests the snapshot before it writes the
+  torrent row. A match is dropped and nothing of it is stored. The check has
+  no switch: `CSAM_BLOCKLIST_ENABLED` now controls the community feeds only.
+  Rows stored before this release are not touched.
+- Remember those matches. The double hash of each match is saved in the new
+  `csam_local_observations` table (migration 00076; no infohash, name or path)
+  and loaded into the CSAM blocklist filter at start and at each refresh, so
+  the swarm is not contacted again, also after a restart and with no feed
+  configured. The blocklist is therefore always live;
+  `dh_waypoint_csam_blocklist_keyword_matches_total{source}` counts the
+  crawler and import drops and `feed_entries{feed="local"}` the remembered
+  hashes. Matches found before
+  storage are written to the export log as classifier matches already were.
+- Use one banned-keyword matcher. `csamblocklist.MatchesBannedKeyword` now
+  compiles the built-in `keywords.banned` list with the classifier's own
+  compiler and tests the text the classifier rule tests (base name plus file
+  base paths), replacing a hand-written pattern that could disagree with the
+  rule. `TestBannedKeywordParity`, which two comments cited but which did not
+  exist, now holds the two together. Keywords an operator adds to
+  `keywords.banned` in a classifier file keep their old behaviour: they act in
+  the classifier, in `full` mode, and do not drop a torrent before storage.
 - Stop the crawler fetching the same rejected torrents again. A torrent that
   failed the post-fetch ban check was meant to be blocked, but the block call
   is held while catalogue removal is disabled, so nothing was remembered and

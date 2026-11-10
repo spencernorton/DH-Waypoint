@@ -5,14 +5,21 @@ import (
 	"errors"
 	"testing"
 
+	mi "github.com/anacrolix/torrent/metainfo"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/spencernorton/DH-Waypoint/internal/csamblocklist"
+	"github.com/spencernorton/DH-Waypoint/internal/csamblocklist/csamblocklisttest"
 	"github.com/spencernorton/DH-Waypoint/internal/protocol"
+	"github.com/spencernorton/DH-Waypoint/internal/protocol/metainfo"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 // fakeCsam drops any hash whose first byte is in `block`.
-type fakeCsam struct{ block map[byte]struct{} }
+type fakeCsam struct {
+	block    map[byte]struct{}
+	observed *[]protocol.InfoHash
+}
 
 func (f fakeCsam) IsBlocked(h protocol.InfoHash) bool { _, ok := f.block[h[0]]; return ok }
 func (f fakeCsam) Filter(hs []protocol.InfoHash) []protocol.InfoHash {
@@ -23,6 +30,11 @@ func (f fakeCsam) Filter(hs []protocol.InfoHash) []protocol.InfoHash {
 		}
 	}
 	return out
+}
+func (f fakeCsam) Observe(_ context.Context, _ string, hs ...protocol.InfoHash) {
+	if f.observed != nil {
+		*f.observed = append(*f.observed, hs...)
+	}
 }
 func (fakeCsam) Refresh(context.Context) error    { return nil }
 func (fakeCsam) Snapshot() csamblocklist.Snapshot { return csamblocklist.Snapshot{} }
@@ -121,4 +133,33 @@ func TestGateItems(t *testing.T) {
 	out, err = newGate(fakeCsam{}, &fakeBlocking{}).gateItems(nil)
 	require.NoError(t, err)
 	assert.Empty(t, out)
+}
+
+// The built-in banned-keyword list applies to every import: by name, by a
+// file path in verified metadata, with no feed entry for the hash, and with
+// no blocklist wired at all. A match is dropped and its identities remembered.
+func TestGateItemsDropsBannedKeywordMatches(t *testing.T) {
+	banned := csamblocklisttest.BannedName()
+	items := mkItems(1, 2, 3, 4)
+	items[1].Name = banned + ".mkv"
+	v2 := protocol.InfoHash{42, 31: 7} // differs from its 160-bit wire key
+	items[2].metadata = &metainfo.ValidatedInfo{
+		Info:       metainfo.Info{Name: "Sample Collection"},
+		Identities: protocol.TorrentIdentities{V1: &items[2].InfoHash, V2: &v2},
+		Files:      []mi.FileInfo{{Path: []string{"Sample Folder", "readme.txt"}}, {Path: []string{banned, "clip 01.mp4"}}},
+	}
+
+	var observed []protocol.InfoHash
+	gate := newGate(fakeCsam{observed: &observed}, nil)
+	out, err := gate.gateItems(items)
+	require.NoError(t, err)
+	assert.Equal(t, []byte{1, 4}, firstBytes(out))
+	// Each identity is remembered with the wire key triage knows it by.
+	assert.Equal(t, []protocol.InfoHash{items[1].InfoHash, items[1].InfoHash,
+		items[2].InfoHash, items[2].InfoHash, v2, protocol.InfoHashV1(v2.WireID())}, observed)
+	assert.Equal(t, 2.0, testutil.ToFloat64(gate.metrics.gated.WithLabelValues("csam_keyword")))
+
+	out, err = newGate(nil, nil).gateItems(items)
+	require.NoError(t, err)
+	assert.Equal(t, []byte{1, 4}, firstBytes(out))
 }
