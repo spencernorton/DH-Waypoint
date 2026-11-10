@@ -96,13 +96,11 @@ func TestRunStartupRefresh_BoundedByBudget(t *testing.T) {
 	}
 }
 
-// runStartupRefresh — when manager is NoOp (Enabled=false), call
-// returns immediately without doing any work.
+// runStartupRefresh — a NoOp manager returns immediately without doing
+// any work.
 func TestRunStartupRefresh_NoOpReturnsImmediately(t *testing.T) {
-	cfg := csamblocklist.NewDefaultConfig()
-	cfg.Enabled = false
 	logger := zap.NewNop().Sugar()
-	mgr := csamblocklist.New(cfg, logger, csamblocklist.NewMetrics())
+	mgr := csamblocklist.NewNoOp()
 
 	startTime := time.Now()
 	runStartupRefresh(context.Background(), mgr, logger, 5*time.Second)

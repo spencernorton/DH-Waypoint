@@ -7,6 +7,9 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/spencernorton/DH-Waypoint/internal/cataloguerecovery"
+	"github.com/spencernorton/DH-Waypoint/internal/csamblocklist"
+	"github.com/spencernorton/DH-Waypoint/internal/csamblocklist/csamblocklisttest"
+	"github.com/spencernorton/DH-Waypoint/internal/protocol"
 	"github.com/spencernorton/DH-Waypoint/internal/verdicts"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -153,4 +156,39 @@ CREATE TRIGGER restore_capacity_barrier BEFORE INSERT ON torrents FOR EACH ROW E
 	var modified bool
 	require.NoError(t, pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM torrents) OR EXISTS(SELECT 1 FROM queue_jobs) OR EXISTS(SELECT 1 FROM torrent_verdict_events WHERE verdict='restored')`).Scan(&modified))
 	require.False(t, modified)
+}
+
+// A quarantine entry whose name or file paths match the built-in
+// banned-keyword list is never restored: no torrent row and no job is
+// written, the snapshot stays, and the double hash is remembered.
+func TestPostgresLegacyRestoreRefusesBannedKeyword(t *testing.T) {
+	for kind, update := range map[string]string{
+		"name": `UPDATE junkpurge_quarantine SET torrent_snapshot=jsonb_set(torrent_snapshot,'{name}',to_jsonb($2::text)) WHERE info_hash=$1`,
+		"path": `UPDATE junkpurge_quarantine SET files_snapshot=jsonb_set(files_snapshot,'{0,path}',to_jsonb($2::text||'/clip 01.mp4')) WHERE info_hash=$1`,
+	} {
+		t.Run(kind, func(t *testing.T) {
+			ctx, pool, vs := expiryIntegrationPool(t)
+			h := expiryHash(77)
+			seedExpirySnapshot(t, ctx, pool, vs, h)
+			_, err := pool.Exec(ctx, update, h, csamblocklisttest.BannedName())
+			require.NoError(t, err)
+			before := expirySnapshot(t, ctx, pool, h)
+
+			err = RestoreQuarantined(ctx, pool, vs, nil, zap.NewNop().Sugar(), hex.EncodeToString(h))
+			require.ErrorIs(t, err, ErrBannedKeyword)
+			require.ErrorIs(t, err, cataloguerecovery.ErrConflict) // the HTTP handler answers 409
+
+			var stored bool
+			require.NoError(t, pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM torrents) OR EXISTS(SELECT 1 FROM queue_jobs)`).Scan(&stored))
+			require.False(t, stored)
+			require.Equal(t, before, expirySnapshot(t, ctx, pool, h))
+
+			ih, err := protocol.ParseInfoHash(hex.EncodeToString(h))
+			require.NoError(t, err)
+			want := csamblocklist.DoubleHash(ih)
+			var source string
+			require.NoError(t, pool.QueryRow(ctx, `SELECT source FROM csam_local_observations WHERE double_hash=$1`, want[:]).Scan(&source))
+			require.Equal(t, "restore", source)
+		})
+	}
 }

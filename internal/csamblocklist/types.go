@@ -24,10 +24,19 @@ type Manager interface {
 	// the call sites read consistently.
 	Filter(infoHashes []protocol.InfoHash) []protocol.InfoHash
 
-	// Refresh forces an immediate re-fetch of all configured feeds.
+	// Observe remembers the identities of one torrent whose name or file
+	// paths matched the built-in banned-keyword list (see
+	// MatchesBannedKeyword). IsBlocked and Filter reject them from this
+	// call on, and across restarts. source names the caller for the
+	// metric and the stored row: "crawler" or "import". Only double
+	// hashes are kept. Failures are logged, never returned.
+	Observe(ctx context.Context, source string, infoHashes ...protocol.InfoHash)
+
+	// Refresh forces an immediate re-fetch of all configured feeds and
+	// re-reads this instance's own observations.
 	// Called periodically by a worker; can also be invoked from a
-	// debug endpoint for operator forcing. Returns the first feed
-	// error encountered, or nil. Partial success is normal — feeds
+	// debug endpoint for operator forcing. Returns the first error
+	// encountered, or nil. Partial success is normal — feeds
 	// that fail leave the previous loaded state intact for that feed.
 	Refresh(ctx context.Context) error
 
@@ -37,15 +46,14 @@ type Manager interface {
 
 	// Enabled reports whether the manager is doing real work. Returns
 	// false for NoOp; true for the live Service even before the first
-	// successful refresh.
+	// successful refresh, with or without feeds.
 	Enabled() bool
 }
 
 // Snapshot is the diagnostic view of the blocklist state.
 type Snapshot struct {
 	// EntryCount is the total number of double-hashes currently
-	// loaded across all feeds. Bloom filter capacity sets a soft
-	// upper bound; this value is the actual fill.
+	// loaded across all feeds and this instance's own observations.
 	EntryCount int
 
 	// BloomCapacity is the configured bloom filter capacity.

@@ -108,6 +108,7 @@ Because over 90% of raw Mainline DHT announcements are duplicate, dead, or unwan
      2. **Network Egress Gate (`request_meta_info.go`):** Re-checks `csamBlocklist.IsBlocked(hash)` immediately before dialing TCP in case a blocklist feed refreshed while the hash waited in a channel (`errCsamBlocklistBlocked`).
 3. **Persistent Blocking & Verdict Ledger (`internal/blocking`, `internal/verdicts`):**
    - `blockingManager.Filter` tests hashes against operator-configured blocklists stored as Gob-encoded `StableBloomFilter` rows in PostgreSQL.
+   - A torrent that fails the post-fetch ban check (empty name, under 1 KiB, invalid UTF-8) is added to that filter with `blockingManager.Ignore`, so it is not fetched again. `Ignore` removes nothing from the catalogue; `Block`, the removal path, stays held while catalogue removal is disabled.
    - `verdicts.BlockedSet` performs a single batched query per triage batch to drop quarantined, blacklisted, or tombstoned hashes before `get_peers`, preventing infinite BEP-9 re-fetch loops.
 4. **Per-Peer Reputation Cache (`internal/protocol/metainfo/peerrep`):**
    - `peerRepWrapper` sits *outside* the rate limiter in `internal/protocol/metainfo/metainforequester/peerrep_wrapper.go`.

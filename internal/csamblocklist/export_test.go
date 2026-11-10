@@ -13,6 +13,8 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/spencernorton/DH-Waypoint/internal/csamblocklist/csamblocklisttest"
+	"github.com/spencernorton/DH-Waypoint/internal/model"
 	"github.com/spencernorton/DH-Waypoint/internal/protocol"
 )
 
@@ -38,7 +40,7 @@ func TestMatchesBannedKeyword(t *testing.T) {
 	}
 	for _, title := range mustMatch {
 		t.Run("match/"+title, func(t *testing.T) {
-			if !matchesBannedKeyword(title, nil) {
+			if !MatchesBannedKeyword(model.Torrent{Name: title}) {
 				t.Errorf("expected %q to match banned keyword regex", title)
 			}
 		})
@@ -57,15 +59,26 @@ func TestMatchesBannedKeyword(t *testing.T) {
 	}
 	for _, title := range mustNotMatch {
 		t.Run("no_match/"+title, func(t *testing.T) {
-			if matchesBannedKeyword(title, nil) {
+			if MatchesBannedKeyword(model.Torrent{Name: title}) {
 				t.Errorf("expected %q NOT to match banned keyword regex", title)
 			}
 		})
 	}
+	// Every listed name also gets the classifier's own answer, in every
+	// shape a torrent is stored in.
+	var cases parityCases
+	for _, title := range mustMatch {
+		cases.shapes("listed match", title)
+	}
+	for _, title := range mustNotMatch {
+		cases.shapes("listed clean", title)
+	}
+	cases.check(t, bannedKeywordRule(t))
 }
 
 func TestMatchesBannedKeyword_FilePathsToo(t *testing.T) {
-	if !matchesBannedKeyword("innocuous.title", []string{"folder/preteen.thing/clip.mp4"}) {
+	if !MatchesBannedKeyword(model.Torrent{Name: "Sample Collection", FilesStatus: model.FilesStatusMulti,
+		Files: []model.TorrentFile{{Path: "disc 1/" + csamblocklisttest.BannedName() + ".mkv"}}}) {
 		t.Error("file path with banned keyword did not match")
 	}
 }
@@ -74,7 +87,7 @@ func TestNewExporter_NoOpWhenDisabled(t *testing.T) {
 	cfg := NewDefaultConfig()
 	cfg.ExportEnabled = false
 	exp := NewExporter(cfg, nil, NewMetrics())
-	exp.Record(context.Background(), protocol.InfoHash{1, 2, 3}, "preteen.thing", nil)
+	exp.Record(context.Background(), model.Torrent{InfoHash: protocol.InfoHash{1, 2, 3}, Name: csamblocklisttest.BannedName()})
 	if err := exp.Close(); err != nil {
 		t.Fatalf("Close error: %v", err)
 	}
@@ -93,8 +106,8 @@ func TestExporter_AppendsLocalJSONL(t *testing.T) {
 	for i := range ih {
 		ih[i] = byte(i + 0x10)
 	}
-	exp.Record(context.Background(), ih, "underage.thing", nil)
-	exp.Record(context.Background(), protocol.InfoHash{1, 2, 3}, "totally.fine.movie.2024", nil) // should be skipped
+	exp.Record(context.Background(), model.Torrent{InfoHash: ih, Name: csamblocklisttest.BannedName()})
+	exp.Record(context.Background(), model.Torrent{InfoHash: protocol.InfoHash{1, 2, 3}, Name: "totally.fine.movie.2024"}) // should be skipped
 
 	if err := exp.Close(); err != nil {
 		t.Fatalf("Close error: %v", err)
@@ -163,7 +176,7 @@ func TestExporter_UpstreamPOST(t *testing.T) {
 	exp := NewExporter(cfg, nil, NewMetrics())
 	defer exp.Close()
 
-	exp.Record(context.Background(), protocol.InfoHash{1, 2, 3}, "preteen.thing", nil)
+	exp.Record(context.Background(), model.Torrent{InfoHash: protocol.InfoHash{1, 2, 3}, Name: csamblocklisttest.BannedName()})
 	if got := atomic.LoadInt32(&hits); got != 1 {
 		t.Errorf("upstream hits = %d, want 1", got)
 	}

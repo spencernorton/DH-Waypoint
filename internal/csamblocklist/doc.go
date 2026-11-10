@@ -26,23 +26,34 @@
 //   - On every DHT-discovered infohash, we compute the same
 //     double-hash and reject if matched, BEFORE any BEP-9 fetch.
 //
+// # Built-in banned-keyword list
+//
+// MatchesBannedKeyword tests a torrent against the classifier's built-in
+// `keywords.banned` list. The crawler, the import gate and the quarantine
+// restore call it before they store anything, in every processing mode,
+// and hand a match to Manager.Observe. Observe saves the double-hash in
+// csam_local_observations and the filter rejects the hash from then on,
+// across restarts. This part has no switch and needs no feed.
+//
 // # Honest limits
 //
 // First observation across the network still incurs one BEP-9 fetch
-// per network — the post-fetch CEL classifier (`keywords.banned`) +
-// BlockingManager + this package's self-export pipeline together
-// turn that single first-observation into a community signal that
-// closes the window for everyone else. The defense converges, it does
-// not eliminate.
+// per network — the banned-keyword check + this package's self-export
+// pipeline together turn that single first-observation into a community
+// signal that closes the window for everyone else. The defense
+// converges, it does not eliminate.
 //
 // # Layered defense (in order of operation)
 //
 //  1. csamblocklist.Filter — pre-fetch reject for community-known
-//     double-hashes. This package.
+//     double-hashes and this instance's own banned-keyword matches.
+//     This package.
 //  2. BlockingManager.Filter — pre-fetch reject for self-observed
 //     hashes. internal/blocking.
-//  3. CEL classifier `keywords.banned` workflow — post-fetch delete
-//     action when title or file paths match. internal/classifier.
+//  3. MatchesBannedKeyword — post-fetch, before storage: a match is
+//     dropped and observed. The CEL classifier's `keywords.banned`
+//     rule is the same test for rows that are already stored
+//     (PROCESSING_MODE=full). internal/classifier.
 //  4. processor → BlockingManager.Block — when (3) fires, the hash
 //     enters this instance's BlockingManager so future DHT
 //     announcements are caught at (2).
@@ -53,9 +64,9 @@
 //
 // # Defaults
 //
-//   - Enabled by default (CSAM_BLOCKLIST_ENABLED=true)
-//   - No feeds configured by default → Manager is effectively NoOp
-//     until the operator opts into a feed
+//   - Feeds enabled by default (CSAM_BLOCKLIST_ENABLED=true)
+//   - No feeds configured by default → the filter holds only this
+//     instance's own matches until the operator opts into a feed
 //   - Self-export ENABLED writing locally; outbound POST OFF until
 //     operator opts in
 //

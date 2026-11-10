@@ -20,6 +20,9 @@ import (
 type Manager interface {
 	Filter(ctx context.Context, hashes []protocol.InfoHash) ([]protocol.InfoHash, error)
 	Block(ctx context.Context, hashes []protocol.InfoHash, mechanism, reason string, flush bool) error
+	// Ignore makes Filter drop these hashes from now on. Unlike Block it removes
+	// nothing from the catalogue, so it works while catalogue removal is off.
+	Ignore(hashes []protocol.InfoHash)
 	Flush(ctx context.Context) error
 }
 
@@ -33,7 +36,7 @@ func WithRecovery(base Manager, recovery *cataloguerecovery.Store) (Manager, err
 	}
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
-	if m.filter != nil || len(m.buffer) != 0 || m.recovery != nil {
+	if m.filter != nil || len(m.buffer) != 0 || len(m.ignored) != 0 || m.recovery != nil {
 		return nil, fmt.Errorf("blocking: attach recovery before manager use")
 	}
 	m.recovery = recovery
@@ -45,6 +48,7 @@ type manager struct {
 	mutex         sync.Mutex
 	pool          *pgxpool.Pool
 	buffer        map[protocol.InfoHash]struct{}
+	ignored       map[protocol.InfoHash]struct{}
 	filter        *bloom.StableBloomFilter
 	maxBufferSize int
 	lastFlushedAt time.Time
@@ -65,6 +69,9 @@ func (m *manager) Filter(ctx context.Context, hashes []protocol.InfoHash) ([]pro
 
 	for _, hash := range hashes {
 		if _, ok := m.buffer[hash]; ok {
+			continue
+		}
+		if _, ok := m.ignored[hash]; ok {
 			continue
 		}
 
@@ -131,11 +138,25 @@ func (m *manager) Block(ctx context.Context, hashes []protocol.InfoHash, mechani
 	return nil
 }
 
+// Ignore only buffers: the hashes join the persisted bloom filter on the next
+// flush, which Filter triggers once the buffer is full or old enough.
+func (m *manager) Ignore(hashes []protocol.InfoHash) {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+
+	if m.ignored == nil {
+		m.ignored = make(map[protocol.InfoHash]struct{}, len(hashes))
+	}
+	for _, hash := range hashes {
+		m.ignored[hash] = struct{}{}
+	}
+}
+
 func (m *manager) Flush(ctx context.Context) error {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
 
-	if len(m.buffer) == 0 {
+	if len(m.buffer) == 0 && len(m.ignored) == 0 {
 		return nil
 	}
 
@@ -207,6 +228,9 @@ func (m *manager) flush(ctx context.Context) error {
 	for _, hash := range hashes {
 		bf.Add(hash.Bytes())
 	}
+	for hash := range m.ignored {
+		bf.Add(hash.Bytes())
+	}
 
 	obj, err := lobs.Open(ctx, oid, pgx.LargeObjectModeWrite)
 	if err != nil {
@@ -241,6 +265,7 @@ func (m *manager) flush(ctx context.Context) error {
 	}
 
 	m.buffer = make(map[protocol.InfoHash]struct{})
+	m.ignored = nil
 	m.filter = bf
 	m.lastFlushedAt = now
 
@@ -248,5 +273,5 @@ func (m *manager) flush(ctx context.Context) error {
 }
 
 func (m *manager) shouldFlush() bool {
-	return len(m.buffer) >= m.maxBufferSize || time.Since(m.lastFlushedAt) >= m.maxFlushWait
+	return len(m.buffer)+len(m.ignored) >= m.maxBufferSize || time.Since(m.lastFlushedAt) >= m.maxFlushWait
 }

@@ -85,9 +85,9 @@ type crawler struct {
 	// it. See internal/wantbridge for the matcher + tier semantics.
 	wantbridge wantbridge.Wantbridge
 	// csamBlocklist is the pre-fetch defense for community-known
-	// CSAM infohashes (issue #494). Always non-nil — wired as the
-	// Manager interface, with a NoOp implementation when no feeds
-	// are configured. Consulted in infohash_triage (batch Filter
+	// CSAM infohashes (issue #494) and for this instance's own
+	// banned-keyword matches, which request_meta_info hands to its
+	// Observe. Always non-nil. Consulted in infohash_triage (batch Filter
 	// before BlockingManager.Filter) and as a defense-in-depth
 	// IsBlocked check in request_meta_info just before the BEP-9
 	// fetch begins. See internal/csamblocklist for the feed format

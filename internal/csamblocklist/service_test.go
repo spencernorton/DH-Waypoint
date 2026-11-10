@@ -2,6 +2,7 @@ package csamblocklist
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/spencernorton/DH-Waypoint/internal/lazy"
 	"github.com/spencernorton/DH-Waypoint/internal/protocol"
 )
 
@@ -34,23 +37,71 @@ func TestNoOp_AlwaysAllows(t *testing.T) {
 	}
 }
 
-func TestNew_NoOpWhenDisabled(t *testing.T) {
-	cfg := NewDefaultConfig()
-	cfg.Enabled = false
-	cfg.FeedUrls = []string{"https://example.invalid/feed"}
-	m := New(cfg, nil, nil)
-	if m.Enabled() {
-		t.Fatal("New(disabled) returned enabled Manager")
+// New always returns the live service: this instance's own banned-keyword
+// matches must be remembered with no feed and with feeds switched off.
+func TestNew_LiveWithoutFeeds(t *testing.T) {
+	for name, cfg := range map[string]Config{
+		"feeds off": func() Config { c := NewDefaultConfig(); c.Enabled = false; return c }(),
+		"no feed":   NewDefaultConfig(),
+	} {
+		t.Run(name, func(t *testing.T) {
+			m := New(cfg, nil, nil, nil, nil)
+			if !m.Enabled() {
+				t.Fatal("New must return the live service")
+			}
+			seen, other := protocol.InfoHash{1}, protocol.InfoHash{2}
+			m.Observe(context.Background(), "crawler", seen, seen)
+			if !m.IsBlocked(seen) || m.IsBlocked(other) {
+				t.Fatal("an observed hash must be blocked at once, and only that hash")
+			}
+			if got := m.Filter([]protocol.InfoHash{seen, other}); len(got) != 1 || got[0] != other {
+				t.Fatalf("Filter kept %v", got)
+			}
+			// With no database the observation has nowhere else to live,
+			// so a refresh must not forget it.
+			if err := m.Refresh(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if !m.IsBlocked(seen) {
+				t.Fatal("refresh dropped an observation that was never saved")
+			}
+		})
 	}
 }
 
-func TestNew_NoOpWhenNoFeed(t *testing.T) {
+// A refresh that cannot read the observations table reports the error and
+// forgets nothing: rows read earlier stay in the filter and unsaved matches
+// stay pending.
+func TestRefresh_KeepsObservationsWhenTheTableCannotBeRead(t *testing.T) {
+	down := lazy.New(func() (*pgxpool.Pool, error) { return nil, errors.New("database down") })
+	s := New(NewDefaultConfig(), nil, nil, down, nil).(*service)
+	loaded, unsaved := protocol.InfoHash{1}, protocol.InfoHash{2}
+	s.lastGoodLocal = [][DoubleHashLen]byte{DoubleHash(loaded)}
+	s.Observe(context.Background(), "crawler", unsaved)
+
+	for range 2 {
+		if err := s.Refresh(context.Background()); err == nil {
+			t.Fatal("Refresh must report that the observations were not read")
+		}
+		if !s.IsBlocked(loaded) || !s.IsBlocked(unsaved) || s.IsBlocked(protocol.InfoHash{3}) {
+			t.Fatal("a failed read must keep every remembered hash blocked, and only those")
+		}
+	}
+}
+
+// CSAM_BLOCKLIST_ENABLED=false switches the outside feeds off: none is fetched.
+func TestRefresh_FeedsOffFetchesNothing(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { hits.Add(1) }))
+	defer srv.Close()
 	cfg := NewDefaultConfig()
-	cfg.Enabled = true
-	cfg.FeedUrls = nil
-	m := New(cfg, nil, nil)
-	if m.Enabled() {
-		t.Fatal("New(no feeds) returned enabled Manager")
+	cfg.Enabled = false
+	cfg.FeedUrls = []string{srv.URL}
+	if err := New(cfg, nil, nil, nil, nil).Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if hits.Load() != 0 {
+		t.Fatalf("feed fetched %d times with feeds off", hits.Load())
 	}
 }
 
