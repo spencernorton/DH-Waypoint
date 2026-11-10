@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- Stop the crawler fetching the same rejected torrents again. A torrent that
+  failed the post-fetch ban check was meant to be blocked, but the block call
+  is held while catalogue removal is disabled, so nothing was remembered and
+  the metadata was fetched again every time the hash was seen. The blocking
+  manager gains `Ignore`, which adds hashes to its persisted bloom filter and
+  removes nothing; the crawler uses it for ban-check rejections, under both
+  the wire key and the verified identities. `Block` is unchanged and still
+  held. Hashes added this way are also refused by the importer, as blocked
+  hashes always were.
+- Index torrents with short names. The ban check refused any name under 8
+  bytes, which dropped real titles such as `Tenet` or `1917`. Only an empty
+  name is refused now.
+
 ## 5.9.3 — 2026-11-09
 
 - Upgrade `golang.org/x/net` from 0.60.0 to 0.62.0 for GO-2026-6860

@@ -50,6 +50,7 @@ func (fakeBlocking) Block(context.Context, []protocol.InfoHash, string, string, 
 	return nil
 }
 func (fakeBlocking) Flush(context.Context) error { return nil }
+func (fakeBlocking) Ignore([]protocol.InfoHash)  {}
 
 func mkItems(firstBytes ...byte) []Item {
 	items := make([]Item, len(firstBytes))
