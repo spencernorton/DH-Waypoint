@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Run the worker stop hooks on `SIGTERM` and `SIGINT`. The signal now cancels
+  the command context, so `worker run` returns and stops each worker with a
+  live context, bounded at 10 seconds, before the database pool and DHT server
+  close. Until now a container stop skipped those hooks: open HTTP requests
+  were cut instead of drained and the crawler did not save its bootstrap node
+  snapshot. Known gap: the crawler still drops the batch of fetched torrents
+  that is waiting to be stored (up to one minute of work) when it stops.
+
 ## 5.9.3 — 2026-11-09
 
 - Upgrade `golang.org/x/net` from 0.60.0 to 0.62.0 for GO-2026-6860
