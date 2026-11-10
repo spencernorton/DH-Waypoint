@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+- Apply the built-in banned-keyword list before a torrent is stored, in every
+  processing mode. The list only ran inside the classifier, so `raw` and
+  `basic` (the default) never applied it, and in `full` the row was already
+  stored when it matched. The crawler now tests the fetched name and every
+  file path right after the name policy, the import API tests each item in its
+  gate, and the quarantine restore tests the snapshot before it writes the
+  torrent row. A match is dropped and nothing of it is stored. The check has
+  no switch: `CSAM_BLOCKLIST_ENABLED` now controls the community feeds only.
+  Rows stored before this release are not touched.
+- Remember those matches. The double hash of each match is saved in the new
+  `csam_local_observations` table (migration 00076; no infohash, name or path)
+  and loaded into the CSAM blocklist filter at start and at each refresh, so
+  the swarm is not contacted again, also after a restart and with no feed
+  configured. The blocklist is therefore always live;
+  `dh_waypoint_csam_blocklist_keyword_matches_total{source}` counts the
+  crawler and import drops and `feed_entries{feed="local"}` the remembered
+  hashes. Matches found before
+  storage are written to the export log as classifier matches already were.
+- Use one banned-keyword matcher. `csamblocklist.MatchesBannedKeyword` now
+  compiles the built-in `keywords.banned` list with the classifier's own
+  compiler and tests the text the classifier rule tests (base name plus file
+  base paths), replacing a hand-written pattern that could disagree with the
+  rule. `TestBannedKeywordParity`, which two comments cited but which did not
+  exist, now holds the two together. Keywords an operator adds to
+  `keywords.banned` in a classifier file keep their old behaviour: they act in
+  the classifier, in `full` mode, and do not drop a torrent before storage.
 - Stop the crawler fetching the same rejected torrents again. A torrent that
   failed the post-fetch ban check was meant to be blocked, but the block call
   is held while catalogue removal is disabled, so nothing was remembered and

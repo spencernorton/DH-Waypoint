@@ -115,7 +115,7 @@ func TestExcludedDeletesDoNotBurnBudget(t *testing.T) {
 		{model.Torrent{InfoHash: protocol.InfoHashV1(protocol.ID{9}), Name: "clean"}, nil},
 	}
 	for _, e := range excluded {
-		if _, ok := sampledDeleteName(e.torrent, e.paths, b); ok {
+		if _, ok := sampledDeleteName(withPaths(e.torrent, e.paths), b); ok {
 			t.Fatalf("excluded torrent %q recorded a name", e.torrent.Name)
 		}
 	}
@@ -126,13 +126,13 @@ func TestExcludedDeletesDoNotBurnBudget(t *testing.T) {
 	// The full cap is still available to real, eligible deletes.
 	for i := 0; i < 2; i++ {
 		if _, ok := sampledDeleteName(
-			model.Torrent{InfoHash: inSample, Name: "Some.Movie.2024.GERMAN.1080p"}, nil, b,
+			model.Torrent{InfoHash: inSample, Name: "Some.Movie.2024.GERMAN.1080p"}, b,
 		); !ok {
 			t.Fatalf("eligible delete %d was refused despite available budget", i)
 		}
 	}
 	if _, ok := sampledDeleteName(
-		model.Torrent{InfoHash: inSample, Name: "Some.Movie.2024.GERMAN.1080p"}, nil, b,
+		model.Torrent{InfoHash: inSample, Name: "Some.Movie.2024.GERMAN.1080p"}, b,
 	); ok {
 		t.Fatal("recorded past the cap")
 	}
@@ -155,7 +155,7 @@ func TestEvidenceStopsCarryingNamesOnceSpent(t *testing.T) {
 	hasName := func() bool {
 		var ev map[string]any
 		if uerr := json.Unmarshal(
-			classifierDeleteEvidence("norvi", err, tor, nil, b), &ev,
+			classifierDeleteEvidence("norvi", err, tor, b), &ev,
 		); uerr != nil {
 			t.Fatalf("evidence is not valid JSON: %v", uerr)
 		}

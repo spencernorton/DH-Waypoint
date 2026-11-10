@@ -223,40 +223,26 @@ func (c processor) Process(ctx context.Context, params MessageParams) error {
 				}
 				if errors.Is(classifyErr, classification.ErrDeleteTorrent) {
 					if params.ReprocessRequestID != "" {
-						paths := make([]string, 0, len(torrent.Files))
-						for _, file := range torrent.Files {
-							paths = append(paths, file.Path)
-						}
-						c.csamExporter.Record(ctx, torrent.InfoHash, torrent.Name, paths)
+						c.csamExporter.Record(ctx, torrent)
 						return // retain the source and deferred receipt; never remove it
 					}
 					infoHashesToDelete = append(infoHashesToDelete, torrent.InfoHash)
 					deleteObservations = append(deleteObservations, deleteObservation{cl.ContentType, classifyErr})
-					filePathsForEvidence := make([]string, 0, len(torrent.Files))
-					for _, f := range torrent.Files {
-						filePathsForEvidence = append(filePathsForEvidence, f.Path)
-					}
-					evidenceBytes := classifierDeleteEvidence(workflowName, classifyErr, torrent, filePathsForEvidence, c.deleteAuditBudget)
+					evidenceBytes := classifierDeleteEvidence(workflowName, classifyErr, torrent, c.deleteAuditBudget)
 					reason := string(evidenceBytes)
 					if reason == "" {
 						reason = "classifier_delete"
 					}
 					deleteReasons = append(deleteReasons, reason)
-					// The independent CSAM observation exporter verifies the
-					// name and paths even when destructive admission is held.
-					filePaths := make([]string, 0, len(torrent.Files))
-					for _, f := range torrent.Files {
-						filePaths = append(filePaths, f.Path)
-					}
-					// CSAM self-export hook — exporter independently
-					// re-checks the title + file paths against the
-					// banned-keyword regex (so other classifier-driven
-					// deletes like flags.delete_xxx don't get mistaken
-					// for CSAM observations). When matched, the
+					// CSAM self-export hook — the exporter re-checks the
+					// torrent against the built-in banned-keyword list (so
+					// other classifier-driven deletes like flags.delete_xxx
+					// don't get mistaken for CSAM observations), even when
+					// destructive admission is held. When matched, the
 					// infohash is double-hashed (SHA-256 of the SHA-1
 					// infohash) and appended to the local JSONL log;
 					// the raw infohash never leaves this hook.
-					c.csamExporter.Record(ctx, torrent.InfoHash, torrent.Name, filePaths)
+					c.csamExporter.Record(ctx, torrent)
 				} else {
 					failedHashes = append(failedHashes, torrent.InfoHash)
 					errs = append(errs, classifyErr)
@@ -429,9 +415,10 @@ const deleteNameSampleShare = 2
 // Two exclusions, both mandatory:
 //
 //   - CSAM. A banned-keyword delete never records a name. The check is
-//     csamblocklist.MatchesBannedKeyword — the same parity-pinned predicate the
-//     exporter uses to keep other delete reasons out of the CSAM log, applied
-//     here in the opposite direction. Not a rule_path test: rule indices move
+//     csamblocklist.MatchesBannedKeyword — the predicate the exporter uses to
+//     keep other delete reasons out of the CSAM log, applied here in the
+//     opposite direction. csamblocklist.TestBannedKeywordParity holds it to
+//     the classifier rule. Not a rule_path test: rule indices move
 //     when the operator edits the workflow, and a stale index would silently
 //     start recording banned-keyword names.
 //   - Private torrents. Mirrors llmmatch.nativePrivateBlocked and junkpurge's
@@ -441,7 +428,6 @@ func classifierDeleteEvidence(
 	workflow string,
 	classifyErr error,
 	torrent model.Torrent,
-	filePaths []string,
 	budget *deleteAuditBudget,
 ) []byte {
 	ev := map[string]any{"workflow": workflow}
@@ -449,7 +435,7 @@ func classifierDeleteEvidence(
 	if errors.As(classifyErr, &re) && len(re.Path) > 0 {
 		ev["rule_path"] = re.Path
 	}
-	if name, ok := sampledDeleteName(torrent, filePaths, budget); ok {
+	if name, ok := sampledDeleteName(torrent, budget); ok {
 		ev["name"] = name
 	}
 	b, err := json.Marshal(ev)
@@ -469,7 +455,6 @@ func classifierDeleteEvidence(
 // deletes seen.
 func sampledDeleteName(
 	t model.Torrent,
-	filePaths []string,
 	budget *deleteAuditBudget,
 ) (string, bool) {
 	if !budget.enabled() {
@@ -482,7 +467,7 @@ func sampledDeleteName(
 	if len(hash) == 0 || hash[0] >= deleteNameSampleShare {
 		return "", false
 	}
-	if csamblocklist.MatchesBannedKeyword(t.Name, filePaths) {
+	if csamblocklist.MatchesBannedKeyword(t) {
 		return "", false
 	}
 	if !budget.consume() {

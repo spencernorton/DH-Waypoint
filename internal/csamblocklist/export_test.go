@@ -13,51 +13,55 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/spencernorton/DH-Waypoint/internal/model"
 	"github.com/spencernorton/DH-Waypoint/internal/protocol"
 )
 
+// Made-up names. TestBannedKeywordParity reuses both lists.
+var mustMatchNames = []string{
+	"some.preteen.thing",
+	"PTHC.archive.zip",
+	"young video models 2009",
+	"underage.material",
+	"random.kinderkutje.scene",
+	"foo.opva.bar",
+	"YVM-stuff",
+	"event.10yo.party",
+	"event.15 y o.party",
+	"child porn 2",
+	"child-porn-rip",
+	"kiddyporn",
+	"kiddieporn",
+	"pornochild stuff",
+	"hebefilia.pack",
+	"paedophile-content",
+	"pedophile-content",
+}
+
+var mustNotMatchNames = []string{
+	"",
+	"Inception 2010 1080p BluRay",
+	"Some.TV.Show.S01E02.1080p",
+	"Music Album 2020",
+	"linux.iso",
+	"normal documentary about minors and law", // no banned token (whole-word)
+	"underaged", // 'underage' wraps a longer word — \b boundary requires whole-word; check this is correct
+	"kidporn",   // no separator — 'kid' isn't 'kiddy'/'kiddie'
+	"oldyo",     // 'yo' alone isn't enough; pattern requires age qualifier
+}
+
 func TestMatchesBannedKeyword(t *testing.T) {
-	mustMatch := []string{
-		"some.preteen.thing",
-		"PTHC.archive.zip",
-		"young video models 2009",
-		"underage.material",
-		"random.kinderkutje.scene",
-		"foo.opva.bar",
-		"YVM-stuff",
-		"event.10yo.party",
-		"event.15 y o.party",
-		"child porn 2",
-		"child-porn-rip",
-		"kiddyporn",
-		"kiddieporn",
-		"pornochild stuff",
-		"hebefilia.pack",
-		"paedophile-content",
-		"pedophile-content",
-	}
-	for _, title := range mustMatch {
+	for _, title := range mustMatchNames {
 		t.Run("match/"+title, func(t *testing.T) {
-			if !matchesBannedKeyword(title, nil) {
+			if !MatchesBannedKeyword(model.Torrent{Name: title}) {
 				t.Errorf("expected %q to match banned keyword regex", title)
 			}
 		})
 	}
 
-	mustNotMatch := []string{
-		"",
-		"Inception 2010 1080p BluRay",
-		"Some.TV.Show.S01E02.1080p",
-		"Music Album 2020",
-		"linux.iso",
-		"normal documentary about minors and law", // no banned token (whole-word)
-		"underaged", // 'underage' wraps a longer word — \b boundary requires whole-word; check this is correct
-		"kidporn",   // no separator — 'kid' isn't 'kiddy'/'kiddie'
-		"oldyo",     // 'yo' alone isn't enough; pattern requires age qualifier
-	}
-	for _, title := range mustNotMatch {
+	for _, title := range mustNotMatchNames {
 		t.Run("no_match/"+title, func(t *testing.T) {
-			if matchesBannedKeyword(title, nil) {
+			if MatchesBannedKeyword(model.Torrent{Name: title}) {
 				t.Errorf("expected %q NOT to match banned keyword regex", title)
 			}
 		})
@@ -65,7 +69,7 @@ func TestMatchesBannedKeyword(t *testing.T) {
 }
 
 func TestMatchesBannedKeyword_FilePathsToo(t *testing.T) {
-	if !matchesBannedKeyword("innocuous.title", []string{"folder/preteen.thing/clip.mp4"}) {
+	if !MatchesBannedKeyword(model.Torrent{Name: "innocuous.title", FilesStatus: model.FilesStatusMulti, Files: []model.TorrentFile{{Path: "folder/preteen.thing/clip.mp4"}}}) {
 		t.Error("file path with banned keyword did not match")
 	}
 }
@@ -74,7 +78,7 @@ func TestNewExporter_NoOpWhenDisabled(t *testing.T) {
 	cfg := NewDefaultConfig()
 	cfg.ExportEnabled = false
 	exp := NewExporter(cfg, nil, NewMetrics())
-	exp.Record(context.Background(), protocol.InfoHash{1, 2, 3}, "preteen.thing", nil)
+	exp.Record(context.Background(), model.Torrent{InfoHash: protocol.InfoHash{1, 2, 3}, Name: "preteen.thing"})
 	if err := exp.Close(); err != nil {
 		t.Fatalf("Close error: %v", err)
 	}
@@ -93,8 +97,8 @@ func TestExporter_AppendsLocalJSONL(t *testing.T) {
 	for i := range ih {
 		ih[i] = byte(i + 0x10)
 	}
-	exp.Record(context.Background(), ih, "underage.thing", nil)
-	exp.Record(context.Background(), protocol.InfoHash{1, 2, 3}, "totally.fine.movie.2024", nil) // should be skipped
+	exp.Record(context.Background(), model.Torrent{InfoHash: ih, Name: "underage.thing"})
+	exp.Record(context.Background(), model.Torrent{InfoHash: protocol.InfoHash{1, 2, 3}, Name: "totally.fine.movie.2024"}) // should be skipped
 
 	if err := exp.Close(); err != nil {
 		t.Fatalf("Close error: %v", err)
@@ -163,7 +167,7 @@ func TestExporter_UpstreamPOST(t *testing.T) {
 	exp := NewExporter(cfg, nil, NewMetrics())
 	defer exp.Close()
 
-	exp.Record(context.Background(), protocol.InfoHash{1, 2, 3}, "preteen.thing", nil)
+	exp.Record(context.Background(), model.Torrent{InfoHash: protocol.InfoHash{1, 2, 3}, Name: "preteen.thing"})
 	if got := atomic.LoadInt32(&hits); got != 1 {
 		t.Errorf("upstream hits = %d, want 1", got)
 	}
