@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- **The clean-up of stored banned-keyword matches deletes by default.** A
+  background sweep reads every stored torrent once, with its file paths, and
+  every copy of a name that outlived its torrent: junk-purge quarantine
+  entries, judgments and batch items, catalogue-recovery snapshots, the name
+  that earlier releases sampled into a classifier-delete verdict, and the
+  frozen evaluation set. It uses the matcher of the live check and hands each
+  match to the removal described below: deleted with no copy and no undo, or
+  hidden when it is tied to the operator's own tools. `CSAM_SWEEP_MODE` is
+  `apply` (default), `dry_run` (count only) or `off`. To see the numbers
+  before the sweep deletes anything, start this release with
+  `CSAM_SWEEP_MODE=dry_run`, wait for
+  `dh_waypoint_csam_blocklist_sweep_done` to reach 1, read
+  `dh_waypoint_csam_blocklist_sweep_matches{table,outcome}`, then switch to
+  `apply`. The setting stops the sweep only: in every mode the processor
+  removes a stored match when it loads one. Give every worker process the same
+  mode. The position and the counts are saved in `key_values`, so a restart
+  continues the pass. No migration.
 - Remove a stored torrent that matches the built-in banned-keyword list. The
   processor tests every torrent it loads, in every processing mode and for
   reprocess requests, before the classifier or any optional processor sees
@@ -31,8 +48,8 @@
   gate, and the quarantine restore tests the snapshot before it writes the
   torrent row. A match is dropped and nothing of it is stored. The check has
   no switch: `CSAM_BLOCKLIST_ENABLED` now controls the community feeds only.
-  Rows stored before this release are removed when the processor next loads
-  them (see above); nothing walks the stored catalogue yet.
+  Rows stored before this release are removed by the sweep and when the
+  processor next loads them (see above).
 - Remember those matches. The double hash of each match is saved in the new
   `csam_local_observations` table (migration 00076; no infohash, name or path)
   and loaded into the CSAM blocklist filter at start and at each refresh, so

@@ -158,16 +158,22 @@ func (s *service) RemoveStored(ctx context.Context, source string, t model.Torre
 	if !MatchesBannedKeyword(t) {
 		return "", ErrNotBannedKeyword
 	}
+	hashes := [][]byte{t.InfoHash.Bytes()}
+	if t.InfoHashV2 != nil {
+		hashes = append(hashes, t.InfoHashV2.Bytes())
+	}
+	return s.removeMatched(ctx, source, hashes)
+}
+
+// removeMatched is RemoveStored for a caller that matched the name itself:
+// the sweep, which reads names from tables that hold no model.Torrent.
+func (s *service) removeMatched(ctx context.Context, source string, hashes [][]byte) (Outcome, error) {
 	if s.pool == nil {
 		return "", errors.New("csamblocklist: no database to remove a stored match from")
 	}
 	pool, err := s.pool.Get()
 	if err != nil {
 		return "", err
-	}
-	hashes := [][]byte{t.InfoHash.Bytes()}
-	if t.InfoHashV2 != nil {
-		hashes = append(hashes, t.InfoHashV2.Bytes())
 	}
 	outcome, hashes, err := removeStored(ctx, pool, hashes)
 	if err != nil {

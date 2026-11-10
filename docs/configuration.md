@@ -209,6 +209,7 @@ A pre-fetch double-hashed blocklist filters infohashes before DH-Waypoint ever d
 | Variable | Default | Purpose |
 |---|---|---|
 | `CSAM_BLOCKLIST_ENABLED` | `true` | Switches the community feeds. `false` fetches none. The built-in banned-keyword check before storage and the removal of stored matches have no switch. |
+| `CSAM_SWEEP_MODE` | `apply` | One background pass over the rows stored before the banned-keyword check existed. `apply` deletes each match with no copy and no undo, and hides a match tied to your own tools. `dry_run` only counts the matches in `/metrics`. `off` reads nothing. Any other value stops the start. It covers the sweep only: the processor removes a stored match it loads in every mode. Give every worker process the same value. See [CSAM defense](csam-defense.md#cleaning-up-what-is-already-stored). |
 | `CSAM_BLOCKLIST_FEED_URLS` | *(none)* | Comma-separated list of community blocklist feed URLs. Each feed is fetched, parsed (one double-hash per line), and merged into a bloom filter. Empty = no feed is fetched. |
 | `CSAM_BLOCKLIST_EXPORT_ENABLED` | `true` | When a torrent matches the built-in banned-keyword list, append the double-hashed infohash to a local JSONL log. On by default; the file never leaves the host unless `EXPORT_UPSTREAM_URL` is also set. |
 | `CSAM_BLOCKLIST_EXPORT_UPSTREAM_URL` | *(none)* | Optional outbound endpoint for community contribution. POSTs each new double-hash observation. Off by default — opt in only if you have an endpoint you trust. |
