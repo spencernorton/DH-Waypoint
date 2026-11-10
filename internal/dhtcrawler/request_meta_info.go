@@ -11,8 +11,11 @@ import (
 	anacrolixmetainfo "github.com/anacrolix/torrent/metainfo"
 
 	"github.com/spencernorton/DH-Waypoint/internal/classifier/contentfilter"
+	"github.com/spencernorton/DH-Waypoint/internal/csamblocklist"
+	"github.com/spencernorton/DH-Waypoint/internal/model"
 	"github.com/spencernorton/DH-Waypoint/internal/namepolicy"
 	"github.com/spencernorton/DH-Waypoint/internal/protocol"
+	"github.com/spencernorton/DH-Waypoint/internal/protocol/metainfo"
 	"github.com/spencernorton/DH-Waypoint/internal/protocol/metainfo/metainforequester"
 )
 
@@ -21,6 +24,10 @@ import (
 // at the network-egress site. Distinct sentinel so peerrep / banning
 // logic can recognise this rejection without parsing the message.
 var errCsamBlocklistBlocked = errors.New("csam blocklist: hash blocked, BEP-9 fetch refused")
+
+// errBannedKeyword is returned by doRequestMetaInfo when fetched metadata
+// matches the built-in banned-keyword list. Nothing of it is stored.
+var errBannedKeyword = errors.New("csam blocklist: metadata matched a banned keyword, dropped before storage")
 
 func (c *crawler) runRequestMetaInfo(ctx context.Context) {
 	_ = c.requestMetaInfo.Run(ctx, func(req infoHashWithPeers) {
@@ -220,6 +227,21 @@ func (c *crawler) doRequestMetaInfo(
 		if !decision.Eligible {
 			c.namePolicy.Observe("crawler_acquisition", decision)
 			return metainforequester.Response{}, namepolicy.ErrExcluded
+		}
+		// The built-in banned-keyword list applies in every processing mode,
+		// before anything is stored. The check covers every file path, not
+		// only those under the save threshold. Triage tests the 160-bit wire
+		// key, so that is remembered with the verified identities and this
+		// swarm is not contacted again.
+		banned := csamblocklist.MatchesBannedKeyword(model.TorrentFromMetadata(res.Validated, "dht", false, metainfo.MaxFilesCount))
+		if !banned && uint(len(res.Validated.Files)) > c.saveFilesThreshold {
+			// Only the first files are stored. The processor's rule sees
+			// that shorter list, where other paths sit side by side.
+			banned = csamblocklist.MatchesBannedKeyword(model.TorrentFromMetadata(res.Validated, "dht", false, c.saveFilesThreshold))
+		}
+		if banned {
+			c.csamBlocklist.Observe(ctx, "crawler", append(identities, protocol.InfoHashV1(hash))...)
+			return metainforequester.Response{}, errBannedKeyword
 		}
 		// Discovery triage knows only the 160-bit wire key. Recheck complete
 		// verified identities so a pure-v2 block or either hybrid side cannot

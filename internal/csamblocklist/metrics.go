@@ -23,8 +23,14 @@ type Metrics struct {
 	// FeedRefreshDurationSeconds labels by feed.
 	FeedRefreshDurationSeconds *prometheus.HistogramVec
 
-	// FeedEntriesGauge labels by feed; current entry count.
+	// FeedEntriesGauge labels by feed; current entry count. The label
+	// "local" is this instance's own observations.
 	FeedEntriesGauge *prometheus.GaugeVec
+
+	// KeywordMatchesTotal counts torrents dropped before they were stored
+	// because they matched the built-in banned-keyword list, by source
+	// (crawler / import).
+	KeywordMatchesTotal *prometheus.CounterVec
 
 	// EntriesGauge is the union across all feeds.
 	EntriesGauge prometheus.Gauge
@@ -61,8 +67,12 @@ func NewMetrics() *Metrics {
 		}, []string{"feed"}),
 		FeedEntriesGauge: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Namespace: ns, Subsystem: sub, Name: "feed_entries",
-			Help: "Per-feed entry count from the most recent successful refresh.",
+			Help: "Per-feed entry count from the most recent successful refresh. feed=local is this instance's own observations.",
 		}, []string{"feed"}),
+		KeywordMatchesTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: ns, Subsystem: sub, Name: "keyword_matches_total",
+			Help: "Torrents dropped before storage because the name or a file path matched the built-in banned-keyword list. source=crawler|import.",
+		}, []string{"source"}),
 		EntriesGauge: prometheus.NewGauge(prometheus.GaugeOpts{
 			Namespace: ns, Subsystem: sub, Name: "entries",
 			Help: "Total double-hash entries in the active bloom filter.",
@@ -82,6 +92,7 @@ func (m *Metrics) Collectors() []prometheus.Collector {
 		m.FeedRefreshTotal,
 		m.FeedRefreshDurationSeconds,
 		m.FeedEntriesGauge,
+		m.KeywordMatchesTotal,
 		m.EntriesGauge,
 		m.ExportTotal,
 	}
