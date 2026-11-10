@@ -51,6 +51,9 @@ type processor struct {
 	// CSAM_BLOCKLIST_EXPORT_ENABLED=false. See internal/csamblocklist
 	// for the export contract.
 	csamExporter csamblocklist.Exporter
+	// csamBlocklist removes a stored torrent that matches the built-in
+	// banned-keyword list before any mode-specific work runs on it.
+	csamBlocklist csamblocklist.Manager
 	// Deterministic policy runs again after classification has supplied types
 	// and languages. Missing optional processors do not affect this decision.
 	contentFilter        *contentfilter.Filter
@@ -168,6 +171,19 @@ func (c processor) Process(ctx context.Context, params MessageParams) error {
 
 		go func(torrent model.Torrent) {
 			defer wg.Done()
+
+			// The built-in banned-keyword list applies in every mode and to
+			// reprocess requests. A match is removed here: no name policy,
+			// classification, plug-in call, feedback row or receipt follows.
+			if csamblocklist.MatchesBannedKeyword(torrent) {
+				if _, err := c.csamBlocklist.RemoveStored(ctx, "processor", torrent); err != nil {
+					mtx.Lock()
+					failedHashes = append(failedHashes, torrent.InfoHash)
+					errs = append(errs, err)
+					mtx.Unlock()
+				}
+				return
+			}
 
 			d := c.namePolicy.Evaluate(torrent.InfoHash, torrent.Name)
 			if !d.Eligible {

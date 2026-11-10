@@ -26,7 +26,10 @@ docker compose -f examples/docker-compose.public.yml --env-file examples/.env.pu
 curl --fail http://localhost:3333/metrics
 ```
 
-The example publishes backend HTTP (port 3333) on every host interface and
+With `HTTP_SERVER_API_KEY` set, add `-H "X-API-Key: <key>"` to that request.
+
+The example publishes backend HTTP (port 3333) on `127.0.0.1` only, unless
+`DH_WAYPOINT_HTTP_BIND` names another address, and
 peer traffic on the configured peer port. PostgreSQL stays on the Compose network. There is no browser page.
 Use [quickstart](quickstart.md) and [examples](../examples/README.md) for the
 exact network layout and commands.
@@ -45,8 +48,8 @@ exact network layout and commands.
 
 [Configuration](configuration.md) documents backend settings. Client services
 on another host cannot use your own `localhost`; choose an address reachable
-from their network. Protect the APIs, or bind HTTP to `127.0.0.1`, before untrusted hosts can
-reach port 3333.
+from their network and set `DH_WAYPOINT_HTTP_BIND` to publish the port there. Set the API keys
+before any host you do not trust can reach port 3333.
 
 ## Health and capacity
 

@@ -174,6 +174,11 @@ func (s *service) Observe(ctx context.Context, source string, infoHashes ...prot
 	if s.metrics != nil {
 		s.metrics.KeywordMatchesTotal.WithLabelValues(source).Inc()
 	}
+	s.remember(ctx, source, infoHashes)
+}
+
+// remember blocks the hashes from now on, saves them and exports the new ones.
+func (s *service) remember(ctx context.Context, source string, infoHashes []protocol.InfoHash) {
 	fresh := s.admit(ctx, source, infoHashes)
 	if s.exporter == nil {
 		return

@@ -9,7 +9,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/spencernorton/DH-Waypoint/internal/concurrency"
 	"github.com/spencernorton/DH-Waypoint/internal/lazy"
-	"github.com/spencernorton/DH-Waypoint/internal/protocol/dht"
 	"github.com/spencernorton/DH-Waypoint/internal/protocol/dht/responder"
 	"go.uber.org/fx"
 	"go.uber.org/zap"
@@ -59,7 +58,7 @@ func New(p Params) Result {
 							p.Config.Port,
 						),
 						socket:           NewSocket(),
-						queries:          make(map[string]chan dht.RecvMsg),
+						queries:          make(map[string]pendingQuery),
 						queryTimeout:     p.Config.QueryTimeout,
 						responder:        r,
 						responderTimeout: time.Second * 5,

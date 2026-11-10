@@ -17,6 +17,16 @@ var episodeNumRegex = regexp.MustCompile(`(?i)e(\d{1,4})`)
 // numberRunRegex extracts bare digit runs from a matched range/list value.
 var numberRunRegex = regexp.MustCompile(`\d{1,4}`)
 
+// fansubEpisodeRegex matches the fansub "S<season> - <episode>" shape
+// ("Show S2 - 05"): a short season marker, a spaced dash and a two- or
+// three-digit number with no S of its own. It names one episode. A season
+// range is written "S01-S05", "S1-5" or "Season 1 - 5".
+var fansubEpisodeRegex = regexp.MustCompile(`^[sS]\d{1,2}\s-\s\d{2,3}(?:\D|$)`)
+
+// rangeSeasonRegex finds a season repeated inside an episode range or list
+// ("01-S01E03").
+var rangeSeasonRegex = regexp.MustCompile(`[sS](\d{1,2})`)
+
 // rangeToken builds the number/range/list sub-pattern shared by the season and
 // episode tokens. The number factory defines what a single number may look
 // like: episodes are 1-4 digits (Pokémon S20E048, One Piece E1000, daily soaps
@@ -26,7 +36,10 @@ var numberRunRegex = regexp.MustCompile(`\d{1,4}`)
 // NOT a season — RE2 has no lookbehind, so the year-shape-first alternation is
 // what keeps those names parsing byte-identically to the 2-digit cap
 // (season 10 / 21 + junk rest).
-func rangeToken(runes string, number func() dialect.Token) dialect.Token {
+//
+// marker is the optional prefix a later range/list item may repeat ("S01-S03",
+// "E01-E03").
+func rangeToken(marker func() dialect.Token, number func() dialect.Token) dialect.Token {
 	return rex.Group.Define(
 		rex.Group.Define(number()),
 		rex.Group.Composite(
@@ -35,7 +48,7 @@ func rangeToken(runes string, number func() dialect.Token) dialect.Token {
 				rex.Chars.Single('-'),
 				rex.Chars.Whitespace().Repeat().ZeroOrOne(),
 				rex.Group.NonCaptured(
-					rex.Chars.Runes(runes).Repeat().ZeroOrOne(),
+					marker(),
 					rex.Chars.Whitespace().Repeat().ZeroOrOne(),
 				).Repeat().ZeroOrOne(),
 				rex.Group.Define(number()),
@@ -45,7 +58,7 @@ func rangeToken(runes string, number func() dialect.Token) dialect.Token {
 				rex.Chars.Single(','),
 				rex.Chars.Whitespace().Repeat().ZeroOrOne(),
 				rex.Group.NonCaptured(
-					rex.Chars.Runes(runes).Repeat().ZeroOrOne(),
+					marker(),
 					rex.Chars.Whitespace().Repeat().ZeroOrOne(),
 				).Repeat().ZeroOrOne(),
 				rex.Group.Define(number()),
@@ -117,21 +130,45 @@ func clampEpisodeRangeEnd(start, end int64, rawRange string) int64 {
 	return end
 }
 
+func seasonMarkerToken() dialect.Token {
+	return rex.Chars.Runes("sS").Repeat().ZeroOrOne()
+}
+
+// episodeMarkerToken lets a range end repeat its season ("S01E01-S01E03").
+// The season is only accepted with an E after it, so "S01E01-S02" stays a
+// single episode.
+func episodeMarkerToken() dialect.Token {
+	return rex.Group.NonCaptured(
+		rex.Group.NonCaptured(
+			rex.Chars.Runes("sS"),
+			rex.Chars.Digits().Repeat().Between(1, maxSeasonDigits),
+		).Repeat().ZeroOrOne(),
+		rex.Chars.Runes("eE"),
+	).Repeat().ZeroOrOne()
+}
+
+// The trailing space in "season ?", "episode ?" and "ep ?" is one optional
+// non-word character, so "Season.1", "Episode.5" and "EP(01-10)" read like
+// "Season 1", "Episode 5" and "EP01-10".
 var seasonToken = rex.Group.Define(
 	rex.Group.Composite(
-		keywords.MustNewRexTokensFromKeywords("season", "s")...,
+		keywords.MustNewRexTokensFromKeywords("season ?", "s")...,
 	).NonCaptured(),
 	rex.Chars.Whitespace().Repeat().ZeroOrOne(),
-	rangeToken("sS", seasonNumberToken),
+	rangeToken(seasonMarkerToken, seasonNumberToken),
 	rex.Chars.Whitespace().Repeat().ZeroOrOne(),
 ).NonCaptured()
 
+// The episode may follow the season across one separator: "S01.E05",
+// "S01 - E05", "S01_E05", "S01xE05".
 var episodeToken = rex.Group.Define(
+	rex.Chars.Runes("._xX-").Repeat().ZeroOrOne(),
+	rex.Chars.Whitespace().Repeat().ZeroOrOne(),
 	rex.Group.Composite(
-		keywords.MustNewRexTokensFromKeywords("episode", "ep", "e")...,
+		keywords.MustNewRexTokensFromKeywords("episode ?", "ep ?", "e")...,
 	).NonCaptured(),
 	rex.Chars.Whitespace().Repeat().ZeroOrOne(),
-	rangeToken("eE", episodeNumberToken),
+	rangeToken(episodeMarkerToken, episodeNumberToken),
 ).NonCaptured()
 
 // episodeConcatToken captures a run of additional concatenated episode tokens
@@ -217,7 +254,7 @@ var episodesRegex = rex.New(
 
 // EpisodesMatchToEpisodes converts a regex sub-match slice into an Episodes
 // map. The slice must start at the EpisodesToken group — i.e. call with
-// match[1:] from episodesRegex or match[2:] from titleEpisodesRegex.
+// match[1:] from episodesRegex.
 //
 // See the EpisodesToken doc-comment above for the exact group-index layout.
 func EpisodesMatchToEpisodes(match []string) Episodes {
@@ -248,6 +285,9 @@ func EpisodesMatchToEpisodes(match []string) Episodes {
 		if match[8] == "" {
 			// no episodes — season-only or season range/list
 			switch {
+			case match[6] != "" && fansubEpisodeRegex.MatchString(match[0]):
+				episode, _ := strconv.ParseInt(match[6], 10, 16)
+				episodes = episodes.AddEpisode(int(seasonStart), int(episode))
 			case match[6] != "":
 				// a season range
 				seasonEnd, _ := strconv.ParseInt(match[6], 10, 16)
@@ -271,7 +311,18 @@ func EpisodesMatchToEpisodes(match []string) Episodes {
 			// episodes present
 			episodeStart, _ := strconv.ParseInt(match[9], 10, 16)
 
+			otherSeason := seasonStart
+			if m := rangeSeasonRegex.FindStringSubmatch(match[8]); m != nil {
+				otherSeason, _ = strconv.ParseInt(m[1], 10, 16)
+			}
+
 			switch {
+			case otherSeason != seasonStart:
+				// "S01E01-S02E10" spans seasons whose episode counts are
+				// unknown here, so record the whole seasons.
+				for i := seasonStart; i <= clampRangeEnd(seasonStart, otherSeason); i++ {
+					episodes = episodes.AddSeason(int(i))
+				}
 			case match[10] != "":
 				// an episode range
 				episodeEnd, _ := strconv.ParseInt(match[10], 10, 16)

@@ -99,6 +99,15 @@ func torrentContentResultItemToTorznabResultItem(item search.TorrentContentResul
 		},
 	}
 
+	// Movies and TV also state their SD, HD or UHD subcategory, so a client
+	// that drops results outside the categories it asked for keeps them.
+	for _, sub := range resolutionSubcategories(categoryID, item.VideoResolution) {
+		attrs = append(attrs, torznab.SearchResultItemTorznabAttr{
+			AttrName:  torznab.AttrCategory,
+			AttrValue: strconv.Itoa(sub),
+		})
+	}
+
 	// A Torznab item may carry multiple category attributes; add 5070 in
 	// addition to the primary 5000 so category-agnostic TV queries still
 	// match while anime-type series filtering on 5070 can find it.

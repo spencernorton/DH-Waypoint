@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -135,5 +136,53 @@ func TestGinzapWithConfig(t *testing.T) {
 	err := timestampLocationCheck(logLine.Context[7].String, time.UTC)
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+// Torznab clients send their key in the query string and tracker clients send
+// a passkey in the path. Neither may reach the log.
+func TestGinzapRedactsCredentials(t *testing.T) {
+	t.Parallel()
+
+	const secret = "S3cretValue-0123456789"
+
+	for _, target := range []string{
+		"/torznab/api?t=search&apikey=" + secret + "&q=ubuntu",
+		"/torznab/api?t=search&APIKEY=" + secret,
+		"/torznab/api?apikey=" + secret + "&q=%zz",
+		"/api/private/v1/torrents/abc/download?passkey=" + secret,
+		"/announce/" + secret + "?info_hash=abc",
+		"/scrape/" + secret,
+	} {
+		logger, observed := buildDummyLogger()
+		r := gin.New()
+		r.Use(Ginzap(logger, time.RFC3339, true))
+		r.GET("/announce/:passkey", func(c *gin.Context) { _ = c.AbortWithError(http.StatusForbidden, fmt.Errorf("denied")) })
+
+		req, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, target, nil)
+		r.ServeHTTP(httptest.NewRecorder(), req)
+
+		entries := observed.All()
+		if len(entries) != 1 {
+			t.Fatalf("%s: got %d log entries, want 1", target, len(entries))
+		}
+
+		logged := fmt.Sprint(entries[0].Message, entries[0].ContextMap())
+		if strings.Contains(logged, secret) {
+			t.Errorf("credential logged for %s: %s", target, logged)
+		}
+	}
+
+	// Nothing else about a request changes.
+	if got := redactQuery("t=search&q=a+b&cat=5000,5030"); got != "t=search&q=a+b&cat=5000,5030" {
+		t.Errorf("a query without credentials was rewritten to %q", got)
+	}
+
+	if got := redactPath("//announce/" + secret); strings.Contains(got, secret) {
+		t.Errorf("a passkey after extra slashes was kept: %q", got)
+	}
+
+	if got := redactPath("/torznab/api"); got != "/torznab/api" {
+		t.Errorf("an ordinary path was rewritten to %q", got)
 	}
 }

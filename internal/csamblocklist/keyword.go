@@ -1,6 +1,7 @@
 package csamblocklist
 
 import (
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"slices"
@@ -42,6 +43,31 @@ func MatchesBannedKeyword(t model.Torrent) bool {
 func MentionsBannedKeyword(t model.Torrent) bool {
 	return MatchesBannedKeyword(t) || bannedKeywords().MatchString(t.Name) ||
 		slices.ContainsFunc(t.Files, func(f model.TorrentFile) bool { return bannedKeywords().MatchString(f.Path) })
+}
+
+// SnapshotMatchesBannedKeyword applies MatchesBannedKeyword to a torrent kept
+// as JSON: one torrents row and the array of its torrent_files rows.
+func SnapshotMatchesBannedKeyword(torrentRow, fileRows []byte) (bool, error) {
+	var snap struct {
+		Name        string            `json:"name"`
+		FilesStatus model.FilesStatus `json:"files_status"`
+	}
+	if err := json.Unmarshal(torrentRow, &snap); err != nil {
+		return false, fmt.Errorf("read torrent snapshot: %w", err)
+	}
+	t := model.Torrent{Name: snap.Name, FilesStatus: snap.FilesStatus}
+	var files []struct {
+		Path string `json:"path"`
+	}
+	if len(fileRows) > 0 {
+		if err := json.Unmarshal(fileRows, &files); err != nil {
+			return false, fmt.Errorf("read files snapshot: %w", err)
+		}
+	}
+	for _, f := range files {
+		t.Files = append(t.Files, model.TorrentFile{Path: f.Path})
+	}
+	return MatchesBannedKeyword(t), nil
 }
 
 func bannedKeywordText(t model.Torrent) string {

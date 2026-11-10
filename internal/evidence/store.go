@@ -255,12 +255,41 @@ where tcl.media_id is not null and tcl.media_id <> ''`
 	return out, rows.Err()
 }
 
+// hiddenEvidenceSQL names the torrent identities with qBittorrent privacy
+// evidence, and publicEvidenceSQL keeps a label_evidence row e out of them. A
+// private download hides every row for that torrent, under either hash of a
+// hybrid one, so its *arr grab rows stay out too. $1 is
+// catalogueguard.TagWhitespace.
+//
+// The identities are collected once and probed as a hashed set. Written as a
+// per-row NOT EXISTS, the planner walks the whole set for every row. DISTINCT
+// matters because a poller writes one private row per torrent per poll.
+//
+// Known gap: "private" here is IsPrivateInfoHash's definition. A torrent the
+// catalogue hides for another reason (its own private flag, a privacy tag, a
+// private canonical label) still lists its rows.
+var (
+	hiddenEvidenceSQL = `
+with private as materialized (
+  select distinct info_hash from label_evidence
+  where info_hash is not null and ` + catalogueguard.QBPrivacySQL("source", "category", "$1") + `
+), hidden as materialized (
+  select info_hash from private
+  union select t.info_hash_v2 from torrents t join private p on p.info_hash = t.info_hash
+  union select t.info_hash from torrents t join private p on p.info_hash = t.info_hash_v2
+)`
+	publicEvidenceSQL = `
+from label_evidence e
+where ` + catalogueguard.QBPrivacySQL("e.source", "e.category", "$1") + ` is not true
+  and (e.info_hash is null
+       or e.info_hash not in (select info_hash from hidden where info_hash is not null))`
+)
+
 // ListRecent returns up to limit evidence rows starting at offset,
-// ordered by observed_at desc, plus the table's total row count.
-// The total is computed via a single COUNT(*) — bounded by the
-// label_evidence_observed_at_idx index for the page query and a
-// sequential pass for the count. Callers should bound limit before
-// passing in.
+// newest first, plus the number of rows it can list.
+// Rows for private downloads are left out of both: this list is served
+// to API clients, and private-tracker history must not leave the host.
+// Callers should bound limit before passing in.
 func (s *Store) ListRecent(ctx context.Context, limit, offset int) ([]Evidence, int, error) {
 	pool, err := s.pool.Get()
 	if err != nil {
@@ -268,23 +297,22 @@ func (s *Store) ListRecent(ctx context.Context, limit, offset int) ([]Evidence, 
 	}
 
 	var total int
-	if err := pool.QueryRow(ctx, `select count(*) from label_evidence`).Scan(&total); err != nil {
+	if err := pool.QueryRow(ctx, hiddenEvidenceSQL+` select count(*)`+publicEvidenceSQL, catalogueguard.TagWhitespace).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("evidence: count: %w", err)
 	}
 	if total == 0 {
 		return nil, 0, nil
 	}
 
-	const q = `
+	q := hiddenEvidenceSQL + `
 select id, source, source_kind, source_instance, source_object_id,
        coalesce(download_id, ''), info_hash, coalesce(title, ''),
        coalesce(media_type, ''), coalesce(media_id, ''),
-       coalesce(category, ''), observed_at, strength
-from label_evidence
-order by observed_at desc
-limit $1 offset $2`
+       coalesce(category, ''), observed_at, strength` + publicEvidenceSQL + `
+order by observed_at desc, id desc
+limit $2 offset $3`
 
-	rows, err := pool.Query(ctx, q, limit, offset)
+	rows, err := pool.Query(ctx, q, catalogueguard.TagWhitespace, limit, offset)
 	if err != nil {
 		return nil, 0, fmt.Errorf("evidence: list: %w", err)
 	}

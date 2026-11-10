@@ -54,6 +54,7 @@ func TestMetadataExchangeWithAnacrolixV1V2Hybrid(t *testing.T) {
 				cfg.DisableUTP = true
 				cfg.NoDefaultPortForwarding = true
 				cfg.DisableIPv6 = true
+				cfg.AlwaysWantConns = true
 				client, err := torrent.NewClient(cfg)
 				require.NoError(t, err)
 				t.Cleanup(func() { client.Close() })
@@ -73,7 +74,7 @@ func TestMetadataExchangeWithAnacrolixV1V2Hybrid(t *testing.T) {
 					}
 				}
 				require.True(t, addr.IsValid())
-				r := mreq.New(mreq.Params{Config: mreq.Config{RequestTimeout: 3 * time.Second, KeyMutexSize: 1000}, Logger: zap.NewNop().Sugar()}).Requester
+				r := mreq.New(mreq.Params{Config: mreq.Config{RequestTimeout: 3 * time.Second, KeyMutexSize: 1000, AllowPrivateAddrs: true}, Logger: zap.NewNop().Sugar()}).Requester
 				identities := []protocol.InfoHash{}
 				if kind != "v2" {
 					identities = append(identities, protocol.InfoHashV1(protocol.ID(sha1.Sum(raw))))

@@ -2,12 +2,14 @@ package manager
 
 import (
 	"context"
+	"errors"
 )
 
+// PurgeJobs deletes the jobs in the named queues and statuses. A request that
+// names neither is refused: it used to empty the whole queue.
 func (m manager) PurgeJobs(ctx context.Context, req PurgeJobsRequest) error {
 	if len(req.Queues) == 0 && len(req.Statuses) == 0 {
-		_, err := m.db.WithContext(ctx).Raw("TRUNCATE TABLE queue_jobs;").Rows()
-		return err
+		return errors.New("purging jobs needs at least one queue or status")
 	}
 
 	q := m.dao.QueueJob.WithContext(ctx)

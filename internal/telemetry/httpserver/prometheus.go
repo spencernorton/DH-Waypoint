@@ -25,7 +25,7 @@ func (b prometheusBuilder) Apply(e *gin.Engine) error {
 		EnableOpenMetrics: true,
 	})
 
-	e.Any("/metrics", func(c *gin.Context) {
+	e.GET("/metrics", func(c *gin.Context) {
 		h.ServeHTTP(c.Writer, c.Request)
 	})
 

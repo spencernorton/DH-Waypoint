@@ -64,8 +64,10 @@ An early empty search may reflect warmup; do not assume a fixed deadline.
 In Sonarr/Radarr/Prowlarr, add a custom Torznab indexer with the backend's
 reachable `http://<host>:3333/torznab` URL and the configured API key. A client
 in another container cannot use your host's `localhost`. The Compose files
-publish port 3333 on every interface; restrict it with a firewall, a
-`127.0.0.1` binding or a reverse proxy before untrusted hosts can reach it.
+publish port 3333 on `127.0.0.1` only. For a client on another host or in
+another Compose project, set `TORZNAB_API_KEY` and `HTTP_SERVER_API_KEY`, then
+set `DH_WAYPOINT_HTTP_BIND=0.0.0.0` (or one host address) in `.env` and run
+`docker compose up -d` again.
 
 Test capabilities from the client's network before saving the indexer. Use
 [per-app guides](integrations/sonarr.md) for categories and search behavior.

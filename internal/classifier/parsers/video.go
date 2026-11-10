@@ -358,13 +358,48 @@ var titleYearRegex = rex.New(
 	rex.Group.NonCaptured(rex.Group.NonCaptured(titleTokens...), rex.Group.NonCaptured(yearTokens...)),
 ).MustCompile()
 
-var titleEpisodesRegex = rex.New(
-	rex.Chars.Begin(),
-	rex.Group.NonCaptured(
-		rex.Group.NonCaptured(titleTokens...),
-		model.EpisodesToken,
-	),
-).MustCompile()
+// episodesMarkerRegex finds an episodes marker that starts a word after the
+// title.
+var episodesMarkerRegex = rex.New(regex.AnyNonWordChar(), model.EpisodesToken).MustCompile()
+
+// xFormatAheadRegex: the text after a bare season is the tail of an NxN marker
+// ("S 2x06" in "del S A S 2x06"), so the S before it was a word.
+var xFormatAheadRegex = regexp.MustCompile(`^[xX]\d`)
+
+// isEpisodesMarker rejects text that only looks like a season with no
+// episode. match is laid out as model.EpisodesToken documents; rest is the
+// input after it.
+func isEpisodesMarker(match []string, rest string) bool {
+	if match[1] != "" || match[8] != "" {
+		return true // an episode is named
+	}
+
+	// "Hunting Season 2025" is a title word and a year. A year-numbered
+	// season is written "S2025".
+	if len(match[5]) == 4 && len(match[0]) > 1 && (match[0][1] == 'e' || match[0][1] == 'E') {
+		return false
+	}
+
+	if last, _ := utf8.DecodeLastRuneInString(match[0]); unicode.IsSpace(last) {
+		return true
+	}
+
+	if xFormatAheadRegex.MatchString(rest) {
+		return false
+	}
+
+	// "S1ngle", "x264-S4LVE": the marker runs on into a word. One letter, or
+	// letters that lead to a number, are a suffix ("S04B", "S05D2", "S1of3").
+	letters := 0
+	for _, r := range rest {
+		if !unicode.IsLetter(r) {
+			return letters < 2 || unicode.IsDigit(r)
+		}
+		letters++
+	}
+
+	return letters < 2
+}
 
 var multiRegex = keywords.MustNewRegexFromKeywords("multi", "dual")
 
@@ -487,9 +522,55 @@ func parseTitle(input string) (title string, rest string, err error) {
 	return "", "", classification.ErrUnmatched
 }
 
+func isWordRune(r rune) bool {
+	return unicode.IsLetter(r) || unicode.IsDigit(r)
+}
+
 func parseTitleYearEpisodes(input string) (string, model.Year, model.Episodes, string, error) {
-	if match := titleEpisodesRegex.FindStringSubmatch(input); match != nil {
-		title := match[1]
+	// The first marker wins. Taking the last one split a range ("S01-S03"
+	// became the title "… S01" and season 3) and let a look-alike late in the
+	// name replace the real marker.
+	for at := 0; ; {
+		loc := episodesMarkerRegex.FindStringSubmatchIndex(input[at:])
+		if loc == nil {
+			break
+		}
+
+		match := make([]string, len(loc)/2-1)
+		for i := range match {
+			if loc[2*i+2] >= 0 {
+				match[i] = input[at+loc[2*i+2] : at+loc[2*i+3]]
+			}
+		}
+
+		start, end := at+loc[2], at+loc[1]
+		title, rest := input[:start], input[end:]
+
+		// "Season 2 - 2160p": a season range whose end runs on into a longer
+		// number is one season followed by something else.
+		last, _ := utf8.DecodeLastRuneInString(match[0])
+		next, _ := utf8.DecodeRuneInString(rest)
+
+		if match[8] == "" && match[6] != "" && unicode.IsDigit(last) && unicode.IsDigit(next) {
+			const firstSeason = 5 // index in the model.EpisodesToken layout
+			end = at + loc[2*(firstSeason+1)+1]
+			rest = input[end:]
+			match[0], match[4], match[6] = input[start:end], match[firstSeason], ""
+		}
+
+		// Resume inside a rejected marker: "S 2x06" still holds "2x06".
+		at = start
+
+		if !strings.ContainsFunc(title, isWordRune) || !isEpisodesMarker(match, rest) {
+			continue
+		}
+
+		// A height ahead of the marker ("Show.2160p.S01E01") and whatever
+		// follows it is not title.
+		if _, cut := model.FindExactVideoResolution(title); cut > 0 {
+			title = title[:cut]
+		}
+
 		year := model.Year(0)
 
 		if t, y, _, err := parseTitleYear(title); err == nil {
@@ -499,9 +580,7 @@ func parseTitleYearEpisodes(input string) (string, model.Year, model.Episodes, s
 			title = cleanTitle(title)
 		}
 
-		episodes := model.EpisodesMatchToEpisodes(match[2:])
-
-		return title, year, episodes, input[len(match[0]):], nil
+		return title, year, model.EpisodesMatchToEpisodes(match), rest, nil
 	}
 
 	return "", 0, nil, "", classification.ErrUnmatched

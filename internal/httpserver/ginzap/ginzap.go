@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httputil"
+	"net/url"
 	"os"
 	"runtime/debug"
 	"strings"
@@ -60,6 +61,7 @@ func WithConfig(logger ZapLogger, conf *Config) gin.HandlerFunc {
 		c.Next()
 
 		if _, ok := skipPaths[path]; !ok {
+			path, query := redactPath(path), redactQuery(query)
 			end := time.Now()
 			latency := end.Sub(start)
 
@@ -94,6 +96,44 @@ func WithConfig(logger ZapLogger, conf *Config) gin.HandlerFunc {
 			}
 		}
 	}
+}
+
+const redacted = "REDACTED"
+
+// redactPath blanks the passkey that tracker clients send as a path segment.
+func redactPath(path string) string {
+	// Extra leading slashes do not route, but the request is still logged.
+	trimmed := "/" + strings.TrimLeft(path, "/")
+	for _, prefix := range []string{"/announce/", "/scrape/"} {
+		if strings.HasPrefix(trimmed, prefix) {
+			return prefix + redacted
+		}
+	}
+
+	return path
+}
+
+// redactQuery blanks the credentials that Torznab and tracker clients send in
+// the query string. A query without them is logged as it arrived.
+func redactQuery(query string) string {
+	values, err := url.ParseQuery(query)
+	clean := err == nil
+
+	for key := range values {
+		if k := strings.ToLower(key); k == "apikey" || k == "passkey" {
+			values.Set(key, redacted)
+
+			clean = false
+		}
+	}
+
+	if clean {
+		return query
+	}
+
+	// Also taken when the query is malformed: the raw text could then hide a
+	// credential from the check above.
+	return values.Encode()
 }
 
 func defaultHandleRecovery(c *gin.Context, _ interface{}) {

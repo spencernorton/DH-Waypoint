@@ -4,12 +4,15 @@
 //
 //   - configfx section "csam_blocklist" (env prefix CSAM_BLOCKLIST_*)
 //   - csamblocklist.Manager interface (consumed by the dhtcrawler
-//     pre-fetch hook in infohash_triage)
+//     pre-fetch hook in infohash_triage, and by the processor to remove a
+//     stored banned-keyword match)
 //   - csamblocklist.Exporter interface (consumed by the processor
 //     when CEL emits ErrDeleteTorrent)
 //   - *csamblocklist.Metrics
 //   - prometheus_collectors fx-group entries for the metrics
-//   - a worker entry that runs the periodic-refresh poll loop
+//   - a worker entry that runs the periodic-refresh poll loop and the
+//     one-time sweep of rows stored before the banned-keyword check
+//   - configfx section "csam_sweep" (CSAM_SWEEP_MODE) for that sweep
 //
 // Conservative defaults (see csamblocklist.NewDefaultConfig):
 //
@@ -50,6 +53,9 @@ func New() fx.Option {
 	return fx.Module(
 		"csamblocklist",
 		configfx.NewConfigModule[csamblocklist.Config]("csam_blocklist", csamblocklist.NewDefaultConfig()),
+		// Its own section: CSAM_BLOCKLIST_ENABLED switches the outside feeds
+		// only, and the sweep does not depend on it.
+		configfx.NewConfigModule[csamblocklist.SweepConfig]("csam_sweep", csamblocklist.NewDefaultSweepConfig()),
 		fx.Provide(
 			csamblocklist.NewMetrics,
 			provideManager,
@@ -133,7 +139,7 @@ func runStartupRefresh(ctx context.Context, mgr csamblocklist.Manager, log *zap.
 	}
 }
 
-func provideRefreshWorker(mgr csamblocklist.Manager, logger *zap.SugaredLogger) worker.Worker {
+func provideRefreshWorker(mgr csamblocklist.Manager, sweep csamblocklist.SweepConfig, logger *zap.SugaredLogger) worker.Worker {
 	var (
 		runCtx    context.Context
 		runCancel context.CancelFunc
@@ -154,6 +160,9 @@ func provideRefreshWorker(mgr csamblocklist.Manager, logger *zap.SugaredLogger) 
 				runCtx, runCancel = context.WithCancel(context.Background())
 				if runner, ok := mgr.(interface{ Run(context.Context) }); ok {
 					go runner.Run(runCtx)
+				}
+				if sweeper, ok := mgr.(csamblocklist.Sweeper); ok {
+					go sweeper.RunSweep(runCtx, sweep.Mode)
 				}
 				return nil
 			},

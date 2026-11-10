@@ -73,8 +73,14 @@ func (m reverseMap) dropAddr(addr netip.Addr) bool {
 
 func (m reverseMap) dropHashForAddrs(hash ID, addrs ...netip.Addr) {
 	for _, addr := range addrs {
-		if info, ok := m.addrs[addr.String()]; ok {
+		str := addr.String()
+		if info, ok := m.addrs[str]; ok {
 			info.dropHashes(hash)
+			// An address that is neither a node nor a peer of any hash is forgotten,
+			// or the map would keep every peer address ever seen.
+			if len(info.hashes) == 0 && info.peerID.IsZero() {
+				delete(m.addrs, str)
+			}
 		}
 	}
 }

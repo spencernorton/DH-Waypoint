@@ -9,6 +9,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/spencernorton/DH-Waypoint/internal/csamblocklist"
 	"github.com/spencernorton/DH-Waypoint/internal/csamblocklist/csamblocklisttest"
+	"github.com/spencernorton/DH-Waypoint/internal/model"
 	"github.com/spencernorton/DH-Waypoint/internal/protocol"
 	"github.com/spencernorton/DH-Waypoint/internal/protocol/metainfo"
 	"github.com/stretchr/testify/assert"
@@ -35,6 +36,9 @@ func (f fakeCsam) Observe(_ context.Context, _ string, hs ...protocol.InfoHash) 
 	if f.observed != nil {
 		*f.observed = append(*f.observed, hs...)
 	}
+}
+func (fakeCsam) RemoveStored(context.Context, string, model.Torrent) (csamblocklist.Outcome, error) {
+	return "", nil
 }
 func (fakeCsam) Refresh(context.Context) error    { return nil }
 func (fakeCsam) Snapshot() csamblocklist.Snapshot { return csamblocklist.Snapshot{} }

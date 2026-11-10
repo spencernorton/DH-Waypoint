@@ -14,7 +14,7 @@ func apiKeyEngine(key string) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	e := gin.New()
 	e.Use(APIKeyAuth(namepolicy.SecretToken(key)))
-	for _, p := range []string{"/graphql", "/metrics", "/import", "/import/torrent", "/api/v1/search", "/api/v2/search", "/status", "/torznab/api", "/announce/k", "/api/processors/v1/status", "/evidence/arr/x"} {
+	for _, p := range []string{"/graphql", "/metrics", "/import", "/import/torrent", "/api/v1/search", "/api/v2/search", "/status", "/torznab/api", "/announce/k", "/api/processors/v1/status", "/evidence/arr/x", "/api/publication/v1/lease", "/internal/name-policy/check"} {
 		e.GET(p, func(c *gin.Context) { c.Status(http.StatusOK) })
 		e.POST(p, func(c *gin.Context) { c.Status(http.StatusOK) })
 	}
@@ -52,6 +52,13 @@ func TestAPIKeyEnforced(t *testing.T) {
 		require.Equal(t, 200, call(t, e, "GET", p, "", ""), p)
 	}
 	require.Equal(t, 200, call(t, e, "POST", "/evidence/arr/x", "", ""))
-	// CORS preflight is never blocked.
-	require.Equal(t, 404, call(t, e, "OPTIONS", "/graphql", "", ""))
+	// These two authenticate with their own bearer token, which is not this key.
+	for _, p := range []string{"/api/publication/v1/lease", "/internal/name-policy/check"} {
+		require.Equal(t, 200, call(t, e, "POST", p, "Authorization", "Bearer their-own-token"), p)
+	}
+	// A CORS preflight is never blocked; it reaches no handler here.
+	require.Equal(t, 404, call(t, e, "OPTIONS", "/graphql", "Access-Control-Request-Method", "POST"))
+	// Any other OPTIONS request is an ordinary request.
+	require.Equal(t, 401, call(t, e, "OPTIONS", "/graphql", "", ""))
+	require.Equal(t, 401, call(t, e, "OPTIONS", "/metrics", "Origin", "https://example.org"))
 }

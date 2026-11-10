@@ -18,7 +18,7 @@ DH-Waypoint isn't in Prowlarr's built-in indexer list. Don't pick the **BitMagne
    |---|---|
    | Same Docker network as Prowlarr (the example compose service) | `http://dh-waypoint:3333/torznab` |
    | Same machine, Prowlarr not in Docker | `http://localhost:3333/torznab` |
-   | Another machine, or over a VPN | `http://<its IP or hostname>:3333/torznab` |
+   | Another machine, or over a VPN | `http://<its IP or hostname>:3333/torznab` (set `DH_WAYPOINT_HTTP_BIND` first; the port is published on `127.0.0.1` by default) |
    | Behind a reverse proxy | `https://dh-waypoint.example.com/torznab` |
 
 3. Click **Test**, then **Save**.

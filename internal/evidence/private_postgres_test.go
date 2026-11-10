@@ -37,11 +37,14 @@ func privateEvidenceFixture(t *testing.T) (*Store, *pgxpool.Pool) {
 		_, _ = admin.Exec(context.Background(), `DROP SCHEMA `+pgx.Identifier{schema}.Sanitize()+` CASCADE`)
 		admin.Close()
 	})
-	// The columns and index IsPrivateInfoHash reads, as created by migrations
+	// The columns and index IsPrivateInfoHash and ListRecent read, as created by migrations
 	// 00021 (label_evidence) and 00070 (v2 identity).
 	_, err = pool.Exec(ctx, `CREATE TABLE torrents(info_hash bytea PRIMARY KEY, info_hash_v2 bytea);
  CREATE INDEX torrents_info_hash_v2 ON torrents(info_hash_v2);
- CREATE TABLE label_evidence(id bigserial PRIMARY KEY, info_hash bytea, source text NOT NULL, category text);
+ CREATE TABLE label_evidence(id bigserial PRIMARY KEY, info_hash bytea, source text NOT NULL, category text,
+  source_kind text NOT NULL DEFAULT '', source_instance text NOT NULL DEFAULT '', source_object_id text NOT NULL DEFAULT '',
+  download_id text, title text, media_type text, media_id text,
+  observed_at timestamptz NOT NULL DEFAULT now(), strength smallint NOT NULL DEFAULT 0);
  CREATE INDEX label_evidence_info_hash_idx ON label_evidence(info_hash) WHERE info_hash IS NOT NULL;`)
 	require.NoError(t, err)
 	return NewStore(lazy.New(func() (*pgxpool.Pool, error) { return pool, nil })), pool
@@ -103,4 +106,40 @@ func TestIsPrivateInfoHashProbesTheInfoHashIndex(t *testing.T) {
 	text := strings.Join(plan, "\n")
 	require.NotContains(t, text, "Seq Scan on label_evidence", text)
 	require.Contains(t, text, "label_evidence_info_hash_idx", text)
+}
+
+func TestListRecentLeavesOutPrivateDownloads(t *testing.T) {
+	s, pool := privateEvidenceFixture(t)
+	ctx := context.Background()
+	private, public := hash20('a'), hash20('d')
+	// Two hybrid torrents: one is private under its v2 hash, the other under v1.
+	v1, v2 := hash20('b'), []byte(strings.Repeat("c", 32))
+	otherV1, otherV2 := hash20('e'), []byte(strings.Repeat("f", 32))
+	_, err := pool.Exec(ctx, `INSERT INTO torrents(info_hash, info_hash_v2) VALUES ($1, $2), ($3, $4)`, v1, v2, otherV1, otherV2)
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `INSERT INTO label_evidence(info_hash, source, category, title) VALUES
+ ($1, 'qbittorrent', 'private', 'private state'),
+ ($1, 'sonarr', 'tv', 'grab of the private download'),
+ ($2, ' QBittorrent ', 'Bitgrab', 'private state under the v2 hash'),
+ ($3, 'radarr', 'movies', 'grab under the v1 hash of the same torrent'),
+ ($5, 'qbittorrent', 'private', 'private state under the v1 hash'),
+ ($6, 'radarr', 'movies', 'grab under the v2 hash of the same torrent'),
+ (NULL, 'qbittorrent', 'private', 'private state without a hash'),
+ ($4, 'qbittorrent', NULL, 'public state'),
+ ($4, 'sonarr', 'private', 'public grab'),
+ (NULL, 'sonarr', 'tv', 'public grab without a hash')`, private, v2, v1, public, otherV1, otherV2)
+	require.NoError(t, err)
+
+	// Read in pages of two: the rows share one timestamp, so this also checks
+	// that pages neither repeat nor skip a row, and that the total matches.
+	var titles []string
+	for offset := 0; offset < 4; offset += 2 {
+		rows, total, err := s.ListRecent(ctx, 2, offset)
+		require.NoError(t, err)
+		require.Equal(t, 3, total)
+		for _, row := range rows {
+			titles = append(titles, row.Title)
+		}
+	}
+	require.ElementsMatch(t, []string{"public state", "public grab", "public grab without a hash"}, titles)
 }

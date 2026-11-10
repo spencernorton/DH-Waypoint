@@ -28,6 +28,25 @@ func TestEnvBinding_CsamBlocklistFeedUrls(t *testing.T) {
 	}
 }
 
+// CSAM_SWEEP_MODE is the documented name of the one sweep setting. A value
+// that is not a mode fails the start: it must not fall back to deleting.
+func TestEnvBinding_CsamSweepMode(t *testing.T) {
+	resolved := resolveSectionFromEnv(t, "csam_sweep", csamblocklist.NewDefaultSweepConfig(), map[string]string{"CSAM_SWEEP_MODE": "dry_run"})
+	if cfg, ok := resolved.(csamblocklist.SweepConfig); !ok || cfg.Mode != csamblocklist.SweepDryRun {
+		t.Fatalf("CSAM_SWEEP_MODE=dry_run did not bind: %#v", resolved)
+	}
+	resolved = resolveSectionFromEnv(t, "csam_sweep", csamblocklist.NewDefaultSweepConfig(), nil)
+	if cfg, ok := resolved.(csamblocklist.SweepConfig); !ok || cfg.Mode != csamblocklist.SweepApply {
+		t.Fatalf("the default is not apply: %#v", resolved)
+	}
+	_, err := resolveRootNode(
+		[]configresolver.Resolver{configresolver.NewEnv(map[string]string{"CSAM_SWEEP_MODE": "dryrun"})},
+		validator.New(), Spec{Key: "csam_sweep", DefaultValue: csamblocklist.NewDefaultSweepConfig()})
+	if err == nil {
+		t.Fatal("an unknown CSAM_SWEEP_MODE was accepted")
+	}
+}
+
 // TestEnvBinding_ContentFilterDropLossyAudioOnly proves the documented env var
 // CONTENT_FILTER_DROP_LOSSY_AUDIO_ONLY binds the renamed DropLossyAudioOnly
 // field (the rename that dodged the DropMP3Only digit-split footgun). It also
