@@ -36,7 +36,9 @@
   removes nothing; the crawler uses it for ban-check rejections, under both
   the wire key and the verified identities. `Block` is unchanged and still
   held. Hashes added this way are also refused by the importer, as blocked
-  hashes always were.
+  hashes always were. The verdict event for such a rejection keeps mechanism
+  `blocking` and now carries the evidence label `ban_check`; the crawler no
+  longer passes a `csam` label for it.
 - Index torrents with short names. The ban check refused any name under 8
   bytes, which dropped real titles such as `Tenet` or `1917`. Only an empty
   name is refused now.
