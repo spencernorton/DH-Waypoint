@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/spencernorton/DH-Waypoint/internal/model"
 	"github.com/spencernorton/DH-Waypoint/internal/protocol"
 )
 
@@ -31,6 +32,14 @@ type Manager interface {
 	// metric and the stored row: "crawler" or "import". Only double
 	// hashes are kept. Failures are logged, never returned.
 	Observe(ctx context.Context, source string, infoHashes ...protocol.InfoHash)
+
+	// RemoveStored removes a stored torrent that matches the built-in
+	// banned-keyword list, with every row that can hold its name or a file
+	// path, and remembers its identities. No copy is kept and there is no
+	// undo. A torrent tied to the operator's own tools is kept and hidden
+	// instead. It refuses a torrent the list does not match. source names
+	// the caller for the metric and the stored row.
+	RemoveStored(ctx context.Context, source string, t model.Torrent) (Outcome, error)
 
 	// Refresh forces an immediate re-fetch of all configured feeds and
 	// re-reads this instance's own observations.

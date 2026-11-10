@@ -46,10 +46,19 @@ DHT discovery
     │   apply the same check before they write a torrent.
     │
     ▼
+[3b] Processor check ─── every PROCESSING_MODE, reprocess requests too
+    │   a stored torrent whose name or file paths match the built-in
+    │   list is removed before the classifier or an optional processor
+    │   sees it, and remembered and exported as in [3a]. See "Removing
+    │   a stored match".
+    │
+    ▼
 [4] CEL classifier ─── post-fetch, sees the title + files
     │   (PROCESSING_MODE=full only)
-    │   `keywords.banned` regex → ErrDeleteTorrent; the delete and any
-    │   BlockingManager.Block are held while catalogue removal is
+    │   `keywords.banned` regex → ErrDeleteTorrent. [3b] has already
+    │   removed every match of the built-in list, so this acts on
+    │   keywords an operator added in a classifier file; the delete and
+    │   any BlockingManager.Block are held while catalogue removal is
     │   disabled, so nothing is removed or added to [2]
     │
     ▼
@@ -61,8 +70,26 @@ DHT discovery
          instances catch the hash at [1] going forward)
 ```
 
+## Removing a stored match
+
+The processor tests every stored torrent it loads against the built-in list. This has no switch. The stored row is locked and tested again, so a row that was renamed in the meantime is left alone. A match is then removed in one transaction:
+
+- **Deleted:** the torrent row and the tables that follow it (files, contents, hints, tags, sources, pieces, tracker seeds), and every other row that can hold its name or a file path: processor jobs with their attempts, applications, exclusions, feedback events and reprocess requests; junk-purge judgments, quarantine entries and batch items; evaluation captures and the retired LLM queue; the frozen evaluation set, the shadow-policy log, the private file list and the field-repair journal.
+- **Blanked:** verdict events for the hash lose `reason` and `evidence`. A catalogue-recovery snapshot of it loses its copy and reason, and can no longer be restored. A junk-purge batch input file that contains it is emptied, because one file holds the names of the whole run.
+- **Kept:** one verdict (`tombstoned`, mechanism `csam`, no reason, no evidence), the double hash in `csam_local_observations`, and tables that hold no name or path (liveness, tracker statistics, receipts, publication state).
+
+No copy is made and there is no undo. The removal does not go through catalogue recovery and is not held while catalogue removal is disabled. A torrent with a v1 and a v2 hash is removed under both.
+
+**Protected torrents are hidden, not deleted.** A match with the private flag, a canonical label, *arr or qBittorrent evidence, a grab attempt, a hint with a content id or a protected tag is tied to the operator's own tools and is most likely a false hit. It gets a publication hold with the reason `banned_keyword`: no search or Torznab feed serves it and no optional processor receives it. A private torrent takes no hold, because it is served nowhere already. Evidence stored under the 20-byte form of a v2 hash, which is how qBittorrent and the *arr tools know a v2-only torrent, protects it too. The removal does not remember or export a hidden match. Releasing the hold lasts until the processor loads the torrent again.
+
+Only the built-in list removes. Keywords an operator adds in a classifier file never delete this way. A catalogue-recovery restore refuses a snapshot that matches.
+
 ## Honest limits
 
+- **Rows the processor never loads again stay stored.** Nothing walks the stored catalogue yet. With the name policy on, a stored torrent the policy denies is not loaded either.
+- **A hidden match is not fully cut off.** Feedback events and tasks of the retired LLM queue that were queued before the hold are still delivered. If the crawler fetches the hash again, which it does for a stored row without file information, the check before storage ([3a]) remembers and exports it like any other match.
+- **A refused restore keeps its snapshot.** The catalogue-recovery copy stays in `catalogue_recovery_snapshots`. Nothing removes it yet.
+- **Copies outside the database are not reached.** A name already delivered to an optional processor, or written to a log or a backup before the removal, stays there.
 - **First observation across the network** still incurs one BEP-9 fetch per network. The defense converges as observations propagate into community feeds — it does not eliminate.
 - **Bloom filter false positives** can reject a non-CSAM infohash that collides with a feed entry. With the default FPR of `0.001` and feeds in the 1k–100k range, the practical FP rate is very low. An FP causes one infohash to never be indexed by this instance — not a safety issue, just a curation miss. Operators can lower FPR at the cost of memory.
 - **Compromised feeds** could publish hashes that aren't actually CSAM. Operators are responsible for the trust they place in any feed URL they configure. The package exposes `feed_refresh_total{outcome}` and per-feed `feed_entries` metrics so an operator can spot a feed flooding the blocklist.
@@ -123,13 +150,15 @@ All under namespace `dh_waypoint_csam_blocklist_`:
 - `feed_refresh_duration_seconds{feed}` — histogram.
 - `feed_entries{feed}` — gauge. Per-feed entry count.
 - `entries` — gauge. Total entries across all feeds.
+- `keyword_matches_total{source}` — counter. Matches dropped before storage. `source=crawler|import`.
+- `stored_matches_total{source,outcome}` — counter. Stored matches handled. `source=processor`, `outcome=removed|hidden_protected`.
 - `export_total{outcome}` — counter. `outcome=local_ok|local_err|upstream_ok|upstream_err|skipped_no_match`.
 
 See [reference/metrics.md](reference/metrics.md) for the catalogue context.
 
 ## Self-export observation log
 
-When the post-fetch CEL classifier emits `ErrDeleteTorrent` AND the title or file paths match the banned-keyword regex, one JSONL line is appended to `EXPORT_FILE_PATH`:
+When a torrent matches the built-in banned-keyword list, before storage ([3a]) or as a stored row the processor removes ([3b]), one JSONL line is appended to `EXPORT_FILE_PATH`:
 
 ```json
 {"ts":"2026-04-27T03:14:15.926Z","double_hash":"de47c9b2...","reason":"banned_keyword"}

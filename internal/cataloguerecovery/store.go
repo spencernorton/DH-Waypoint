@@ -17,6 +17,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/spencernorton/DH-Waypoint/internal/catalogueguard"
+	"github.com/spencernorton/DH-Waypoint/internal/csamblocklist"
 	"github.com/spencernorton/DH-Waypoint/internal/verdicts"
 )
 
@@ -29,6 +30,9 @@ var (
 	ErrExpired   = errors.New("catalogue recovery: retention window expired; snapshot retained")
 	ErrConflict  = errors.New("catalogue recovery: current source or policy conflicts with transition")
 	ErrProtected = errors.New("catalogue recovery: protected torrent")
+	// ErrBannedKeyword refuses to restore a snapshot whose name or file paths
+	// match the built-in banned-keyword list. It is a conflict to callers.
+	ErrBannedKeyword = fmt.Errorf("%w: snapshot matches the built-in banned-keyword list and is never restored", ErrConflict)
 )
 
 // Config has no enabled defaults. MaxPayloadBytes bounds retained canonical JSON;
@@ -500,6 +504,21 @@ func (s *Store) Restore(ctx context.Context, id int64, now time.Time) (bool, err
 	}
 	if len(p) != len(tables)+1 {
 		return false, ErrConflict
+	}
+	// The built-in banned-keyword list applies before a torrent row is
+	// written, here as in the crawler, the import gate and the legacy restore.
+	var torrentRows []json.RawMessage
+	if err = json.Unmarshal(p["torrents"], &torrentRows); err != nil {
+		return false, err
+	}
+	for _, row := range torrentRows {
+		banned, err := csamblocklist.SnapshotMatchesBannedKeyword(row, p["torrent_files"])
+		if err != nil {
+			return false, err
+		}
+		if banned {
+			return false, ErrBannedKeyword
+		}
 	}
 	for _, table := range tables {
 		b, ok := p[table]

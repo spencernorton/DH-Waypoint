@@ -4,7 +4,8 @@
 //
 //   - configfx section "csam_blocklist" (env prefix CSAM_BLOCKLIST_*)
 //   - csamblocklist.Manager interface (consumed by the dhtcrawler
-//     pre-fetch hook in infohash_triage)
+//     pre-fetch hook in infohash_triage, and by the processor to remove a
+//     stored banned-keyword match)
 //   - csamblocklist.Exporter interface (consumed by the processor
 //     when CEL emits ErrDeleteTorrent)
 //   - *csamblocklist.Metrics

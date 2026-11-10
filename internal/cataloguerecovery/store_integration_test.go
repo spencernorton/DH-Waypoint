@@ -21,6 +21,7 @@ import (
 	"github.com/spencernorton/DH-Waypoint/internal/blocking"
 	"github.com/spencernorton/DH-Waypoint/internal/cataloguerecovery"
 	"github.com/spencernorton/DH-Waypoint/internal/cataloguerecovery/recoveryhttp"
+	"github.com/spencernorton/DH-Waypoint/internal/csamblocklist/csamblocklisttest"
 	"github.com/spencernorton/DH-Waypoint/internal/database/dao"
 	"github.com/spencernorton/DH-Waypoint/internal/database/search"
 	"github.com/spencernorton/DH-Waypoint/internal/lazy"
@@ -169,6 +170,36 @@ func TestPostgresFullSourceRoundtripAndIdempotency(t *testing.T) {
 			require.Equal(t, 3, count(t, pool, "catalogue_recovery_events"))
 			require.Equal(t, 2, count(t, pool, "torrent_verdict_events"))
 			assertRetained(t, pool, snap.ID, "restored")
+		})
+	}
+}
+
+// A snapshot whose name or a file path matches the built-in banned-keyword
+// list is never restored, whichever caller asks. The made-up name comes from
+// csamblocklisttest so no keyword is spelled here.
+func TestPostgresRestoreRefusesBannedKeyword(t *testing.T) {
+	for _, column := range []string{"torrents.name", "torrent_files.path"} {
+		t.Run(column, func(t *testing.T) {
+			pool := recoveryPool(t)
+			s := store(t, pool)
+			h := hash(1)
+			seed(t, pool, h, false)
+			statement := `update torrents set name=$2 where info_hash=$1`
+			if column == "torrent_files.path" {
+				statement = `update torrent_files set path=$2 where info_hash=$1 and "index"=0`
+			}
+			_, err := pool.Exec(ctx, statement, h, csamblocklisttest.BannedName()+".mkv")
+			require.NoError(t, err)
+			now := time.Now().UTC()
+			snap, err := s.Remove(ctx, h, "blocking", "synthetic removal", now)
+			require.NoError(t, err)
+			ok, err := s.Restore(ctx, snap.ID, now.Add(time.Minute))
+			require.ErrorIs(t, err, cataloguerecovery.ErrBannedKeyword)
+			require.ErrorIs(t, err, cataloguerecovery.ErrConflict)
+			require.False(t, ok)
+			require.Zero(t, count(t, pool, "torrents"))
+			require.Zero(t, count(t, pool, "torrent_files"))
+			assertRetained(t, pool, snap.ID, "removed")
 		})
 	}
 }
