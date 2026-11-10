@@ -2,44 +2,6 @@
 
 ## Unreleased
 
-- **The clean-up of stored banned-keyword matches deletes by default.** A
-  background sweep reads every stored torrent once, with its file paths, and
-  every copy of a name that outlived its torrent: junk-purge quarantine
-  entries, judgments and batch items, catalogue-recovery snapshots, the name
-  that earlier releases sampled into a classifier-delete verdict, and the
-  frozen evaluation set. It uses the matcher of the live check and hands each
-  match to the removal described below: deleted with no copy and no undo, or
-  hidden when it is tied to the operator's own tools. `CSAM_SWEEP_MODE` is
-  `apply` (default), `dry_run` (count only) or `off`. To see the numbers
-  before the sweep deletes anything, start this release with
-  `CSAM_SWEEP_MODE=dry_run`, wait for
-  `dh_waypoint_csam_blocklist_sweep_done` to reach 1, read
-  `dh_waypoint_csam_blocklist_sweep_matches{table,outcome}`, then switch to
-  `apply`. The setting stops the sweep only: in every mode the processor
-  removes a stored match when it loads one. Give every worker process the same
-  mode. The position and the counts are saved in `key_values`, so a restart
-  continues the pass. No migration.
-- Remove a stored torrent that matches the built-in banned-keyword list. The
-  processor tests every torrent it loads, in every processing mode and for
-  reprocess requests, before the classifier or any optional processor sees
-  it. The stored row is locked and tested again before anything is deleted. A match is deleted together with every row that can hold
-  its name or a file path (the torrent's own tables, the processor queue and
-  its feedback events, junk-purge judgments, quarantine entries and batch
-  items, evaluation captures, the retired LLM queue). Verdict events, recovery
-  snapshots and batch input files that mention it are blanked. One verdict
-  (`tombstoned`, mechanism `csam`, no reason, no evidence) and the double hash
-  are kept. No copy is made and there is no undo; the removal does not go
-  through catalogue recovery and is not held while catalogue removal is
-  disabled. `dh_waypoint_csam_blocklist_stored_matches_total{source,outcome}`
-  counts it.
-- Keep and hide a match that is tied to the operator's own tools. A torrent
-  with the private flag, a canonical label, *arr or qBittorrent evidence, a
-  grab attempt, a hint with a content id or a protected tag is most likely a
-  false hit. It is not deleted: it gets a publication hold with the reason
-  `banned_keyword`, so no search serves it and no optional processor receives
-  it (outcome `hidden_protected`).
-- Refuse to restore a catalogue-recovery snapshot whose name or file paths
-  match the built-in list (`cataloguerecovery.ErrBannedKeyword`, a conflict).
 - Apply the built-in banned-keyword list before a torrent is stored, in every
   processing mode. The list only ran inside the classifier, so `raw` and
   `basic` (the default) never applied it, and in `full` the row was already
@@ -48,8 +10,7 @@
   gate, and the quarantine restore tests the snapshot before it writes the
   torrent row. A match is dropped and nothing of it is stored. The check has
   no switch: `CSAM_BLOCKLIST_ENABLED` now controls the community feeds only.
-  Rows stored before this release are removed by the sweep and when the
-  processor next loads them (see above).
+  Rows stored before this release are not touched.
 - Remember those matches. The double hash of each match is saved in the new
   `csam_local_observations` table (migration 00076; no infohash, name or path)
   and loaded into the CSAM blocklist filter at start and at each refresh, so
