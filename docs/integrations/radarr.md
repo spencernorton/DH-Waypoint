@@ -35,9 +35,9 @@ A title-only query falls back when Radarr doesn't have a TMDB ID for the movie y
 | Newznab ID | Radarr label | Notes |
 |---|---|---|
 | 2000 | Movies | catch-all |
-| 2030 | Movies/SD | 480p |
-| 2040 | Movies/HD | 720p–2160p |
-| 2045 | Movies/UHD | 2160p |
+| 2030 | Movies/SD | below 720p, and results with no resolution in the name |
+| 2040 | Movies/HD | 720p and above |
+| 2045 | Movies/UHD | 2160p and above; these are in Movies/HD too |
 | 2060 | Movies/3D | rare |
 
 `[screenshot: radarr-categories-selector]`

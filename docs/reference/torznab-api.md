@@ -89,6 +89,8 @@ DH-Waypoint advertises only these Newznab categories in `t=caps` (`internal/torz
 
 Each result carries the category of its content type: 2000 movie, 5000 TV (anime TV also 5070), 3000 music, 3030 audiobook, 7000 ebook, 7030 comic, 4000 software, 4050 game, 6000 XXX, and 8000 anything else (`internal/torznab/adapter/search_result.go`).
 
+A movie or TV result also carries its resolution subcategories, by the rule the `cat` filter applies: SD (2030, 5030) below 720p or with no parsed resolution, HD (2040, 5040) at 720p and above, and UHD (2045, 5045) as well at 2160p and above. Every movie and TV result is in exactly one of SD and HD.
+
 ## Response format
 
 Successful responses are RSS 2.0 XML with `<torznab:attr name="..." value="..."/>` per-item attributes.

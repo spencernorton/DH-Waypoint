@@ -139,5 +139,12 @@ func (a *ContentAttributes) InferVideoAttributes(input string, sourceName ...str
 	if len(sourceName) > 0 {
 		name = sourceName[0]
 	}
+	// input is the text after the title, which misses a height written ahead
+	// of the episode marker ("Show.2160p.S01E01") or in a name with no cut at
+	// all ("[Group] Show - 05 (1080p)"). Only an exact height is read from the
+	// whole name: a loose word there may be a title word.
+	if !a.VideoResolution.Valid {
+		a.VideoResolution, _ = model.FindExactVideoResolution(name)
+	}
 	a.ReleaseAttributes = model.InferReleaseAttributes(name, input)
 }
