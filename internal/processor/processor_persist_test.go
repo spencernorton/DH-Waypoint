@@ -100,6 +100,7 @@ func (m *recordingBlockingManager) Block(
 }
 
 func (m *recordingBlockingManager) Flush(context.Context) error { return nil }
+func (m *recordingBlockingManager) Ignore([]protocol.InfoHash)  {}
 
 func (m *recordingBlockingManager) blockedHashes() []protocol.InfoHash {
 	m.mu.Lock()

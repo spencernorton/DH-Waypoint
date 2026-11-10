@@ -87,8 +87,13 @@ func (c *crawler) recordCsamReject(ctx context.Context, hash protocol.InfoHash, 
 	c.recordVerdict(ctx, hash, verdicts.MechanismCsam, "community-feed CSAM reject ("+site+")", csamEvidence(site))
 }
 
+// banCheckEvidence labels a ban-check rejection: an empty name, a tiny size or
+// invalid text in the fetched info dictionary. None of those is a CSAM match,
+// so these events never carry the csam mechanism or label.
+var banCheckEvidence = []byte(`{"source":"ban_check"}`)
+
 // recordBlockingVerdict records a blocking blacklist for a ban-check
-// auto-block (the blocking manager's own choke, driven by banningChecker).
+// rejection. The hash is remembered and not fetched again; nothing is removed.
 func (c *crawler) recordBlockingVerdict(ctx context.Context, hash protocol.InfoHash) {
-	c.recordVerdict(ctx, hash, verdicts.MechanismBlocking, "banning check failed; blocked", nil)
+	c.recordVerdict(ctx, hash, verdicts.MechanismBlocking, "ban check failed; not fetched again", banCheckEvidence)
 }
