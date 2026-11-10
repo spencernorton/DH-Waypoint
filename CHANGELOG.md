@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Drop the `queue_jobs_queue_payload_idx` GIN index (migration 00075). No query
+  filters queue jobs with a jsonb containment or existence operator, so the
+  planner never read it, while every job insert and status change maintained
+  it; on a large catalogue it grew to many times the size of the table. The
+  migration runs `DROP INDEX CONCURRENTLY IF EXISTS` outside a transaction, so
+  it takes no long lock and also applies where the index is already gone. No
+  query result changes.
+
 ## 5.9.3 — 2026-11-09
 
 - Upgrade `golang.org/x/net` from 0.60.0 to 0.62.0 for GO-2026-6860
