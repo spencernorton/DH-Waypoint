@@ -2,6 +2,7 @@ package adapter
 
 import (
 	"context"
+	"slices"
 	"testing"
 
 	"github.com/spencernorton/DH-Waypoint/internal/model"
@@ -66,4 +67,45 @@ func TestAdapterDispatchesDualIDToIdentifierSnapshotSearch(t *testing.T) {
 		{Type: model.ContentTypeTvShow, Source: "tmdb", ID: "119051"},
 		{Type: model.ContentTypeTvShow, Source: "tvdb", ID: "83268"},
 	}, s.refs)
+}
+
+// SD and HD split every resolution, and no resolution at all, between them.
+func TestResolutionSubcategoriesPartition(t *testing.T) {
+	sd := map[model.VideoResolution]bool{
+		model.VideoResolutionV360p: true, model.VideoResolutionV480p: true,
+		model.VideoResolutionV540p: true, model.VideoResolutionV576p: true,
+	}
+	uhd := map[model.VideoResolution]bool{model.VideoResolutionV2160p: true, model.VideoResolutionV4320p: true}
+
+	for _, c := range resolutionCategories {
+		require.Equal(t, []int{c.sd}, resolutionSubcategories(c.parent, model.NullVideoResolution{}))
+
+		for _, res := range model.VideoResolutionValues() {
+			want := []int{c.hd}
+			switch {
+			case sd[res]:
+				want = []int{c.sd}
+			case uhd[res]:
+				want = []int{c.hd, c.uhd}
+			}
+			require.Equal(t, want, resolutionSubcategories(c.parent, model.NewNullVideoResolution(res)), res)
+		}
+	}
+
+	require.Empty(t, resolutionSubcategories(torznab.CategoryAudio.ID, model.NullVideoResolution{}))
+}
+
+func TestMergeResolutionCats(t *testing.T) {
+	for _, tt := range []struct{ in, want []int }{
+		{[]int{5030, 5040}, []int{5000}},
+		{[]int{5040, 5070, 5030}, []int{5070, 5000}},
+		{[]int{2030, 2040, 5030}, []int{5030, 2000}},
+		{[]int{5030}, []int{5030}},
+		{[]int{5040, 5045}, []int{5040, 5045}},
+		{nil, nil},
+	} {
+		in := slices.Clone(tt.in)
+		require.Equal(t, tt.want, mergeResolutionCats(tt.in))
+		require.Equal(t, in, tt.in, "the request's categories must not be changed")
+	}
 }

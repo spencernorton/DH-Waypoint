@@ -13,7 +13,7 @@ DH-Waypoint exposes a standards-compliant Torznab endpoint that Sonarr can consu
    | Enable | ✓ |
    | URL | `http://dh-waypoint:3333/torznab` (compose service name) or `https://dh-waypoint.example.com/torznab` (public host) |
    | API Key | your `TORZNAB_API_KEY` |
-   | Categories | `5000` (TV), `5030` (TV/SD), `5040` (TV/HD) — pick what your library tracks |
+   | Categories | `5030` (TV/SD) and `5040` (TV/HD), Sonarr's default — together they return every TV result, the same as `5000` (TV) |
    | Anime Categories | leave blank unless you specifically curate anime |
    | Priority | `25` (high) to `50` (medium-fallback) — tune per your stack |
    | Download Client | leave blank to use Sonarr's default |
@@ -43,10 +43,12 @@ The first full search (manually triggered on a monitored episode) returns result
 | Newznab ID | Sonarr label | Notes |
 |---|---|---|
 | 5000 | TV | catch-all |
-| 5030 | TV/SD | 480p |
-| 5040 | TV/HD | 720p–2160p |
-| 5045 | TV/UHD | 2160p |
+| 5030 | TV/SD | below 720p, and results with no resolution in the name |
+| 5040 | TV/HD | 720p and above |
+| 5045 | TV/UHD | 2160p and above; these are in TV/HD too |
 | 5070 | TV/Anime | anime-specific |
+
+Every TV result is in exactly one of TV/SD and TV/HD, and each result lists its categories. The resolution is read from the torrent name when it is indexed; after an upgrade that changes the name parser, `dh-waypoint reprocess --contentType tv_show` re-reads the names of results that are already indexed.
 
 `[screenshot: sonarr-categories-selector]`
 

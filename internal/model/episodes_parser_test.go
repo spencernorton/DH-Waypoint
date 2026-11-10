@@ -190,3 +190,30 @@ func TestCommaListPrefixedItems(t *testing.T) {
 	assert.Equal(t, Episodes{1: {}, 2: {}, 3: {}}, ParseEpisodes("S1,S2,S3"))
 	assert.Equal(t, Episodes{2023: {1: {}, 3: {}}}, ParseEpisodes("S2023E01,E03"))
 }
+
+// TestParseEpisodesSeparatorsAndRanges: a separator between season and
+// episode, a spelled-out season with a dot, the fansub "S2 - 05" shape and
+// ranges that repeat the season on their end.
+func TestParseEpisodesSeparatorsAndRanges(t *testing.T) {
+	t.Parallel()
+
+	for input, want := range map[string]Episodes{
+		"S01.E05":            {1: {5: {}}},
+		"S01_E05":            {1: {5: {}}},
+		"S01 - E05":          {1: {5: {}}},
+		"S01xE05":            {1: {5: {}}},
+		"S01.EP05":           {1: {5: {}}},
+		"S05 EP.03":          {5: {3: {}}},
+		"Season.1":           {1: nil},
+		"Season.1.Episode.5": {1: {5: {}}},
+		"S01-S03":            {1: nil, 2: nil, 3: nil},
+		"S1-3":               {1: nil, 2: nil, 3: nil},
+		"Season 1 - 3":       {1: nil, 2: nil, 3: nil},
+		"S2 - 05":            {2: {5: {}}},
+		"S01E01-S01E03":      {1: {1: {}, 2: {}, 3: {}}},
+		"S01E01-S02E10":      {1: nil, 2: nil},
+		"S01E01-S02":         nil,
+	} {
+		assert.Equal(t, want.String(), ParseEpisodes(input).String(), input)
+	}
+}

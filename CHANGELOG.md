@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+- Torznab: put every film and TV result in exactly one of the SD and HD
+  categories. SD (2030, 5030) was exactly 480p and HD (2040, 5040) was 720p to
+  2160p, so a result with no parsed resolution, or at 360p, 540p, 576p or
+  4320p, was in neither. Sonarr asks a hand-added indexer for 5030 and 5040
+  only, so it never saw those results. SD is now everything that is not HD,
+  including no resolution; HD is 720p and above; UHD (2045, 5045) is 2160p and
+  above. A request for both SD and HD of one type is answered as its parent
+  category, and each film or TV result also reports its SD, HD and UHD
+  categories.
+- Name parser: read season ranges (`S01-S03`), an episode range that repeats
+  its season (`S01E01-S01E03`), a separator between season and episode
+  (`S01.E05`, `S01 - E05`, `S01xE05`), `Season.1` written with a dot, and the
+  fansub `S2 - 05` shape as one episode. The first marker in a name wins, so a
+  release group such as `-S4LVE` no longer replaces the season and a word such
+  as `S1ngle` is not season 1. `Season` followed by a year and no episode is a
+  title word and a year. An exact height (`1080p`) beats a loose word (`HD`,
+  `UHD`), and a height in brackets or ahead of the episode marker is kept
+  instead of being lost or read as part of the title.
+- Existing rows keep their old parse until reprocessed. `dh-waypoint reprocess
+  --contentType movie --contentType tv_show` re-reads episodes and resolution
+  and keeps each catalogue match; add `--classifyMode rematch` to match again
+  from scratch where the title or type was read wrong.
+
 ## 5.9.3 — 2026-11-09
 
 - Upgrade `golang.org/x/net` from 0.60.0 to 0.62.0 for GO-2026-6860
