@@ -19,6 +19,7 @@ import (
 	"github.com/spencernorton/DH-Waypoint/internal/protocol"
 	"github.com/spencernorton/DH-Waypoint/internal/protocol/metainfo"
 	"github.com/spencernorton/DH-Waypoint/internal/protocol/metainfo/banning"
+	"github.com/spencernorton/DH-Waypoint/internal/verdicts"
 	migrationssql "github.com/spencernorton/DH-Waypoint/migrations"
 	"github.com/stretchr/testify/require"
 )
@@ -74,9 +75,17 @@ func TestBanCheckRejectionIsRememberedWithoutRemoval(t *testing.T) {
 	c := crawler{
 		metainfoRequester: &policyRequester{info: metainfo.Info{Name: "Synthetic.Tiny.File.txt", Length: 12}},
 		csamBlocklist:     policyCsam{}, banningChecker: checker, blockingManager: block,
+		verdicts: verdicts.NewStore(lazy.New(func() (*pgxpool.Pool, error) { return pool, nil })),
 	}
 	_, err = c.doRequestMetaInfo(ctx, rejected, peers)
 	require.ErrorContains(t, err, "size too small")
+
+	// The ledger labels it as a ban-check rejection, never as a CSAM match.
+	var mechanism, source string
+	require.NoError(t, pool.QueryRow(ctx, `SELECT mechanism,evidence->>'source' FROM torrent_verdict_events WHERE info_hash=$1`,
+		protocol.InfoHashV1(rejected).Bytes()).Scan(&mechanism, &source))
+	require.Equal(t, verdicts.MechanismBlocking, mechanism)
+	require.Equal(t, "ban_check", source)
 
 	// A five-byte title is a real title, not a rejection.
 	c.metainfoRequester = &policyRequester{info: metainfo.Info{Name: "Tenet", Length: 2 << 30}}
