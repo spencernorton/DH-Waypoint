@@ -1,7 +1,9 @@
 package workercmd
 
 import (
+	"context"
 	"fmt"
+	"time"
 
 	"github.com/spencernorton/DH-Waypoint/internal/worker"
 	"github.com/urfave/cli/v2"
@@ -17,6 +19,10 @@ type Result struct {
 	fx.Out
 	Command *cli.Command `group:"commands"`
 }
+
+// stopTimeout bounds the worker stop hooks. It matches the default grace
+// period Docker allows between SIGTERM and SIGKILL.
+const stopTimeout = 10 * time.Second
 
 func New(p Params) (Result, error) {
 	cmd := &cli.Command{
@@ -48,7 +54,11 @@ func New(p Params) (Result, error) {
 					return nil
 				},
 				After: func(ctx *cli.Context) error {
-					return p.Workers.Stop(ctx.Context)
+					// The command context is already cancelled when a stop signal
+					// ended the run; stop hooks need a live one to finish their work.
+					stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx.Context), stopTimeout)
+					defer cancel()
+					return p.Workers.Stop(stopCtx)
 				},
 			},
 			{

@@ -54,6 +54,7 @@ func TestMetadataExchangeWithAnacrolixV1V2Hybrid(t *testing.T) {
 				cfg.DisableUTP = true
 				cfg.NoDefaultPortForwarding = true
 				cfg.DisableIPv6 = true
+				cfg.AlwaysWantConns = true
 				client, err := torrent.NewClient(cfg)
 				require.NoError(t, err)
 				t.Cleanup(func() { client.Close() })
