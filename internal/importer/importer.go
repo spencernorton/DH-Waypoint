@@ -216,9 +216,12 @@ func (i *activeImport) gateItems(items []Item) ([]Item, error) {
 		}
 		i.metrics.Gated("csam_keyword", 1)
 		if i.csamBlocklist != nil {
-			matched := []protocol.InfoHash{it.InfoHash}
+			// The crawler's triage knows a torrent by its 160-bit wire
+			// key, so that is remembered next to each full identity.
+			matched := []protocol.InfoHash{it.InfoHash, protocol.InfoHashV1(it.InfoHash.WireID())}
 			if it.metadata != nil && it.metadata.Identities.V2 != nil {
-				matched = append(matched, *it.metadata.Identities.V2)
+				v2 := *it.metadata.Identities.V2
+				matched = append(matched, v2, protocol.InfoHashV1(v2.WireID()))
 			}
 			i.csamBlocklist.Observe(i.ctx, "import", matched...)
 		}

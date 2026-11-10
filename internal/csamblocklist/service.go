@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -69,6 +68,10 @@ type service struct {
 		export(context.Context, protocol.InfoHash)
 	}
 
+	// observeMu keeps Refresh from saving a pending hash while the Observe
+	// that admitted it is still saving it: that INSERT tells which rows are
+	// new, and only those are exported.
+	observeMu sync.RWMutex
 	pendingMu sync.RWMutex
 	pending   map[[DoubleHashLen]byte]string // double hash -> source
 	pendingN  atomic.Int64
@@ -129,16 +132,18 @@ func (s *service) IsBlocked(infoHash protocol.InfoHash) bool {
 }
 
 func (s *service) blocked(dh [DoubleHashLen]byte) bool {
-	if bf := s.active.Load(); bf != nil && bf.Test(dh[:]) {
-		return true
+	// Pending first: Refresh installs the new filter before it empties the
+	// pending set, so a remembered hash is always in the one read second.
+	if s.pendingN.Load() != 0 {
+		s.pendingMu.RLock()
+		_, ok := s.pending[dh]
+		s.pendingMu.RUnlock()
+		if ok {
+			return true
+		}
 	}
-	if s.pendingN.Load() == 0 {
-		return false
-	}
-	s.pendingMu.RLock()
-	_, ok := s.pending[dh]
-	s.pendingMu.RUnlock()
-	return ok
+	bf := s.active.Load()
+	return bf != nil && bf.Test(dh[:])
 }
 
 // Filter returns the unblocked subset, mirroring BlockingManager.Filter
@@ -163,42 +168,52 @@ func (s *service) Filter(infoHashes []protocol.InfoHash) []protocol.InfoHash {
 // Observe remembers the identities of one torrent whose name or file
 // paths matched the built-in banned-keyword list. Lookups reject them
 // from this call on. The double hashes go to csam_local_observations so
-// a restart keeps them, and to the export log. A hash that is already
-// rejected is not recorded or exported a second time.
+// a restart keeps them, and to the export log. A hash the table already
+// holds is not exported a second time.
 func (s *service) Observe(ctx context.Context, source string, infoHashes ...protocol.InfoHash) {
-	uniq := make([]protocol.InfoHash, 0, len(infoHashes))
-	for _, h := range infoHashes {
-		if !slices.Contains(uniq, h) && !s.blocked(DoubleHash(h)) {
-			uniq = append(uniq, h)
-		}
-	}
-	if len(uniq) == 0 {
-		return
-	}
-	s.pendingMu.Lock()
-	for _, h := range uniq {
-		s.pending[DoubleHash(h)] = source
-	}
-	s.pendingN.Store(int64(len(s.pending)))
-	s.pendingMu.Unlock()
 	if s.metrics != nil {
 		s.metrics.KeywordMatchesTotal.WithLabelValues(source).Inc()
 	}
-	if s.pool != nil {
-		pool, err := s.pool.Get()
-		if err == nil {
-			err = SaveObservations(ctx, pool, source, uniq...)
-		}
-		if err != nil {
-			// It stays in the pending set, and Refresh writes it again.
-			s.logger.Warnw("csam local observation not saved; retrying at the next refresh", "source", source, "err", err)
+	fresh := s.admit(ctx, source, infoHashes)
+	if s.exporter == nil {
+		return
+	}
+	for _, h := range fresh {
+		s.exporter.export(ctx, h)
+	}
+}
+
+// admit puts the hashes in the pending set and in the table, and returns
+// those that were in neither.
+func (s *service) admit(ctx context.Context, source string, infoHashes []protocol.InfoHash) []protocol.InfoHash {
+	s.observeMu.RLock()
+	defer s.observeMu.RUnlock()
+	// The pending set is exact. The filter is not: it can answer yes for a
+	// hash it never held, and a feed can drop an entry later, so neither
+	// may keep a match out of the table.
+	fresh := make([]protocol.InfoHash, 0, len(infoHashes))
+	s.pendingMu.Lock()
+	for _, h := range infoHashes {
+		dh := DoubleHash(h)
+		if _, ok := s.pending[dh]; !ok {
+			s.pending[dh] = source
+			fresh = append(fresh, h)
 		}
 	}
-	if s.exporter != nil {
-		for _, h := range uniq {
-			s.exporter.export(ctx, h)
-		}
+	s.pendingN.Store(int64(len(s.pending)))
+	s.pendingMu.Unlock()
+	if len(fresh) == 0 || s.pool == nil {
+		return fresh
 	}
+	pool, err := s.pool.Get()
+	if err == nil {
+		fresh, err = saveObservations(ctx, pool, source, fresh)
+	}
+	if err != nil {
+		// It stays in the pending set, and Refresh writes it again.
+		s.logger.Warnw("csam local observation not saved; retrying at the next refresh", "source", source, "err", err)
+	}
+	return fresh
 }
 
 // syncLocal writes the pending observations that are not saved yet and
@@ -218,6 +233,7 @@ func (s *service) syncLocal(ctx context.Context) (flushed, local [][DoubleHashLe
 	// until the next interval.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	defer cancel()
+	s.observeMu.Lock()
 	s.pendingMu.RLock()
 	hashes := make([][]byte, 0, len(s.pending))
 	sources := make([]string, 0, len(s.pending))
@@ -227,7 +243,9 @@ func (s *service) syncLocal(ctx context.Context) (flushed, local [][DoubleHashLe
 		sources = append(sources, source)
 	}
 	s.pendingMu.RUnlock()
-	if err := saveDoubleHashes(ctx, pool, hashes, sources); err != nil {
+	_, err = saveDoubleHashes(ctx, pool, hashes, sources)
+	s.observeMu.Unlock()
+	if err != nil {
 		return nil, nil, err
 	}
 	local, err = loadObservations(ctx, pool)

@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"github.com/spencernorton/DH-Waypoint/internal/classifier/classification"
+	"github.com/spencernorton/DH-Waypoint/internal/csamblocklist"
+	"github.com/spencernorton/DH-Waypoint/internal/csamblocklist/csamblocklisttest"
 	"github.com/spencernorton/DH-Waypoint/internal/model"
 	"github.com/spencernorton/DH-Waypoint/internal/protocol"
 )
@@ -171,5 +173,25 @@ func TestEvidenceStopsCarryingNamesOnceSpent(t *testing.T) {
 	}
 	if hasName() {
 		t.Fatal("second delete recorded a name past the cap of 1")
+	}
+}
+
+// The classifier's rule tests base names, so a banned token that is only a
+// file extension does not match it and another rule may delete the torrent.
+// Its name must still stay out of the sampled evidence.
+func TestSampledDeleteNameRefusesBannedTokenInExtension(t *testing.T) {
+	token := csamblocklisttest.BannedToken()
+	inSample := protocol.InfoHashV1(protocol.ID{0})
+	for label, tor := range map[string]model.Torrent{
+		"single file": {InfoHash: inSample, Name: "Sample Clip." + token, FilesStatus: model.FilesStatusSingle},
+		"file path": {InfoHash: inSample, Name: "Sample Collection", FilesStatus: model.FilesStatusMulti,
+			Files: []model.TorrentFile{{Path: "Sample Folder/clip." + token}}},
+	} {
+		if csamblocklist.MatchesBannedKeyword(tor) {
+			t.Fatalf("%s: the rule is expected to ignore an extension", label)
+		}
+		if _, ok := sampledDeleteName(tor, newDeleteAuditBudget(true, 1, nil)); ok {
+			t.Fatalf("%s: a name that mentions a banned token was sampled", label)
+		}
 	}
 }

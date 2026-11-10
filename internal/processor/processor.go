@@ -467,7 +467,7 @@ func sampledDeleteName(
 	if len(hash) == 0 || hash[0] >= deleteNameSampleShare {
 		return "", false
 	}
-	if csamblocklist.MatchesBannedKeyword(t) {
+	if csamblocklist.MentionsBannedKeyword(t) {
 		return "", false
 	}
 	if !budget.consume() {

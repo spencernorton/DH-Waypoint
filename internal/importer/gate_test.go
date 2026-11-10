@@ -142,7 +142,7 @@ func TestGateItemsDropsBannedKeywordMatches(t *testing.T) {
 	banned := csamblocklisttest.BannedName()
 	items := mkItems(1, 2, 3, 4)
 	items[1].Name = banned + ".mkv"
-	v2 := protocol.InfoHash{42}
+	v2 := protocol.InfoHash{42, 31: 7} // differs from its 160-bit wire key
 	items[2].metadata = &metainfo.ValidatedInfo{
 		Info:       metainfo.Info{Name: "Sample Collection"},
 		Identities: protocol.TorrentIdentities{V1: &items[2].InfoHash, V2: &v2},
@@ -154,7 +154,9 @@ func TestGateItemsDropsBannedKeywordMatches(t *testing.T) {
 	out, err := gate.gateItems(items)
 	require.NoError(t, err)
 	assert.Equal(t, []byte{1, 4}, firstBytes(out))
-	assert.Equal(t, []protocol.InfoHash{items[1].InfoHash, items[2].InfoHash, v2}, observed)
+	// Each identity is remembered with the wire key triage knows it by.
+	assert.Equal(t, []protocol.InfoHash{items[1].InfoHash, items[1].InfoHash,
+		items[2].InfoHash, items[2].InfoHash, v2, protocol.InfoHashV1(v2.WireID())}, observed)
 	assert.Equal(t, 2.0, testutil.ToFloat64(gate.metrics.gated.WithLabelValues("csam_keyword")))
 
 	out, err = newGate(nil, nil).gateItems(items)

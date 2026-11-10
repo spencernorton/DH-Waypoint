@@ -3,6 +3,7 @@ package csamblocklist
 import (
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 
@@ -35,6 +36,14 @@ func MatchesBannedKeyword(t model.Torrent) bool {
 	return bannedKeywords().MatchString(bannedKeywordText(t))
 }
 
+// MentionsBannedKeyword is wider than MatchesBannedKeyword: it also tests the
+// name and every file path as written, extensions included. It decides what
+// may be copied into a record, never whether a torrent is dropped.
+func MentionsBannedKeyword(t model.Torrent) bool {
+	return MatchesBannedKeyword(t) || bannedKeywords().MatchString(t.Name) ||
+		slices.ContainsFunc(t.Files, func(f model.TorrentFile) bool { return bannedKeywords().MatchString(f.Path) })
+}
+
 func bannedKeywordText(t model.Torrent) string {
 	// extension is a generated column, so it is empty on a torrent that was
 	// not read back from the database. Fill it the way the column does.
@@ -48,6 +57,9 @@ func bannedKeywordText(t model.Torrent) string {
 		}
 		files[i] = f
 	}
+	// Stored files are read back sorted by path (model.Torrent.AfterFind),
+	// and a keyword of several words can match across two neighbours.
+	slices.SortFunc(files, func(a, b model.TorrentFile) int { return strings.Compare(a.Path, b.Path) })
 	t.Files = files
 
 	pt := protobuf.NewTorrent(t)

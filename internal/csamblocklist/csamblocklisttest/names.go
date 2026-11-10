@@ -11,15 +11,19 @@ import (
 var plainToken = regexp.MustCompile(`^[a-z0-9]+$`)
 
 // BannedName returns a made-up name that the built-in banned-keyword list
-// matches. It is built from the list's first plain token.
-func BannedName() string {
+// matches.
+func BannedName() string { return "Sample " + BannedToken() + " Clip" }
+
+// BannedToken returns the first plain token of the built-in list, for tests
+// that need it somewhere other than inside a name, such as an extension.
+func BannedToken() string {
 	src, err := classifier.CoreSource()
 	if err != nil {
 		panic(err)
 	}
 	for _, kw := range src.Keywords["banned"] {
 		if plainToken.MatchString(kw) {
-			return "Sample " + kw + " Clip"
+			return kw
 		}
 	}
 	panic("csamblocklisttest: the built-in banned list has no plain token")

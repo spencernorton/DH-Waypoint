@@ -233,7 +233,13 @@ func (c *crawler) doRequestMetaInfo(
 		// only those under the save threshold. Triage tests the 160-bit wire
 		// key, so that is remembered with the verified identities and this
 		// swarm is not contacted again.
-		if csamblocklist.MatchesBannedKeyword(model.TorrentFromMetadata(res.Validated, "dht", false, metainfo.MaxFilesCount)) {
+		banned := csamblocklist.MatchesBannedKeyword(model.TorrentFromMetadata(res.Validated, "dht", false, metainfo.MaxFilesCount))
+		if !banned && uint(len(res.Validated.Files)) > c.saveFilesThreshold {
+			// Only the first files are stored. The processor's rule sees
+			// that shorter list, where other paths sit side by side.
+			banned = csamblocklist.MatchesBannedKeyword(model.TorrentFromMetadata(res.Validated, "dht", false, c.saveFilesThreshold))
+		}
+		if banned {
 			c.csamBlocklist.Observe(ctx, "crawler", append(identities, protocol.InfoHashV1(hash))...)
 			return metainforequester.Response{}, errBannedKeyword
 		}

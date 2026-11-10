@@ -7,6 +7,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -96,18 +97,18 @@ func TestBannedKeywordMatchIsNeverStoredAndIsRemembered(t *testing.T) {
 	c := crawler{metainfoRequester: requester, csamBlocklist: mgr, banningChecker: banning.New(banning.Params{}).Checker}
 	peers := []netip.AddrPort{netip.MustParseAddrPort("127.0.0.1:1")}
 
+	// The persist stage stores what this step returns and nothing else, so
+	// an error with an empty response is what keeps a match out of the
+	// database. A clean torrent comes back with its metadata.
 	for _, key := range []protocol.ID{byName, byPath} {
-		_, err = c.doRequestMetaInfo(ctx, key, peers)
+		res, err := c.doRequestMetaInfo(ctx, key, peers)
 		require.ErrorIs(t, err, errBannedKeyword)
+		require.Zero(t, res)
 	}
-	_, err = c.doRequestMetaInfo(ctx, clean, peers)
+	res, err := c.doRequestMetaInfo(ctx, clean, peers)
 	require.NoError(t, err)
+	require.Equal(t, "Sample Clean Clip.mkv", res.Info.Name)
 	require.Equal(t, 3, requester.calls)
-
-	// Nothing reached the persist stage, so nothing is stored.
-	var torrents, files int
-	require.NoError(t, pool.QueryRow(ctx, `SELECT (SELECT count(*) FROM torrents),(SELECT count(*) FROM torrent_files)`).Scan(&torrents, &files))
-	require.Zero(t, torrents+files)
 
 	// The double hashes are saved; the infohashes are not.
 	wantName, wantPath := sha256.Sum256(byName[:]), sha256.Sum256(byPath[:])
@@ -135,6 +136,20 @@ func TestBannedKeywordMatchIsNeverStoredAndIsRemembered(t *testing.T) {
 	require.NoError(t, mgr.Refresh(ctx))
 	require.Equal(t, 2, mgr.Snapshot().EntryCount)
 	require.Equal(t, hashes[2:], mgr.Filter(append([]protocol.InfoHash{}, hashes...)))
+
+	// A match the table already holds is not exported twice. One the filter
+	// answers for without the table holding it is saved all the same: the
+	// filter can be wrong, and a feed can drop an entry later.
+	mgr.Observe(ctx, "crawler", hashes[0])
+	_, err = pool.Exec(ctx, `DELETE FROM csam_local_observations WHERE double_hash=$1`, wantPath[:])
+	require.NoError(t, err)
+	mgr.Observe(ctx, "crawler", hashes[1])
+	var rowCount int
+	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM csam_local_observations`).Scan(&rowCount))
+	require.Equal(t, 2, rowCount)
+	export, err = os.ReadFile(exportPath)
+	require.NoError(t, err)
+	require.Equal(t, 1, strings.Count(string(export), fmt.Sprintf("%x", wantName)))
 
 	// Nor does a restarted one, once its startup refresh has read the table.
 	restarted := newManager()
