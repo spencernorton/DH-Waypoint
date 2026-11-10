@@ -41,6 +41,7 @@ func (passThroughBlocking) Block(context.Context, []protocol.InfoHash, string, s
 	return nil
 }
 func (passThroughBlocking) Flush(context.Context) error { return nil }
+func (passThroughBlocking) Ignore([]protocol.InfoHash)  {}
 
 func trackerFixture(t *testing.T, cfg Config) (*Store, *pgxpool.Pool) {
 	t.Helper()

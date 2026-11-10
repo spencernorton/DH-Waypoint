@@ -13,8 +13,9 @@
 //
 // Conservative defaults (see csamblocklist.NewDefaultConfig):
 //
-//   - Enabled=true with no FeedUrls configured → Manager is NoOp,
-//     no work happens until operator opts into a feed
+//   - Enabled=true with no FeedUrls configured → no feed is fetched until
+//     the operator opts into one. The Manager is live either way: it
+//     remembers this instance's own banned-keyword matches
 //   - ExportEnabled=true writing to a local JSONL log
 //   - ExportUpstreamURL="" → no outbound POST until operator opts in
 package csamblocklistfx
@@ -24,18 +25,21 @@ import (
 	"errors"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/spencernorton/DH-Waypoint/internal/config/configfx"
 	"github.com/spencernorton/DH-Waypoint/internal/csamblocklist"
+	"github.com/spencernorton/DH-Waypoint/internal/lazy"
 	"github.com/spencernorton/DH-Waypoint/internal/worker"
 	"go.uber.org/fx"
 	"go.uber.org/zap"
+	"gorm.io/gorm"
 )
 
 // initialRefreshBudget is how long the OnStart hook is willing to
 // wait for the first feed-refresh to complete before letting the app
 // boot anyway. Bounded so a misconfigured / unreachable feed cannot
-// permanently block startup. The CSAM blocklist remains a NoOp until
+// permanently block startup. The CSAM blocklist filter stays empty until
 // the first refresh succeeds — but the dhtcrawler also won't have
 // accepted any DHT traffic before fx finishes its OnStart phase, so
 // the bounded wait closes the "fresh-deploy gap" Jeeves flagged on
@@ -69,8 +73,19 @@ func provideManager(
 	cfg csamblocklist.Config,
 	metrics *csamblocklist.Metrics,
 	logger *zap.SugaredLogger,
+	db lazy.Lazy[*gorm.DB],
+	pool lazy.Lazy[*pgxpool.Pool],
+	exporter csamblocklist.Exporter,
 ) csamblocklist.Manager {
-	return csamblocklist.New(cfg, logger.Named("csamblocklist"), metrics)
+	// Resolving the gorm handle first runs the migrations, so the
+	// observations table exists before the startup refresh reads it.
+	migrated := lazy.New(func() (*pgxpool.Pool, error) {
+		if _, err := db.Get(); err != nil {
+			return nil, err
+		}
+		return pool.Get()
+	})
+	return csamblocklist.New(cfg, logger.Named("csamblocklist"), metrics, migrated, exporter)
 }
 
 func provideExporter(

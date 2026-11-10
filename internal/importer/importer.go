@@ -60,9 +60,9 @@ type importer struct {
 	// §2.3, exam P2): before this, persistItems inserted any infohash
 	// straight into the DB, skipping the CSAM feed bloom and the
 	// self-observed blocklist bloom that the dhtcrawler enforces at
-	// triage. Both are always non-nil in the fx graph (csam has a NoOp
-	// fallback); nil only in narrow direct-construction tests, where the
-	// gate degrades to pass-through.
+	// triage. Both are always non-nil in the fx graph; nil only in narrow
+	// direct-construction tests, where those two filters degrade to
+	// pass-through. The banned-keyword check in gateItems needs neither.
 	csamBlocklist   csamblocklist.Manager
 	blockingManager blocking.Manager
 	metrics         *Metrics
@@ -199,10 +199,34 @@ func (i *activeImport) flushLocked() {
 // lookup failure must never fall through to inserting a possibly-blocked
 // hash. Returns the surviving items; a fully-filtered batch returns an empty
 // slice and no error.
+//
+// Before those, the built-in banned-keyword list is applied to the name and
+// file paths each item would store. It needs no feed and no setting. A match
+// is dropped and remembered, so a later import of the same hash stops at the
+// CSAM filter.
 func (i *activeImport) gateItems(items []Item) ([]Item, error) {
 	if len(items) == 0 {
 		return items, nil
 	}
+	clean := items[:0:0]
+	for _, it := range items {
+		if !csamblocklist.MatchesBannedKeyword(createTorrentModel(i.info, it)) {
+			clean = append(clean, it)
+			continue
+		}
+		i.metrics.Gated("csam_keyword", 1)
+		if i.csamBlocklist != nil {
+			// The crawler's triage knows a torrent by its 160-bit wire
+			// key, so that is remembered next to each full identity.
+			matched := []protocol.InfoHash{it.InfoHash, protocol.InfoHashV1(it.InfoHash.WireID())}
+			if it.metadata != nil && it.metadata.Identities.V2 != nil {
+				v2 := *it.metadata.Identities.V2
+				matched = append(matched, v2, protocol.InfoHashV1(v2.WireID()))
+			}
+			i.csamBlocklist.Observe(i.ctx, "import", matched...)
+		}
+	}
+	items = clean
 	hashes := make([]protocol.InfoHash, 0, 2*len(items))
 	for _, it := range items {
 		hashes = append(hashes, it.InfoHash)

@@ -2,28 +2,46 @@
 
 ## Unreleased
 
-- Torznab: put every film and TV result in exactly one of the SD and HD
-  categories. SD (2030, 5030) was exactly 480p and HD (2040, 5040) was 720p to
-  2160p, so a result with no parsed resolution, or at 360p, 540p, 576p or
-  4320p, was in neither. Sonarr asks a hand-added indexer for 5030 and 5040
-  only, so it never saw those results. SD is now everything that is not HD,
-  including no resolution; HD is 720p and above; UHD (2045, 5045) is 2160p and
-  above. A request for both SD and HD of one type is answered as its parent
-  category, and each film or TV result also reports its SD, HD and UHD
-  categories.
-- Name parser: read season ranges (`S01-S03`), an episode range that repeats
-  its season (`S01E01-S01E03`), a separator between season and episode
-  (`S01.E05`, `S01 - E05`, `S01xE05`), `Season.1` written with a dot, and the
-  fansub `S2 - 05` shape as one episode. The first marker in a name wins, so a
-  release group such as `-S4LVE` no longer replaces the season and a word such
-  as `S1ngle` is not season 1. `Season` followed by a year and no episode is a
-  title word and a year. An exact height (`1080p`) beats a loose word (`HD`,
-  `UHD`), and a height in brackets or ahead of the episode marker is kept
-  instead of being lost or read as part of the title.
-- Existing rows keep their old parse until reprocessed. `dh-waypoint reprocess
-  --contentType movie --contentType tv_show` re-reads episodes and resolution
-  and keeps each catalogue match; add `--classifyMode rematch` to match again
-  from scratch where the title or type was read wrong.
+- Apply the built-in banned-keyword list before a torrent is stored, in every
+  processing mode. The list only ran inside the classifier, so `raw` and
+  `basic` (the default) never applied it, and in `full` the row was already
+  stored when it matched. The crawler now tests the fetched name and every
+  file path right after the name policy, the import API tests each item in its
+  gate, and the quarantine restore tests the snapshot before it writes the
+  torrent row. A match is dropped and nothing of it is stored. The check has
+  no switch: `CSAM_BLOCKLIST_ENABLED` now controls the community feeds only.
+  Rows stored before this release are not touched.
+- Remember those matches. The double hash of each match is saved in the new
+  `csam_local_observations` table (migration 00076; no infohash, name or path)
+  and loaded into the CSAM blocklist filter at start and at each refresh, so
+  the swarm is not contacted again, also after a restart and with no feed
+  configured. The blocklist is therefore always live;
+  `dh_waypoint_csam_blocklist_keyword_matches_total{source}` counts the
+  crawler and import drops and `feed_entries{feed="local"}` the remembered
+  hashes. Matches found before
+  storage are written to the export log as classifier matches already were.
+- Use one banned-keyword matcher. `csamblocklist.MatchesBannedKeyword` now
+  compiles the built-in `keywords.banned` list with the classifier's own
+  compiler and tests the text the classifier rule tests (base name plus file
+  base paths), replacing a hand-written pattern that could disagree with the
+  rule. `TestBannedKeywordParity`, which two comments cited but which did not
+  exist, now holds the two together. Keywords an operator adds to
+  `keywords.banned` in a classifier file keep their old behaviour: they act in
+  the classifier, in `full` mode, and do not drop a torrent before storage.
+- Stop the crawler fetching the same rejected torrents again. A torrent that
+  failed the post-fetch ban check was meant to be blocked, but the block call
+  is held while catalogue removal is disabled, so nothing was remembered and
+  the metadata was fetched again every time the hash was seen. The blocking
+  manager gains `Ignore`, which adds hashes to its persisted bloom filter and
+  removes nothing; the crawler uses it for ban-check rejections, under both
+  the wire key and the verified identities. `Block` is unchanged and still
+  held. Hashes added this way are also refused by the importer, as blocked
+  hashes always were. The verdict event for such a rejection keeps mechanism
+  `blocking` and now carries the evidence label `ban_check`; the crawler no
+  longer passes a `csam` label for it.
+- Index torrents with short names. The ban check refused any name under 8
+  bytes, which dropped real titles such as `Tenet` or `1917`. Only an empty
+  name is refused now.
 
 ## 5.9.3 — 2026-11-09
 

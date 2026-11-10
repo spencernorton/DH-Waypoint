@@ -3,12 +3,14 @@ package junkpurge
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/spencernorton/DH-Waypoint/internal/catalogueguard"
 	"github.com/spencernorton/DH-Waypoint/internal/cataloguerecovery"
+	"github.com/spencernorton/DH-Waypoint/internal/csamblocklist"
 	"github.com/spencernorton/DH-Waypoint/internal/model"
 	"github.com/spencernorton/DH-Waypoint/internal/processor"
 	"github.com/spencernorton/DH-Waypoint/internal/protocol"
@@ -90,6 +92,36 @@ SELECT octet_length(q.torrent_snapshot::text)+coalesce(octet_length(q.files_snap
 const legacySnapshotMaxBytes = 64 << 20
 const legacySnapshotMaxRows = 65536
 
+// ErrBannedKeyword refuses the restore of a quarantine entry whose name or
+// file paths match the built-in banned-keyword list. It is a conflict, not a
+// failure to retry.
+var ErrBannedKeyword = fmt.Errorf("%w: quarantine entry matches the built-in banned-keyword list and is never restored", cataloguerecovery.ErrConflict)
+
+// snapshotMatchesBannedKeyword applies csamblocklist.MatchesBannedKeyword to
+// the torrent a legacy quarantine snapshot would restore.
+func snapshotMatchesBannedKeyword(torrentSnap, filesSnap []byte) (bool, error) {
+	var snap struct {
+		Name        string            `json:"name"`
+		FilesStatus model.FilesStatus `json:"files_status"`
+	}
+	if err := json.Unmarshal(torrentSnap, &snap); err != nil {
+		return false, fmt.Errorf("read quarantined torrent snapshot: %w", err)
+	}
+	t := model.Torrent{Name: snap.Name, FilesStatus: snap.FilesStatus}
+	var files []struct {
+		Path string `json:"path"`
+	}
+	if len(filesSnap) > 0 {
+		if err := json.Unmarshal(filesSnap, &files); err != nil {
+			return false, fmt.Errorf("read quarantined files snapshot: %w", err)
+		}
+	}
+	for _, f := range files {
+		t.Files = append(t.Files, model.TorrentFile{Path: f.Path})
+	}
+	return csamblocklist.MatchesBannedKeyword(t), nil
+}
+
 // RestoreQuarantined restores torrent, files and retained authentic sources,
 // records local restore provenance with unknown counts, and queues a rematch
 // atomically with removing the snapshot. Legacy snapshots without sources work
@@ -158,6 +190,20 @@ AND NOT EXISTS(SELECT 1 FROM jsonb_array_elements(coalesce($4::jsonb,'[]'::jsonb
 	}
 	if !bound {
 		return cataloguerecovery.ErrConflict
+	}
+	// The built-in banned-keyword list applies before a torrent row is
+	// written, here as in the crawler and the import gate. The snapshot is
+	// compared again under lock below, so this answer holds for what is
+	// restored.
+	if matched, err := snapshotMatchesBannedKeyword(torrentSnap, filesSnap); err != nil {
+		return err
+	} else if matched {
+		// Release the table locks before the write takes another connection.
+		_ = tx.Rollback(ctx)
+		if err := csamblocklist.SaveObservations(ctx, pool, "restore", ih); err != nil {
+			return err
+		}
+		return ErrBannedKeyword
 	}
 	if _, err := tx.Exec(ctx, `
 INSERT INTO torrents (info_hash, name, size, private, created_at, updated_at, files_status, files_count)

@@ -10,39 +10,30 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"regexp"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/spencernorton/DH-Waypoint/internal/model"
 	"github.com/spencernorton/DH-Waypoint/internal/protocol"
 	"go.uber.org/zap"
 )
 
-// Exporter is the self-export sink for CSAM observations from this
-// instance's post-fetch classifier. When the CEL workflow's
-// `keywords.banned` rule fires, the processor calls Record(); the
-// exporter checks the title against the banned keyword regex
-// (defense-in-depth: ensures the export is only triggered for
-// banned-list deletes, not for unrelated delete actions like
-// flags.delete_xxx) and, if matched, double-hashes the infohash and
-// appends to the local JSONL log.
-//
-// Optionally POSTs the same record to a configured upstream
-// collection endpoint so other operators see the observation.
+// Exporter is the self-export sink for banned-keyword matches. It
+// double-hashes the infohash and appends it to the local JSONL log, and
+// optionally POSTs the same record to a configured upstream collection
+// endpoint so other operators see the observation.
 //
 // All public methods are safe for concurrent use.
 type Exporter interface {
-	// Record is called by the processor when the CEL classifier emits
-	// an `ErrDeleteTorrent`. The exporter independently verifies the
-	// title matches the CSAM banned-keyword regex before writing
-	// anything (so other delete reasons — `delete_xxx`,
-	// `delete_content_types` — don't taint the export).
+	// Record is called by the processor when the classifier deletes a
+	// torrent. It exports only when MatchesBannedKeyword(t) holds, so other
+	// delete reasons (`delete_xxx`, `delete_content_types`) do not taint
+	// the export.
 	//
 	// Errors are logged + counted but never propagated. The processor's
 	// path through this hook is non-fatal.
-	Record(ctx context.Context, infoHash protocol.InfoHash, title string, filePaths []string)
+	Record(ctx context.Context, t model.Torrent)
 
 	// Close flushes any pending state. Safe to call multiple times.
 	Close() error
@@ -134,14 +125,23 @@ type observationRecord struct {
 	// elsewhere; this record is purely the queryable fingerprint.
 }
 
-func (e *exporter) Record(ctx context.Context, infoHash protocol.InfoHash, title string, filePaths []string) {
+func (e *exporter) Record(ctx context.Context, t model.Torrent) {
 	if e.closed.Load() {
 		return
 	}
-	if !matchesBannedKeyword(title, filePaths) {
+	if !MatchesBannedKeyword(t) {
 		if e.metrics != nil {
 			e.metrics.ExportTotal.WithLabelValues("skipped_no_match").Inc()
 		}
+		return
+	}
+	e.export(ctx, t.InfoHash)
+}
+
+// export writes one observation without testing anything. Callers have
+// already matched the torrent against the built-in banned-keyword list.
+func (e *exporter) export(ctx context.Context, infoHash protocol.InfoHash) {
+	if e.closed.Load() {
 		return
 	}
 
@@ -253,75 +253,6 @@ func (e *exporter) Close() error {
 
 type noOpExporter struct{}
 
-func (noOpExporter) Record(_ context.Context, _ protocol.InfoHash, _ string, _ []string) {}
-func (noOpExporter) Close() error                                                        { return nil }
-
-// bannedKeywordRegex matches the same keyword set as `keywords.banned`
-// in internal/classifier/classifier.core.yml. This MUST stay in sync —
-// see TestBannedKeywordParity in classifier package for the pin.
-//
-// Format note: the YAML uses glob-ish patterns (`pa?edo(fil*|phil*)?`,
-// `kidd(y*|ie*) ?porn`, `(#|10|11|12|13|14|15|16|17) ?y ?o`). Those
-// are CEL-classifier's own glob format. The Go regex below is the
-// nearest-equivalent expansion. Whole-word semantics use \b on word
-// boundaries; the multi-token patterns (e.g. "child ?porn", "young
-// ?video ?models") allow optional spaces.
-var bannedKeywordRegex = func() *regexp.Regexp {
-	tokens := []string{
-		`pa?edo(?:fil[a-z]*|phil[a-z]*)?`, // pedo / paedo / pedophile / paedophile / paedofilia
-		`preteen`,
-		`pthc`,
-		`ptsc`,
-		`lsbar`,
-		`lsm`,
-		`underage`,
-		`hebefilia`,
-		`opva`,
-		`child[\s_-]?porn[a-z]*`,
-		`child[\s_-]?lover[a-z]*`,
-		`porno[\s_-]?child[a-z]*`,
-		`kidd(?:y[a-z]*|ie[a-z]*)[\s_-]?porn`,
-		`young[\s_-]?video[\s_-]?models`,
-		`childfugga`,
-		`kinderkutje`,
-		`yvm`,
-		`(?:#|1[0-7])[\s_-]?y[\s_-]?o`, // age qualifiers: #yo, 10yo..17yo, with optional separators
-	}
-	pat := `(?i)\b(?:` + strings.Join(tokens, "|") + `)\b`
-	return regexp.MustCompile(pat)
-}()
-
-// MatchesBannedKeyword is the exported form of matchesBannedKeyword, for
-// callers outside this package that must exclude CSAM observations from a
-// non-CSAM code path. The processor uses it to decide whether a
-// classifier-delete may have its torrent name recorded in the verdict
-// ledger: a banned-keyword delete never may.
-//
-// Deliberately the SAME predicate rather than a second copy — the regex is
-// parity-pinned against keywords.banned by TestBannedKeywordParity, and a
-// divergent second implementation is exactly how a CSAM name would leak into
-// an audit table.
-func MatchesBannedKeyword(title string, filePaths []string) bool {
-	return matchesBannedKeyword(title, filePaths)
-}
-
-// matchesBannedKeyword returns true iff the title or any file path
-// matches the CSAM banned-keyword regex. Mirrors the CEL workflow's
-// first step:
-//
-//	([torrent.baseName] + torrent.files.map(f, f.basePath)).join(' ').matches(keywords.banned)
-//
-// The Go test joins title + paths with a space and runs the unified
-// regex once. Equivalent semantics; cheaper than per-token loop.
-func matchesBannedKeyword(title string, filePaths []string) bool {
-	if title == "" && len(filePaths) == 0 {
-		return false
-	}
-	var sb strings.Builder
-	sb.WriteString(title)
-	for _, p := range filePaths {
-		sb.WriteByte(' ')
-		sb.WriteString(p)
-	}
-	return bannedKeywordRegex.MatchString(sb.String())
-}
+func (noOpExporter) Record(context.Context, model.Torrent)     {}
+func (noOpExporter) export(context.Context, protocol.InfoHash) {}
+func (noOpExporter) Close() error                              { return nil }
