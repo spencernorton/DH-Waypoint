@@ -14,7 +14,7 @@ RUN CGO_ENABLED=0 go build \
     -ldflags "-s -w -X github.com/spencernorton/DH-Waypoint/internal/version.GitTag=${VERSION:-v$(cat VERSION)}" \
     -o /build/dh-waypoint .
 
-FROM alpine:3.23@sha256:85fe1e81d6758c208f3e1eed4338a1997e19d4be002d4dd32d3100c9a8c010a0
+FROM alpine:3.23@sha256:469c9ea410b9215eaee7976ba6c0639039b444be8e5d638f7abbada189971eb2
 
 ARG VERSION=dev
 ARG COMMIT=unknown
