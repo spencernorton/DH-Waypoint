@@ -24,6 +24,7 @@ DHT discovery
     │
     ▼
 [1] csamblocklist.Manager.Filter ─── community-feed double-hashes
+    │   and this instance's own banned-keyword matches (see [3a])
     │   reject pre-fetch
     │
     ▼
@@ -34,6 +35,15 @@ DHT discovery
 [3] BEP-9 metadata fetch ─── the swarm-touching network call
     │   (defense-in-depth: csamblocklist.IsBlocked re-checks here
     │   in case a feed refresh introduced the hash after triage)
+    │
+    ▼
+[3a] Built-in banned-keyword check ─── every PROCESSING_MODE
+    │   the fetched name and file paths are tested against the built-in
+    │   `keywords.banned` list before anything is stored. A match is
+    │   dropped, its double-hash is saved in `csam_local_observations`
+    │   and exported as in [5], and [1] rejects the hash from then on,
+    │   across restarts. The import API and the quarantine restore
+    │   apply the same check before they write a torrent.
     │
     ▼
 [4] CEL classifier ─── post-fetch, sees the title + files
@@ -83,8 +93,8 @@ All variables are env-prefix `CSAM_BLOCKLIST_*`:
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `ENABLED` | `true` | Master switch. `false` makes the package a NoOp. |
-| `FEED_URLS` | *(empty)* | Comma/space-separated feed URLs. Empty = NoOp. |
+| `ENABLED` | `true` | Switches the outside feeds. `false` fetches none. The built-in banned-keyword check has no switch. |
+| `FEED_URLS` | *(empty)* | Comma/space-separated feed URLs. Empty = no feed is fetched. |
 | `FEED_REFRESH_INTERVAL` | `6h` | How often to re-poll all feeds. |
 | `FEED_FETCH_TIMEOUT` | `30s` | Per-feed HTTP timeout. |
 | `FEED_MAX_BYTES` | `67108864` | Per-feed body cap (64 MiB). |

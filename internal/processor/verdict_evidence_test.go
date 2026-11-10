@@ -23,13 +23,13 @@ func TestClassifierDeleteEvidence(t *testing.T) {
 		Cause: classification.ErrDeleteTorrent,
 	}
 	var got map[string]any
-	require.NoError(t, json.Unmarshal(classifierDeleteEvidence("default", err, model.Torrent{}, nil, newDeleteAuditBudget(false, 1000, nil)), &got))
+	require.NoError(t, json.Unmarshal(classifierDeleteEvidence("default", err, model.Torrent{}, newDeleteAuditBudget(false, 1000, nil)), &got))
 	assert.Equal(t, "default", got["workflow"])
 	assert.Equal(t, []any{"keywords", "banned"}, got["rule_path"])
 
 	// Bare ErrDeleteTorrent (no RuntimeError wrapper): no rule_path key.
 	got = nil
-	require.NoError(t, json.Unmarshal(classifierDeleteEvidence("wf2", classification.ErrDeleteTorrent, model.Torrent{}, nil, newDeleteAuditBudget(false, 1000, nil)), &got))
+	require.NoError(t, json.Unmarshal(classifierDeleteEvidence("wf2", classification.ErrDeleteTorrent, model.Torrent{}, newDeleteAuditBudget(false, 1000, nil)), &got))
 	assert.Equal(t, "wf2", got["workflow"])
 	_, hasPath := got["rule_path"]
 	assert.False(t, hasPath, "bare error must not synthesize a rule_path")
@@ -65,9 +65,11 @@ func TestVerdictEvidenceNoPII(t *testing.T) {
 	}, model.Torrent{
 		// Leading byte 0 puts this squarely INSIDE the 1-in-128 audit
 		// sample, so only the disabled flag can be keeping the name out.
-		InfoHash: protocol.InfoHashV1(protocol.ID{0}),
-		Name:     torrentName,
-	}, []string{filePath}, newDeleteAuditBudget(false, 1000, nil)))
+		InfoHash:    protocol.InfoHashV1(protocol.ID{0}),
+		Name:        torrentName,
+		FilesStatus: model.FilesStatusMulti,
+		Files:       []model.TorrentFile{{Path: filePath}},
+	}, newDeleteAuditBudget(false, 1000, nil)))
 	assert.False(t, strings.Contains(ev, torrentName),
 		"audit sample off must keep the torrent name out of the ledger")
 	// workflow is a caller-supplied label, not PII — but assert the file path
