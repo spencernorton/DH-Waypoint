@@ -2,6 +2,105 @@
 
 ## Unreleased
 
+## 5.10.0 — 2026-11-10
+
+Security release. Read the first four entries before upgrading a Compose
+install: they change what a default install accepts. Read the banned-keyword
+clean-up and history pruning entries before upgrading any install: both
+delete stored rows by default.
+
+- **Compose publishes the HTTP port on `127.0.0.1` only.** It was published on
+  every host interface. Sonarr, Radarr, Prowlarr or Prometheus on another host
+  or in another Compose project lose access after the upgrade until `.env`
+  sets `DH_WAYPOINT_HTTP_BIND=0.0.0.0` (or one host address). Set
+  `HTTP_SERVER_API_KEY` and `TORZNAB_API_KEY` before you do. Containers on the
+  same Compose network are not affected.
+- **Compose now passes `HTTP_SERVER_API_KEY` to the container.** Both Compose
+  files left it out, so a key in `.env` protected nothing. If your `.env`
+  already has one, GraphQL, `/import`, `/metrics` and the REST API start
+  asking for it after the upgrade: add it to Prometheus and your other
+  clients.
+- **No website may read the API from a browser by default.** Every origin was
+  allowed. Name the origins of your own pages in
+  `HTTP_SERVER_CORS_ALLOWED_ORIGINS` (comma-separated, no spaces); both
+  Compose files pass it through.
+- **Two mutations refuse a call that names no target.** `queue.purgeJobs`
+  needs a queue or a status (an empty call emptied the whole queue), and
+  `torrent.deleteTags` needs at least one info hash (a call without one
+  removed the tags from every torrent).
+- The API key now covers `OPTIONS` requests, except a CORS preflight, which
+  never reaches a handler. `/metrics` and `/debug/pprof/*` answer `GET` only.
+- The payload verifier API (`/api/publication/v1/*`) and the internal
+  name-policy check (`/internal/name-policy/*`) no longer ask for the general
+  API key as well. Each keeps its own bearer token and stays refused while
+  that token is unset. With a general key set, their own token was rejected.
+- `evidence.list` and its `totalCount` leave out every row for a download that
+  qBittorrent holds in a `private` or `bitgrab` category, including the *arr
+  rows for the same torrent.
+- The request log replaces `apikey` and `passkey` query values and the passkey
+  in `/announce/<passkey>` and `/scrape/<passkey>` paths with `REDACTED`.
+- DHT: fix a data race in the routing table. A peer list or a node record
+  could be read while an announce or a reply changed it, which could stop the
+  process.
+- DHT: keep at most 200 peers per info hash, forget a peer 30 minutes after it
+  was last seen, and return at most 50 peers in one `get_peers` reply. Stored
+  peers were unbounded and never expired, and a reply carried all of them. A
+  hash whose peers have all expired is answered with the closest nodes.
+- DHT: accept a reply only from the address that was queried, add random bytes
+  to transaction IDs, and take at most 100 nodes, peers or samples from one
+  reply.
+- DHT: only public IPv4 addresses are kept as nodes or peers, whether they
+  come from a reply, from the sender of a query or from the saved bootstrap
+  list. Loopback, private, link-local, carrier-NAT and reserved addresses are
+  dropped, and so is every IPv6 address: the DHT socket is IPv4 only, and
+  several IPv6 forms can carry a private IPv4 address.
+- The metadata fetcher no longer connects to an address that fails the same
+  test. `METAINFO_REQUESTER_ALLOW_PRIVATE_ADDRS=true` turns this off for a
+  closed test network.
+- Bencode decoding is bounded by the size of the input: a length prefix can no
+  longer make the decoder reserve more memory than the message holds. Peer
+  messages larger than one metadata piece are skipped without being buffered,
+  memory for metadata is taken as its pieces arrive instead of at the size a
+  peer declares, and metadata whose nested lists and dictionaries add up to
+  more than eight times the metadata size limit is rejected.
+- **The clean-up of stored banned-keyword matches deletes by default.** A
+  background sweep reads every stored torrent once, with its file paths, and
+  every copy of a name that outlived its torrent: junk-purge quarantine
+  entries, judgments and batch items, catalogue-recovery snapshots, the name
+  that earlier releases sampled into a classifier-delete verdict, and the
+  frozen evaluation set. It uses the matcher of the live check and hands each
+  match to the removal described below: deleted with no copy and no undo, or
+  hidden when it is tied to the operator's own tools. `CSAM_SWEEP_MODE` is
+  `apply` (default), `dry_run` (count only) or `off`. To see the numbers
+  before the sweep deletes anything, start this release with
+  `CSAM_SWEEP_MODE=dry_run`, wait for
+  `dh_waypoint_csam_blocklist_sweep_done` to reach 1, read
+  `dh_waypoint_csam_blocklist_sweep_matches{table,outcome}`, then switch to
+  `apply`. The setting stops the sweep only: in every mode the processor
+  removes a stored match when it loads one. Give every worker process the same
+  mode. The position and the counts are saved in `key_values`, so a restart
+  continues the pass. No migration.
+- Remove a stored torrent that matches the built-in banned-keyword list. The
+  processor tests every torrent it loads, in every processing mode and for
+  reprocess requests, before the classifier or any optional processor sees
+  it. The stored row is locked and tested again before anything is deleted. A match is deleted together with every row that can hold
+  its name or a file path (the torrent's own tables, the processor queue and
+  its feedback events, junk-purge judgments, quarantine entries and batch
+  items, evaluation captures, the retired LLM queue). Verdict events, recovery
+  snapshots and batch input files that mention it are blanked. One verdict
+  (`tombstoned`, mechanism `csam`, no reason, no evidence) and the double hash
+  are kept. No copy is made and there is no undo; the removal does not go
+  through catalogue recovery and is not held while catalogue removal is
+  disabled. `dh_waypoint_csam_blocklist_stored_matches_total{source,outcome}`
+  counts it.
+- Keep and hide a match that is tied to the operator's own tools. A torrent
+  with the private flag, a canonical label, *arr or qBittorrent evidence, a
+  grab attempt, a hint with a content id or a protected tag is most likely a
+  false hit. It is not deleted: it gets a publication hold with the reason
+  `banned_keyword`, so no search serves it and no optional processor receives
+  it (outcome `hidden_protected`).
+- Refuse to restore a catalogue-recovery snapshot whose name or file paths
+  match the built-in list (`cataloguerecovery.ErrBannedKeyword`, a conflict).
 - Apply the built-in banned-keyword list before a torrent is stored, in every
   processing mode. The list only ran inside the classifier, so `raw` and
   `basic` (the default) never applied it, and in `full` the row was already
@@ -10,7 +109,8 @@
   gate, and the quarantine restore tests the snapshot before it writes the
   torrent row. A match is dropped and nothing of it is stored. The check has
   no switch: `CSAM_BLOCKLIST_ENABLED` now controls the community feeds only.
-  Rows stored before this release are not touched.
+  Rows stored before this release are removed by the sweep and when the
+  processor next loads them (see above).
 - Remember those matches. The double hash of each match is saved in the new
   `csam_local_observations` table (migration 00076; no infohash, name or path)
   and loaded into the CSAM blocklist filter at start and at each refresh, so
@@ -42,6 +142,64 @@
 - Index torrents with short names. The ban check refused any name under 8
   bytes, which dropped real titles such as `Tenet` or `1917`. Only an empty
   name is refused now.
+- Stop three history tables from growing without bound. A new `eventprune`
+  worker, on by default, deletes `processor_feedback_events` rows older than
+  30 days, qBittorrent state observations in `label_evidence` older than 90
+  days, and `torrent_verdict_events` rows older than 180 days. The last two
+  only lose rows that a newer row for the same torrent has replaced: the
+  newest observation and the newest verdict event per torrent always stay, so
+  the current verdict, the rebuild of `torrent_verdict_state` and the "has
+  evidence" protections are unchanged. Private-category observations, operator
+  and CSAM verdict events and events a recovery snapshot points at are kept.
+  The windows are `EVENTPRUNE_FEEDBACK_RETENTION`,
+  `EVENTPRUNE_QB_STATE_RETENTION` and `EVENTPRUNE_VERDICT_EVENT_RETENTION`;
+  `0` turns one off. See `docs/configuration.md`.
+- Changed: automatic processor feedback (`operational_receipt`,
+  `teacher_consensus`, `verified_import`) is stored only for a processor that
+  has a consumer, meaning push delivery or a pull cursor. A pull that names a
+  `processor_id` now registers its cursor. Before, a processor with learning
+  enabled and no consumer collected rows that nothing read. A trainer now
+  receives events from its first pull onward, not from before it. `human_gold`
+  labels are always stored.
+- Drop the `queue_jobs_queue_payload_idx` GIN index (migration 00077). No query
+  filters queue jobs with a jsonb containment or existence operator, so the
+  planner never read it, while every job insert and status change maintained
+  it; on a large catalogue it grew to many times the size of the table. The
+  migration runs `DROP INDEX CONCURRENTLY IF EXISTS` outside a transaction, so
+  it takes no long lock and also applies where the index is already gone. No
+  query result changes.
+- Run the worker stop hooks on `SIGTERM` and `SIGINT`. The signal now cancels
+  the command context, so `worker run` returns and stops each worker with a
+  live context, bounded at 10 seconds, before the database pool and DHT server
+  close. Until now a container stop skipped those hooks: open HTTP requests
+  were cut instead of drained and the crawler did not save its bootstrap node
+  snapshot. Known gap: the crawler still drops the batch of fetched torrents
+  that is waiting to be stored (up to one minute of work) when it stops.
+- Torznab: put every film and TV result in exactly one of the SD and HD
+  categories. SD (2030, 5030) was exactly 480p and HD (2040, 5040) was 720p to
+  2160p, so a result with no parsed resolution, or at 360p, 540p, 576p or
+  4320p, was in neither. Sonarr asks a hand-added indexer for 5030 and 5040
+  only, so it never saw those results. SD is now everything that is not HD,
+  including no resolution; HD is 720p and above; UHD (2045, 5045) is 2160p and
+  above. A request for both SD and HD of one type is answered as its parent
+  category, and each film or TV result also reports its SD, HD and UHD
+  categories.
+- Name parser: read season ranges (`S01-S03`), an episode range that repeats
+  its season (`S01E01-S01E03`), a separator between season and episode
+  (`S01.E05`, `S01 - E05`, `S01xE05`), `Season.1` written with a dot, and the
+  fansub `S2 - 05` shape as one episode. The first marker in a name wins, so a
+  release group such as `-S4LVE` no longer replaces the season and a word such
+  as `S1ngle` is not season 1. `Season` followed by a year and no episode is a
+  title word and a year. An exact height (`1080p`) beats a loose word (`HD`,
+  `UHD`), and a height in brackets or ahead of the episode marker is kept
+  instead of being lost or read as part of the title.
+- Existing rows keep their old parse until reprocessed. `dh-waypoint reprocess
+  --contentType movie --contentType tv_show` re-reads episodes and resolution
+  and keeps each catalogue match; add `--classifyMode rematch` to match again
+  from scratch where the title or type was read wrong.
+- Refresh the runtime image's Alpine 3.23 base to its current digest, which
+  carries `musl` and `musl-utils` 1.2.5-r24 (CVE-2026-107891) and `zlib`
+  1.3.2-r1 (CVE-2026-85091). This closes the known gap noted in 5.9.3.
 
 ## 5.9.3 — 2026-11-09
 
