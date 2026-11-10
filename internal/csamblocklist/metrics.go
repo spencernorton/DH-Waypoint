@@ -32,6 +32,10 @@ type Metrics struct {
 	// (crawler / import).
 	KeywordMatchesTotal *prometheus.CounterVec
 
+	// StoredMatchesTotal counts stored torrents that matched the built-in
+	// banned-keyword list, by source and by what was done with them.
+	StoredMatchesTotal *prometheus.CounterVec
+
 	// EntriesGauge is the union across all feeds.
 	EntriesGauge prometheus.Gauge
 
@@ -73,6 +77,10 @@ func NewMetrics() *Metrics {
 			Namespace: ns, Subsystem: sub, Name: "keyword_matches_total",
 			Help: "Torrents dropped before storage because the name or a file path matched the built-in banned-keyword list. source=crawler|import.",
 		}, []string{"source"}),
+		StoredMatchesTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: ns, Subsystem: sub, Name: "stored_matches_total",
+			Help: "Stored torrents whose name or a file path matched the built-in banned-keyword list. source=processor. outcome=removed (deleted with no copy kept) or hidden_protected (tied to the operator's own tools: kept and hidden).",
+		}, []string{"source", "outcome"}),
 		EntriesGauge: prometheus.NewGauge(prometheus.GaugeOpts{
 			Namespace: ns, Subsystem: sub, Name: "entries",
 			Help: "Total double-hash entries in the active bloom filter.",
@@ -93,6 +101,7 @@ func (m *Metrics) Collectors() []prometheus.Collector {
 		m.FeedRefreshDurationSeconds,
 		m.FeedEntriesGauge,
 		m.KeywordMatchesTotal,
+		m.StoredMatchesTotal,
 		m.EntriesGauge,
 		m.ExportTotal,
 	}

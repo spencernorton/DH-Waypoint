@@ -2,7 +2,9 @@ package csamblocklist
 
 import (
 	"context"
+	"errors"
 
+	"github.com/spencernorton/DH-Waypoint/internal/model"
 	"github.com/spencernorton/DH-Waypoint/internal/protocol"
 )
 
@@ -23,8 +25,11 @@ func NewNoOp() Manager {
 func (noOp) IsBlocked(_ protocol.InfoHash) bool                        { return false }
 func (noOp) Filter(infoHashes []protocol.InfoHash) []protocol.InfoHash { return infoHashes }
 func (noOp) Observe(context.Context, string, ...protocol.InfoHash)     {}
-func (noOp) Refresh(_ context.Context) error                           { return nil }
-func (noOp) Enabled() bool                                             { return false }
+func (noOp) RemoveStored(context.Context, string, model.Torrent) (Outcome, error) {
+	return "", errors.New("csamblocklist: the no-op manager removes nothing")
+}
+func (noOp) Refresh(_ context.Context) error { return nil }
+func (noOp) Enabled() bool                   { return false }
 func (noOp) Snapshot() Snapshot {
 	return Snapshot{
 		PerFeed: map[string]FeedStatus{},

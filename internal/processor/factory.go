@@ -27,6 +27,9 @@ type Params struct {
 	Dao              lazy.Lazy[*dao.Query]
 	BlockingManager  lazy.Lazy[blocking.Manager]
 	CsamExporter     csamblocklist.Exporter
+	// Required, not optional: the processor must never run without the
+	// banned-keyword removal.
+	CsamBlocklist csamblocklist.Manager
 	// ContentFilter + ContentFilterMetrics are optional (`fx:"optional"`)
 	// so a partial wiring (older deploys, narrow tests) doesn't need to
 	// provide them. When nil the post-classifier hook in Process is a
@@ -88,6 +91,7 @@ func New(p Params) Result {
 					p.Logger,
 				),
 				csamExporter:         p.CsamExporter,
+				csamBlocklist:        p.CsamBlocklist,
 				contentFilter:        p.ContentFilter,
 				contentFilterMetrics: p.ContentFilterMetrics,
 				privacy:              p.EvidenceStore,
