@@ -2,13 +2,46 @@
 
 ## Unreleased
 
-- Run the worker stop hooks on `SIGTERM` and `SIGINT`. The signal now cancels
-  the command context, so `worker run` returns and stops each worker with a
-  live context, bounded at 10 seconds, before the database pool and DHT server
-  close. Until now a container stop skipped those hooks: open HTTP requests
-  were cut instead of drained and the crawler did not save its bootstrap node
-  snapshot. Known gap: the crawler still drops the batch of fetched torrents
-  that is waiting to be stored (up to one minute of work) when it stops.
+- Apply the built-in banned-keyword list before a torrent is stored, in every
+  processing mode. The list only ran inside the classifier, so `raw` and
+  `basic` (the default) never applied it, and in `full` the row was already
+  stored when it matched. The crawler now tests the fetched name and every
+  file path right after the name policy, the import API tests each item in its
+  gate, and the quarantine restore tests the snapshot before it writes the
+  torrent row. A match is dropped and nothing of it is stored. The check has
+  no switch: `CSAM_BLOCKLIST_ENABLED` now controls the community feeds only.
+  Rows stored before this release are not touched.
+- Remember those matches. The double hash of each match is saved in the new
+  `csam_local_observations` table (migration 00076; no infohash, name or path)
+  and loaded into the CSAM blocklist filter at start and at each refresh, so
+  the swarm is not contacted again, also after a restart and with no feed
+  configured. The blocklist is therefore always live;
+  `dh_waypoint_csam_blocklist_keyword_matches_total{source}` counts the
+  crawler and import drops and `feed_entries{feed="local"}` the remembered
+  hashes. Matches found before
+  storage are written to the export log as classifier matches already were.
+- Use one banned-keyword matcher. `csamblocklist.MatchesBannedKeyword` now
+  compiles the built-in `keywords.banned` list with the classifier's own
+  compiler and tests the text the classifier rule tests (base name plus file
+  base paths), replacing a hand-written pattern that could disagree with the
+  rule. `TestBannedKeywordParity`, which two comments cited but which did not
+  exist, now holds the two together. Keywords an operator adds to
+  `keywords.banned` in a classifier file keep their old behaviour: they act in
+  the classifier, in `full` mode, and do not drop a torrent before storage.
+- Stop the crawler fetching the same rejected torrents again. A torrent that
+  failed the post-fetch ban check was meant to be blocked, but the block call
+  is held while catalogue removal is disabled, so nothing was remembered and
+  the metadata was fetched again every time the hash was seen. The blocking
+  manager gains `Ignore`, which adds hashes to its persisted bloom filter and
+  removes nothing; the crawler uses it for ban-check rejections, under both
+  the wire key and the verified identities. `Block` is unchanged and still
+  held. Hashes added this way are also refused by the importer, as blocked
+  hashes always were. The verdict event for such a rejection keeps mechanism
+  `blocking` and now carries the evidence label `ban_check`; the crawler no
+  longer passes a `csam` label for it.
+- Index torrents with short names. The ban check refused any name under 8
+  bytes, which dropped real titles such as `Tenet` or `1917`. Only an empty
+  name is refused now.
 
 ## 5.9.3 — 2026-11-09
 

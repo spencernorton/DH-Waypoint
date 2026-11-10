@@ -103,8 +103,9 @@ Scrape-driven, 5-second per-scrape timeout.
 | `dh_waypoint_csam_blocklist_lookups_total` | counter | — | Lookups against the bloom filter. |
 | `dh_waypoint_csam_blocklist_feed_refresh_total` | counter | `feed`, `outcome` | Per-feed refresh outcomes. |
 | `dh_waypoint_csam_blocklist_feed_refresh_duration_seconds` | histogram | `feed` | Per-feed refresh latency. |
-| `dh_waypoint_csam_blocklist_feed_entries` | gauge | `feed` | Active entries from each feed. |
-| `dh_waypoint_csam_blocklist_entries` | gauge | — | Total bloom filter entries (sum of all feeds, deduplicated). |
+| `dh_waypoint_csam_blocklist_feed_entries` | gauge | `feed` | Active entries from each feed. `feed="local"` is this instance's own banned-keyword matches. |
+| `dh_waypoint_csam_blocklist_keyword_matches_total` | counter | `source` | Torrents dropped before storage because the name or a file path matched the built-in banned-keyword list. `source` is `crawler` or `import`. |
+| `dh_waypoint_csam_blocklist_entries` | gauge | — | Total bloom filter entries (all feeds plus local matches). |
 | `dh_waypoint_csam_blocklist_export_total` | counter | `outcome` | Per-export outcomes (local JSONL append + optional upstream POST). |
 
 See [csam-defense.md](../csam-defense.md) for the full architecture.

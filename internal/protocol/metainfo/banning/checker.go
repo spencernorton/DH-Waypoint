@@ -22,7 +22,8 @@ func New(p Params) Result {
 	checkers := p.Checkers
 	checkers = append(
 		checkers,
-		nameLengthChecker{min: 8},
+		// Only an empty name is refused: real titles can be a few bytes long.
+		nameLengthChecker{min: 1},
 		sizeChecker{min: 1024},
 		utf8Checker{},
 	)

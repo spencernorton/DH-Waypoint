@@ -17,9 +17,21 @@ func hashWithLeadingByte(b byte) protocol.InfoHash {
 	return protocol.InfoHashV1(protocol.ID(arr))
 }
 
+// withPaths gives tor a multi-file listing, as the processor loads it.
+func withPaths(tor model.Torrent, paths []string) model.Torrent {
+	if len(paths) == 0 {
+		return tor
+	}
+	tor.FilesStatus = model.FilesStatusMulti
+	for _, p := range paths {
+		tor.Files = append(tor.Files, model.TorrentFile{Path: p})
+	}
+	return tor
+}
+
 func evidenceName(t *testing.T, tor model.Torrent, paths []string) (string, bool) {
 	t.Helper()
-	raw := classifierDeleteEvidence("norvi", classification.ErrDeleteTorrent, tor, paths,
+	raw := classifierDeleteEvidence("norvi", classification.ErrDeleteTorrent, withPaths(tor, paths),
 		newDeleteAuditBudget(true, 1000, nil))
 	var ev map[string]any
 	if err := json.Unmarshal(raw, &ev); err != nil {
@@ -104,7 +116,7 @@ func TestClassifierDeleteEvidenceExclusions(t *testing.T) {
 			model.Torrent{
 				InfoHash: hashWithLeadingByte(inSample),
 				Name:     "Some.Movie.2024.GERMAN.1080p",
-			}, nil, newDeleteAuditBudget(false, 1000, nil))
+			}, newDeleteAuditBudget(false, 1000, nil))
 		var ev map[string]any
 		if err := json.Unmarshal(raw, &ev); err != nil {
 			t.Fatalf("evidence is not valid JSON: %v", err)
@@ -138,7 +150,7 @@ func TestClassifierDeleteEvidenceKeepsRulePath(t *testing.T) {
 	raw := classifierDeleteEvidence("norvi", err, model.Torrent{
 		InfoHash: hashWithLeadingByte(9),
 		Name:     "whatever",
-	}, nil, newDeleteAuditBudget(true, 1000, nil))
+	}, newDeleteAuditBudget(true, 1000, nil))
 
 	var ev map[string]any
 	if uerr := json.Unmarshal(raw, &ev); uerr != nil {
