@@ -2,6 +2,7 @@ package ktable
 
 import (
 	"net/netip"
+	"sync"
 	"time"
 
 	"github.com/spencernorton/DH-Waypoint/internal/protocol"
@@ -83,6 +84,10 @@ func (nodeBase) IsSampleInfoHashesCandidate() bool {
 
 type node struct {
 	nodeBase
+	// mu guards every field below and nodeBase.addr: a Node is read by callers
+	// after the table lock is released, while commands keep writing it. Code that
+	// holds the table lock may read the fields directly.
+	mu              sync.Mutex
 	discoveredAt    time.Time
 	lastRespondedAt time.Time
 	dropReason      error
@@ -119,6 +124,9 @@ const (
 var _ keyspaceItemPrivate[netip.AddrPort, NodeOption, Node] = (*node)(nil)
 
 func (n *node) update(addr netip.AddrPort) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+
 	if n.addr != addr {
 		n.reverseMap.dropAddr(n.addr.Addr())
 	}
@@ -128,10 +136,16 @@ func (n *node) update(addr netip.AddrPort) {
 }
 
 func (n *node) apply(option NodeOption) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+
 	option.apply(n)
 }
 
 func (n *node) drop(reason error) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+
 	n.dropReason = reason
 	n.reverseMap.dropAddr(n.addr.Addr())
 }
@@ -140,25 +154,43 @@ func (n *node) public() Node {
 	return n
 }
 
+// ID never changes. It is defined here because the promoted nodeBase.ID copies
+// the whole nodeBase, addr included, without the lock.
+func (n *node) ID() protocol.ID {
+	return n.id
+}
+
+func (n *node) Addr() netip.AddrPort {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+
+	return n.addr
+}
+
 func (n *node) Time() time.Time {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+
 	return n.lastRespondedAt
 }
 
 func (n *node) Dropped() bool {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+
 	return n.dropReason != nil
 }
 
 func (n *node) IsSampleInfoHashesCandidate() bool {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+
 	now := time.Now()
 	threshold := now.Add(-(5 * time.Second))
 
 	return n.bep51Support != protocolSupportNo &&
 		n.nextSampleInfoHashesTime.Before(now) &&
 		n.lastRespondedAt.Before(threshold)
-}
-
-func (n *node) olderThan(t time.Time) bool {
-	return n.lastRespondedAt.Before(t)
 }
 
 func NodeResponded() NodeOption {

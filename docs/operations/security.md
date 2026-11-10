@@ -17,15 +17,18 @@ The single load-bearing assumption is that the host running DH-Waypoint is trust
 
 ## Network attack surface
 
-Both Compose files publish HTTP port `3333` on every host interface (`${DH_WAYPOINT_HTTP_PORT:-3333}:3333`). Bind it to `127.0.0.1` or firewall it unless other hosts must reach it, and review every API below. All of these paths answer on it:
+Both Compose files publish HTTP port `3333` on `127.0.0.1` only, so a fresh install answers the host itself and containers on the same Compose network. To let other hosts in, set `DH_WAYPOINT_HTTP_BIND` in `.env` to `0.0.0.0` or to one host address, and set the keys below first. Both files pass `HTTP_SERVER_API_KEY`, `TORZNAB_API_KEY` and `EVIDENCE_WEBHOOK_SECRET` from `.env` to the container. All of these paths answer on the port:
 
 | Path | Auth (default) | Sensitive? |
 |---|---|---|
 | `/graphql` | none — gates on `HTTP_SERVER_API_KEY` if set | Yes — full mutation surface |
 | `/torznab/api` | none — gates on `TORZNAB_API_KEY` if set | Yes if `*arr` uses it |
-| `/metrics` | none — gates on `HTTP_SERVER_API_KEY` if set | Information disclosure (DB sizes, infohash counts) |
+| `/metrics`, `/debug/pprof/*` | none — gates on `HTTP_SERVER_API_KEY` if set; `GET` only | Information disclosure (DB sizes, infohash counts, profiles) |
 | `/import` | none — gates on `HTTP_SERVER_API_KEY` if set | Yes — accepts NDJSON bulk-import |
 | `/api/v1/*`, `/api/v2/*` | none — gates on `HTTP_SERVER_API_KEY` if set | Catalogue reads |
+| `/api/quarantine` | none — gates on `HTTP_SERVER_API_KEY` if set | Yes — lists, restores and deletes quarantined torrents |
+| `/api/publication/v1/*` | `Authorization: Bearer` matching `PROCESSORS_PAYLOAD_VERIFIER_TOKEN`; 503 when unset | Yes — payload verifier results |
+| `/internal/name-policy/*` | `Authorization: Bearer` matching `NAME_POLICY_INTERNAL_CHECK_TOKEN`; 404 when unset | Release-name checks |
 | `/evidence/arr/<instance>` | none — gates on `X-Evidence-Token` matching `EVIDENCE_WEBHOOK_SECRET` if set | Yes — writes evidence that outranks the classifier |
 | `/api/processors/v1/*` | `Authorization: Bearer` matching `PROCESSORS_ADMIN_TOKEN`; 503 when unset | Yes — registers processors |
 | `/announce/<passkey>`, `/scrape/<passkey>`, `/api/private/v1/*` | tracker passkey or `TRACKER_ADMIN_TOKEN`; off unless `TRACKER_ENABLED` | Yes if the tracker is on |
@@ -39,11 +42,13 @@ Three deployment shapes, in increasing order of exposure tolerance.
 
 ### Tier 1 — open (default)
 
-Use only on a tailnet, ZeroTier, LAN, or container-network-only deployment. DH-Waypoint accepts all requests. Network isolation is the entire control.
+Use only on the host itself (the Compose default), a tailnet, ZeroTier, LAN, or container-network-only deployment. DH-Waypoint accepts all requests. Network isolation is the entire control.
+
+Browsers are held back separately: a page on another website cannot read the API's answers from a visitor's browser unless you name its origin in `HTTP_SERVER_CORS_ALLOWED_ORIGINS` (comma-separated, no spaces, for example `https://ui.example.com`). The default allows none. This does not replace the key. A page can still send a blind request to an open API, and a hostile site can point its own name at `127.0.0.1` (DNS rebinding) and then read it as well. Set `HTTP_SERVER_API_KEY` before the port leaves `127.0.0.1`, and also on any machine where a web browser runs.
 
 ### Tier 2 — API key
 
-- `HTTP_SERVER_API_KEY` — gates `/graphql`, `/import`, `/metrics` and `/api/v1/*` (`Authorization: Bearer` or `X-API-Key`, constant-time compare). Surfaces with their own credentials (Torznab, tracker, processors, private API, evidence) are not double-gated; `/status` stays public.
+- `HTTP_SERVER_API_KEY` — gates `/graphql`, `/import`, `/metrics`, `/debug/pprof/*`, `/api/v1/*`, `/api/v2/*` and `/api/quarantine` (`Authorization: Bearer` or `X-API-Key`, constant-time compare). Surfaces with their own credentials (Torznab, tracker, processors, payload verifier, name-policy check, private API, evidence) are not double-gated; `/status` stays public.
 - `TORZNAB_API_KEY` — gates `/torznab/api` (constant-time compare; timing-safe). Required when the `*arr` clients are on a different host or network than DH-Waypoint.
 - `EVIDENCE_WEBHOOK_SECRET` — gates `/evidence/arr/*` (compared against the `X-Evidence-Token` header on each webhook).
 
@@ -51,6 +56,14 @@ The general HTTP key grants the full GraphQL mutation surface. It is an
 operator credential; do not distribute it as a read-only or processor-specific
 credential. Processor administration has its own token. No per-plugin
 authorization scopes are implied by a plugin registration.
+
+Two mutations refuse a call that names no target: `queue.purgeJobs` needs a
+queue or a status, and `torrent.deleteTags` needs at least one info hash.
+`queue.enqueueReprocessTorrentsBatch` still empties the queue when it is called
+with `purge: true`. `evidence.list` leaves out every row for a download that
+qBittorrent holds in a `private` or `bitgrab` category. The request log
+replaces `apikey` and `passkey` values and tracker passkey paths with
+`REDACTED`.
 
 GraphQL accepts only JSON POST bodies. Its byte, parser, selection, paging and
 input-list bounds are documented in the [GraphQL reference](../reference/graphql-api.md).

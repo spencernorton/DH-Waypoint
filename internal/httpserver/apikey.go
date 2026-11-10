@@ -12,9 +12,15 @@ import (
 // API-key exempt prefixes carry their own authentication and are
 // never double-gated: Torznab (apikey), the tracker (URL passkey),
 // the processors operator API (admin token), the private file API
-// (admin token/passkey) and evidence webhooks (per-instance
-// secret). /status stays public as the liveness probe.
-var apiKeyExempt = []string{"/status", "/torznab", "/announce", "/scrape", "/api/processors", "/api/private", "/evidence"}
+// (admin token/passkey), evidence webhooks (per-instance secret),
+// the payload verifier API and the internal name-policy check (each
+// its own bearer token, refused while that token is unset). The last
+// two send their token in the Authorization header this key would
+// otherwise claim. /status stays public as the liveness probe.
+var apiKeyExempt = []string{
+	"/status", "/torznab", "/announce", "/scrape", "/api/processors", "/api/private", "/evidence",
+	"/api/publication", "/internal/name-policy",
+}
 
 func apiKeyExemptPath(path string) bool {
 	for _, prefix := range apiKeyExempt {
@@ -32,7 +38,11 @@ func apiKeyExemptPath(path string) bool {
 // both accepted; comparison is constant-time.
 func APIKeyAuth(key namepolicy.SecretToken) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if string(key) == "" || c.Request.Method == http.MethodOptions || apiKeyExemptPath(c.Request.URL.Path) {
+		// A browser sends a CORS preflight without credentials, and it always
+		// names the method it asks about. Any other OPTIONS request is an
+		// ordinary request and needs the key.
+		preflight := c.Request.Method == http.MethodOptions && c.GetHeader("Access-Control-Request-Method") != ""
+		if string(key) == "" || preflight || apiKeyExemptPath(c.Request.URL.Path) {
 			c.Next()
 			return
 		}

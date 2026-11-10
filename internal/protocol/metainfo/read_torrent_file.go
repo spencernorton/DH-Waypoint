@@ -20,7 +20,7 @@ type TorrentFile struct {
 
 func ReadTorrentFileBytes(bytes []byte) (TorrentFile, error) {
 	var torrentFile TorrentFile
-	if unmarshalErr := bencode.Unmarshal(bytes, &torrentFile); unmarshalErr != nil {
+	if unmarshalErr := protocol.UnmarshalBencode(bytes, &torrentFile); unmarshalErr != nil {
 		return TorrentFile{}, fmt.Errorf("error unmarshaling torrent file: %w", unmarshalErr)
 	}
 
@@ -34,7 +34,7 @@ func ParseTorrentFileInfo(infoHash protocol.ID, torrentFile []byte) (Info, error
 	var raw struct {
 		Info bencode.Bytes `bencode:"info"`
 	}
-	if unmarshalErr := bencode.Unmarshal(torrentFile, &raw); unmarshalErr != nil {
+	if unmarshalErr := protocol.UnmarshalBencode(torrentFile, &raw); unmarshalErr != nil {
 		return Info{}, fmt.Errorf("error unmarshaling torrent file: %w", unmarshalErr)
 	}
 

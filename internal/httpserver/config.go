@@ -19,7 +19,7 @@ type CorsConfig struct {
 	// An origin may contain a wildcard (*) to replace 0 or more characters
 	// (i.e.: http://*.domain.com). Usage of wildcards implies a small performance penalty.
 	// Only one wildcard can be used per origin.
-	// Default value is ["*"]
+	// Default value is [], which allows no cross-origin request.
 	AllowedOrigins []string
 	// AllowedMethods is a list of methods the client is allowed to use with
 	// cross-domain requests. Default value is simple methods (HEAD, GET and POST).
@@ -58,11 +58,10 @@ func NewDefaultConfig() Config {
 	return Config{
 		LocalAddress: ":3333",
 		GinMode:      "release",
-		// todo review
+		// No origin is allowed until the operator names one: a web page on
+		// another site must not be able to read this API from a browser.
 		Cors: CorsConfig{
-			AllowedOrigins: []string{"*"},
 			AllowedHeaders: []string{"*"},
-			Debug:          true,
 		},
 		Options: []string{"*"},
 	}

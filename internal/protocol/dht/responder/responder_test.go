@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/anacrolix/dht/v2/krpc"
+	"github.com/anacrolix/torrent/bencode"
 	"github.com/spencernorton/DH-Waypoint/internal/protocol"
 	"github.com/spencernorton/DH-Waypoint/internal/protocol/dht"
 	"github.com/spencernorton/DH-Waypoint/internal/protocol/dht/ktable"
@@ -211,6 +212,63 @@ func TestResponder_get_peers__values(t *testing.T) {
 		Token: &expectedToken,
 	}, ret)
 	assert.NoError(t, err)
+}
+
+func TestResponder_get_peers__values_are_capped(t *testing.T) {
+	t.Parallel()
+
+	mocks := newTestResponderMocks(t)
+	infoHash := protocol.RandomNodeID()
+	msg := dht.Msg{
+		Q: "get_peers",
+		T: "aa",
+		Y: dht.YQuery,
+		A: &dht.MsgArgs{ID: mocks.sender.ID, InfoHash: infoHash},
+	}
+
+	nodeInfos := make([]dht.NodeInfo, 0, 10*maxPeersPerReply)
+	for range 10 * maxPeersPerReply {
+		nodeInfos = append(nodeInfos, dht.RandomNodeInfo(4))
+	}
+
+	mocks.table.On("GetHashOrClosestNodes", infoHash).Return(ktable.GetHashOrClosestNodesResult{
+		Hash:  mockedHash{nodeInfos: nodeInfos},
+		Found: true,
+	})
+
+	ret, err := mocks.responder.Respond(context.Background(), dht.RecvMsg{From: mocks.sender.Addr.ToAddrPort(), Msg: msg})
+	assert.NoError(t, err)
+	assert.Len(t, ret.Values, maxPeersPerReply)
+
+	query, err := bencode.Marshal(msg)
+	assert.NoError(t, err)
+	reply, err := bencode.Marshal(dht.Msg{T: msg.T, Y: dht.YResponse, R: &ret})
+	assert.NoError(t, err)
+	assert.Less(t, len(reply), 8*len(query), "reply of %d bytes to a query of %d", len(reply), len(query))
+}
+
+// Peers expire while their hash stays in the table. BEP 5 wants nodes when
+// there are no peers to give, not a reply with neither.
+func TestResponder_get_peers__expired_peers_fall_back_to_nodes(t *testing.T) {
+	t.Parallel()
+
+	mocks := newTestResponderMocks(t)
+	infoHash := protocol.RandomNodeID()
+	node := dht.RandomNodeInfo(4)
+
+	mocks.table.On("GetHashOrClosestNodes", infoHash).Return(ktable.GetHashOrClosestNodesResult{
+		Hash:  mockedHash{},
+		Found: true,
+	})
+	mocks.table.On("GetClosestNodes", infoHash).Return([]ktable.Node{mockedPeer{node}})
+
+	ret, err := mocks.responder.Respond(context.Background(), dht.RecvMsg{
+		From: mocks.sender.Addr.ToAddrPort(),
+		Msg:  dht.Msg{Q: "get_peers", A: &dht.MsgArgs{ID: mocks.sender.ID, InfoHash: infoHash}},
+	})
+	assert.NoError(t, err)
+	assert.Empty(t, ret.Values)
+	assert.Equal(t, dht.CompactIPv4NodeInfo{node}, ret.Nodes)
 }
 
 func TestResponder_get_peers__nodes(t *testing.T) {

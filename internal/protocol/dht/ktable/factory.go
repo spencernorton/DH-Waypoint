@@ -84,17 +84,15 @@ func newTable(nodeID ID, nodesCollector, hashesCollector btree.PrometheusCollect
 			nodeID,
 			hashesK,
 			func(id ID, peers []HashPeer) *hash {
-				peersMap := make(map[string]HashPeer, len(peers))
-				for _, p := range peers {
-					peersMap[p.Addr.Addr().String()] = p
-					rm.putAddrHashes(p.Addr.Addr(), id)
-				}
-				return &hash{
+				h := &hash{
 					id:           id,
-					peers:        peersMap,
+					peers:        make(map[string]HashPeer, min(len(peers), maxPeersPerHash)),
 					discoveredAt: time.Now(),
 					reverseMap:   rm,
 				}
+				h.update(peers)
+
+				return h
 			},
 		),
 	}
