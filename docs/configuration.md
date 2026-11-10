@@ -237,6 +237,28 @@ Periodic deletion of torrents that haven't been seen in DHT announcements for a 
 
 The default predicate is conservative: no canonical label, no evidence record, age > 60 days, `updated_at` older than 180 days, and every torrent source reports `seeders=0` observed within the last 30 days.
 
+## History pruning
+
+The `eventprune` worker bounds three history tables that otherwise grow for the
+life of the database. It is on by default and removes only rows nothing reads.
+Set a retention to `0` to turn that table's pruner off.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `EVENTPRUNE_FEEDBACK_RETENTION` | `720h` | Age at which a `processor_feedback_events` row is deleted, delivered or not. A trainer that pulls feedback must pull within this window. `0` or at least `24h`. |
+| `EVENTPRUNE_QB_STATE_RETENTION` | `2160h` | Age at which a qBittorrent state observation in `label_evidence` is deleted once a newer one exists for the same torrent. The newest observation per torrent is always kept, and an observation in a `private` or `bitgrab` category is only replaced by a newer one in such a category. Other evidence kinds are never deleted. `0` or at least `720h`. |
+| `EVENTPRUNE_VERDICT_EVENT_RETENTION` | `4320h` | Age at which a `torrent_verdict_events` row is deleted once a newer event exists for the same torrent. The newest event per torrent, every `operator` and `csam` event, and every event a recovery snapshot points at are always kept. `torrent_verdict_state` is never touched and can still be rebuilt from the events. `0` or at least `720h`. |
+| `EVENTPRUNE_INTERVAL` | `1h` | Time between cycles. The first cycle runs two minutes after start. |
+| `EVENTPRUNE_BATCH_SIZE` | `5000` | Rows one statement examines. A cycle runs at most 20 statements per table, so a large backlog is cleared over many cycles. |
+
+Durations use Go syntax with a unit (`720h`); there is no day unit. The
+minimums above stop a short value such as `30m`, meant as 30 days, from
+emptying a table: the worker refuses to start. Deleting rows frees space for reuse inside the
+table but does not return it to the operating system: after the first large
+clean-up, run `VACUUM FULL` or `pg_repack` on the table in a maintenance window
+to shrink the files. Deleting from `label_evidence` checks
+`torrent_canonical_labels` once per row, so its first clean-up is the slowest.
+
 ## Quarantine maintenance
 
 `JUNKPURGE_MAINTENANCE_ENABLED=false` is the default. Enable it to run the

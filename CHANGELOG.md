@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+- Stop three history tables from growing without bound. A new `eventprune`
+  worker, on by default, deletes `processor_feedback_events` rows older than
+  30 days, qBittorrent state observations in `label_evidence` older than 90
+  days, and `torrent_verdict_events` rows older than 180 days. The last two
+  only lose rows that a newer row for the same torrent has replaced: the
+  newest observation and the newest verdict event per torrent always stay, so
+  the current verdict, the rebuild of `torrent_verdict_state` and the "has
+  evidence" protections are unchanged. Private-category observations, operator
+  and CSAM verdict events and events a recovery snapshot points at are kept.
+  The windows are `EVENTPRUNE_FEEDBACK_RETENTION`,
+  `EVENTPRUNE_QB_STATE_RETENTION` and `EVENTPRUNE_VERDICT_EVENT_RETENTION`;
+  `0` turns one off. See `docs/configuration.md`.
+- Changed: automatic processor feedback (`operational_receipt`,
+  `teacher_consensus`, `verified_import`) is stored only for a processor that
+  has a consumer, meaning push delivery or a pull cursor. A pull that names a
+  `processor_id` now registers its cursor. Before, a processor with learning
+  enabled and no consumer collected rows that nothing read. A trainer now
+  receives events from its first pull onward, not from before it. `human_gold`
+  labels are always stored.
+
 ## 5.9.3 — 2026-11-09
 
 - Upgrade `golang.org/x/net` from 0.60.0 to 0.62.0 for GO-2026-6860

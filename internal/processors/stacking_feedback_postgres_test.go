@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -425,6 +426,9 @@ func TestPostgresBiDirectionalFeedbackAndOnlineLearning(t *testing.T) {
 		Configuration: json.RawMessage(`{"rules":[{"id":"amber-rule","pattern":"(?i)Amber","dimension":"score","weight":1.0,"content_type":"movie"}]}`),
 	})
 	require.NoError(t, err)
+	// The student has no push endpoint: its trainer registers by pulling first.
+	_, err = s.Feedback(testContext, "regex-student", 0, 1, "", "trainer-1")
+	require.NoError(t, err)
 
 	// Teacher: HTTP processor at Priority 20 with PushEnabled
 	_, err = s.Register(testContext, "teacher-http", v1.RegistryWrite{
@@ -686,4 +690,55 @@ func TestPostgresStrictV1MultiStageHTTPProcessorInStack(t *testing.T) {
 	var exclReason string
 	require.NoError(t, p.QueryRow(testContext, `SELECT reason FROM processor_exclusions WHERE info_hash=$1`, hAdult).Scan(&exclReason))
 	require.Equal(t, "adult_content", exclReason)
+}
+
+func TestPostgresFeedbackNeedsAConsumer(t *testing.T) {
+	s, p, _ := fixture(t)
+	h := seedTorrent(t, p, 108, nil)
+	_, err := s.Register(testContext, "regex-student", v1.RegistryWrite{
+		Driver: v1.DriverBuiltinRegex, Mode: "apply", State: "active",
+		Learning:      &v1.LearningConfig{Enabled: true, Mode: "log_only", AcceptedTiers: v1.FeedbackTiers},
+		Configuration: json.RawMessage(`{"rules":[{"id":"amber-rule","pattern":"(?i)Amber","dimension":"score","weight":1.0,"content_type":"movie"}]}`),
+	})
+	require.NoError(t, err)
+	count := func() (n int) {
+		t.Helper()
+		require.NoError(t, p.QueryRow(testContext, `SELECT count(*) FROM processor_feedback_events`).Scan(&n))
+		return n
+	}
+
+	// No push endpoint and no pull cursor: nothing would read the receipt.
+	_, err = s.Scan(testContext)
+	require.NoError(t, err)
+	run(t, s)
+	require.Zero(t, count())
+
+	// An operator's label is stored even before a consumer exists.
+	gold := v1.FeedbackWrite{InfoHash: hex.EncodeToString(h), ProcessorID: "regex-student", Tier: v1.FeedbackTierHumanGold,
+		GroundTruth: v1.FeedbackGroundTruth{Outcome: "operator_override", ContentType: "movie", Source: "operator_audit"}}
+	events, err := s.RecordFeedback(testContext, gold)
+	require.NoError(t, err)
+	require.Len(t, events, 1)
+	imported := v1.FeedbackWrite{InfoHash: hex.EncodeToString(h), Tier: v1.FeedbackTierVerifiedImport,
+		GroundTruth: v1.FeedbackGroundTruth{Outcome: "import_succeeded", Source: "radarr:webhook_import"}}
+	events, err = s.RecordFeedback(testContext, imported)
+	require.NoError(t, err)
+	require.Empty(t, events)
+	require.Equal(t, 1, count())
+
+	// The first pull registers the consumer; automatic events are stored from then on.
+	page, err := s.Feedback(testContext, "regex-student", 0, 10, "", "")
+	require.NoError(t, err)
+	require.Len(t, page.Items, 1)
+	events, err = s.RecordFeedback(testContext, imported)
+	require.NoError(t, err)
+	require.Len(t, events, 1)
+	seedTorrent(t, p, 109, nil)
+	_, err = s.Scan(testContext)
+	require.NoError(t, err)
+	run(t, s)
+	require.Greater(t, count(), 2)
+
+	_, err = s.Feedback(testContext, strings.Repeat("x", 97), 0, 10, "", "")
+	require.ErrorIs(t, err, ErrControl)
 }

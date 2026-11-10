@@ -63,6 +63,9 @@ func TestPostgresV2ProcessorNegotiationPreservesStrictV1Services(t *testing.T) {
 	defer peer.Close()
 	_, err = s.Register(testContext, identity.ID, v1.RegistryWrite{Endpoint: peer.URL, Mode: "apply", State: "active", Configuration: json.RawMessage(`{}`)})
 	require.NoError(t, err)
+	// Requested feedback is stored once its consumer has pulled.
+	_, err = s.Feedback(testContext, identity.ID, 0, 1, "", "")
+	require.NoError(t, err)
 	n, err = s.Scan(testContext)
 	require.NoError(t, err)
 	require.Equal(t, 2, n)

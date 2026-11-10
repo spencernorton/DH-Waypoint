@@ -186,7 +186,9 @@ bounds. Start in shadow mode; apply mode is a separate decision after evaluation
 
 Core retains operational receipts, teacher comparisons, verified imports and
 human feedback with their source/tier; an operational receipt is not an
-independent correctness label. Pull/cursor APIs continue to work.
+independent correctness label. Pull/cursor APIs continue to work. Automatic
+tiers are stored only once the processor has a consumer, and for a bounded
+time; see [operations](operations.md#bidirectional-feedback-and-external-learning).
 
 To enable adapter receipt storage, set `feedback_file` to a writable JSONL path
 on a dedicated persistent volume, then enable `learning.push_enabled` on the
