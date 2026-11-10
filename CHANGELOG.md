@@ -59,6 +59,20 @@ install: they change what a default install accepts.
   memory for metadata is taken as its pieces arrive instead of at the size a
   peer declares, and metadata whose nested lists and dictionaries add up to
   more than eight times the metadata size limit is rejected.
+- Stop the crawler fetching the same rejected torrents again. A torrent that
+  failed the post-fetch ban check was meant to be blocked, but the block call
+  is held while catalogue removal is disabled, so nothing was remembered and
+  the metadata was fetched again every time the hash was seen. The blocking
+  manager gains `Ignore`, which adds hashes to its persisted bloom filter and
+  removes nothing; the crawler uses it for ban-check rejections, under both
+  the wire key and the verified identities. `Block` is unchanged and still
+  held. Hashes added this way are also refused by the importer, as blocked
+  hashes always were. The verdict event for such a rejection keeps mechanism
+  `blocking` and now carries the evidence label `ban_check`; the crawler no
+  longer passes a `csam` label for it.
+- Index torrents with short names. The ban check refused any name under 8
+  bytes, which dropped real titles such as `Tenet` or `1917`. Only an empty
+  name is refused now.
 
 ## 5.9.3 — 2026-11-09
 

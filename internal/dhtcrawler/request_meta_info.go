@@ -234,7 +234,13 @@ func (c *crawler) doRequestMetaInfo(
 			}
 		}
 		if banErr := c.banningChecker.Check(res.Info); banErr != nil {
-			_ = c.blockingManager.Block(ctx, []protocol.InfoHash{identity}, "csam", "csam_crawler", false)
+			// Remember the rejection so triage stops fetching this torrent again.
+			// Triage tests the 160-bit wire key, so that goes in with the verified
+			// identities. Nothing was stored yet and nothing is removed: Block,
+			// the removal path, stays held while catalogue removal is disabled.
+			if c.blockingManager != nil {
+				c.blockingManager.Ignore(append(identities, protocol.InfoHashV1(hash)))
+			}
 			// Phase-C: dual-write a blocking verdict for the ban-driven
 			// block. Recording-only, after the block (never rolls it back).
 			c.recordBlockingVerdict(ctx, identity)
