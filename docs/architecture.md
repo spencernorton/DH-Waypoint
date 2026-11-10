@@ -174,6 +174,7 @@ DH-Waypoint uses PostgreSQL 16 (`internal/database`, `migrations/`) with the `pg
 - `torrent_liveness`: Derived swarm viability state (`alive`, `suspect`, `dead`, `unknown`) combining tracker scrape history (`internal/seeds`), DHT `get_peers` revalidation, and download client stall telemetry.
 - `verdict_ledger`, `junkpurge_quarantine`, `catalogue_recovery_snapshots`: Append-only audit trail and full JSONB row snapshots allowing instant restoration of quarantined records.
   - **Cascade Fingerprint Invariant:** Side tables (`processor_*`, `verdict_ledger`, etc.) intentionally carry **no foreign-key constraints** into the `torrents` cascade set so `cataloguerecovery` schema fingerprints remain immutable across upgrades.
+  - **Bounded history:** the `eventprune` worker deletes old qBittorrent state observations and verdict events that a newer row for the same torrent has replaced, and old processor feedback events. The newest row per torrent stays, so the current verdict and the "has evidence" protections are unchanged (see [history pruning](configuration.md#history-pruning)).
 
 ### External Processor Subsystem Tables (`00061`–`00067`)
 - `processor_control`: Singleton coordination row (`epoch`, `scan_after` cursor) serializing catch-up scans across replicas.

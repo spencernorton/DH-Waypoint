@@ -51,7 +51,9 @@ half of liveness and piece-hash retention; the grab → import loop still closes
 
 Every event, from every source, lands as one row in `label_evidence`. The table
 is append-only and deduplicated on the source's own event id, so a webhook and
-its poller echo count once.
+its poller echo count once. The one exception is repeated qBittorrent state
+observations: old ones that a newer observation of the same torrent has
+replaced are deleted (see [history pruning](configuration.md#history-pruning)).
 
 ## Configuring the \*arr webhook
 

@@ -32,6 +32,7 @@ import (
 	"github.com/spencernorton/DH-Waypoint/internal/database/databasefx"
 	"github.com/spencernorton/DH-Waypoint/internal/database/migrations"
 	"github.com/spencernorton/DH-Waypoint/internal/dhtcrawler/dhtcrawlerfx"
+	"github.com/spencernorton/DH-Waypoint/internal/eventprune/eventprunefx"
 	"github.com/spencernorton/DH-Waypoint/internal/evidence/evidencefx"
 	"github.com/spencernorton/DH-Waypoint/internal/gql/gqlfx"
 	"github.com/spencernorton/DH-Waypoint/internal/health"
@@ -89,6 +90,7 @@ func New() fx.Option {
 		processorfx.New(),
 		processorsfx.New(),
 		queuefx.New(),
+		eventprunefx.New(),
 		junkpurgefx.New(),
 		verdictsfx.New(),
 		retentionfx.New(),

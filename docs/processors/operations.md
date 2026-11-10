@@ -257,3 +257,13 @@ External trainers and processors can pull feedback via
 and commit durable consumer offsets via `POST /api/processors/v1/feedback/ack`,
 or receive asynchronous batches via `POST /v1/feedback` (`FeedbackBatch` ->
 `FeedbackAck`) when `learning.push_enabled=true`.
+
+Core stores the three automatic tiers only for a processor that has a consumer:
+push delivery (`learning.push_enabled=true` on an HTTP registration) or a pull
+cursor in `processor_feedback_cursors`. A pull that names a `processor_id`
+registers its cursor (`consumer_id` defaults to `default`), and so does an ack,
+so a trainer receives events from its first pull onward, not from before it.
+Without a consumer nothing would read the rows. A `human_gold` label is always
+stored. Stored events are deleted after `EVENTPRUNE_FEEDBACK_RETENTION` (30
+days by default) whether or not they were delivered; see
+[history pruning](../configuration.md#history-pruning).

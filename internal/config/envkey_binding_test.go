@@ -5,6 +5,7 @@ import (
 	"github.com/spencernorton/DH-Waypoint/internal/classifier/contentfilter"
 	"github.com/spencernorton/DH-Waypoint/internal/config/configresolver"
 	"github.com/spencernorton/DH-Waypoint/internal/csamblocklist"
+	"github.com/spencernorton/DH-Waypoint/internal/eventprune"
 	"github.com/spencernorton/DH-Waypoint/internal/evidence"
 	"github.com/spencernorton/DH-Waypoint/internal/seeds"
 	"testing"
@@ -164,6 +165,26 @@ func TestEnvBinding_EvidenceSources(t *testing.T) {
 	}
 	if !cfg.Liveness.Enabled {
 		t.Error("EVIDENCE_LIVENESS_ENABLED did not bind")
+	}
+}
+
+// TestEnvBinding_EventPruneRetentions pins the documented EVENTPRUNE_* names,
+// including the QB acronym that a snake-case split could have broken.
+func TestEnvBinding_EventPruneRetentions(t *testing.T) {
+	resolved := resolveSectionFromEnv(t, "eventprune", eventprune.NewDefaultConfig(), map[string]string{
+		"EVENTPRUNE_FEEDBACK_RETENTION":      "48h",
+		"EVENTPRUNE_QB_STATE_RETENTION":      "0",
+		"EVENTPRUNE_VERDICT_EVENT_RETENTION": "720h",
+		"EVENTPRUNE_BATCH_SIZE":              "100",
+		"EVENTPRUNE_INTERVAL":                "6h",
+	})
+	cfg, ok := resolved.(eventprune.Config)
+	if !ok {
+		t.Fatalf("resolved value is %T, want eventprune.Config", resolved)
+	}
+	want := eventprune.Config{Interval: 6 * time.Hour, BatchSize: 100, FeedbackRetention: 48 * time.Hour, VerdictEventRetention: 720 * time.Hour}
+	if cfg != want {
+		t.Fatalf("EVENTPRUNE_* did not bind: got %+v, want %+v", cfg, want)
 	}
 }
 

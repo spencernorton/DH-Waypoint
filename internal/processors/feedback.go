@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"slices"
 	"strings"
 	"time"
@@ -15,6 +16,14 @@ import (
 	v2 "github.com/spencernorton/DH-Waypoint/processorapi/v2"
 )
 
+// pushesFeedback reports whether DeliverFeedback sends this processor its events.
+func pushesFeedback(e Entry) bool {
+	return (e.Driver == "" || e.Driver == v1.DriverHTTP) && e.Learning != nil && e.Learning.Enabled && e.Learning.PushEnabled
+}
+
+// insertFeedbackTx stores one event. It returns nil without an error when the
+// processor has no consumer (push delivery or a pull cursor): nothing would
+// read the row. An operator's human_gold label is always stored.
 func insertFeedbackTx(
 	ctx context.Context,
 	tx pgx.Tx,
@@ -52,13 +61,18 @@ func insertFeedbackTx(
 	}
 	var seq int64
 	var created time.Time
+	keep := tier == v1.FeedbackTierHumanGold || (entry != nil && pushesFeedback(*entry))
 	err := tx.QueryRow(ctx, `INSERT INTO processor_feedback_events
   (event_id,processor_id,execution_generation,job_id,info_hash,tier,input,prediction,trace,ground_truth,delivery_state)
-  VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+  SELECT $1::text,$2::text,$3::bigint,$4::text,$5::bytea,$6::text,$7::jsonb,$8::jsonb,$9::jsonb,$10::jsonb,$11::text
+  WHERE $12::boolean OR EXISTS(SELECT 1 FROM processor_feedback_cursors WHERE processor_id=$2::text)
   ON CONFLICT(event_id) DO UPDATE SET event_id=EXCLUDED.event_id
   RETURNING seq,created_at`,
-		eventID, processorID, execGen, jobID, hash, tier, inRaw, predRaw, traceRaw, string(gtBytes), deliveryState,
+		eventID, processorID, execGen, jobID, hash, tier, inRaw, predRaw, traceRaw, string(gtBytes), deliveryState, keep,
 	).Scan(&seq, &created)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -291,7 +305,9 @@ func (s *Store) RecordFeedback(ctx context.Context, w v1.FeedbackWrite) ([]v1.Fe
 			if err != nil {
 				return nil, err
 			}
-			out = append(out, *ev)
+			if ev != nil {
+				out = append(out, *ev)
+			}
 			recordedProc[procID] = true
 		}
 	}
@@ -312,7 +328,9 @@ func (s *Store) RecordFeedback(ctx context.Context, w v1.FeedbackWrite) ([]v1.Fe
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, *ev)
+		if ev != nil {
+			out = append(out, *ev)
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return nil, err
@@ -331,6 +349,21 @@ func (s *Store) Feedback(ctx context.Context, processorID string, afterSeq int64
 	p, err := s.pool.Get()
 	if err != nil {
 		return out, err
+	}
+	if processorID != "" {
+		// A pull registers its consumer: automatic events are stored only for a
+		// processor that has one, so the first pull must not need an ack.
+		consumer := consumerID
+		if consumer == "" {
+			consumer = "default"
+		}
+		if len(processorID) > 96 || len(consumer) > 96 {
+			return out, ErrControl
+		}
+		if _, err = p.Exec(ctx, `INSERT INTO processor_feedback_cursors(processor_id,consumer_id,last_seq,updated_at)
+  VALUES($1,$2,0,clock_timestamp()) ON CONFLICT(processor_id,consumer_id) DO NOTHING`, processorID, consumer); err != nil {
+			return out, err
+		}
 	}
 	if afterSeq == 0 && processorID != "" && consumerID != "" {
 		_ = p.QueryRow(ctx, `SELECT last_seq FROM processor_feedback_cursors WHERE processor_id=$1 AND consumer_id=$2`, processorID, consumerID).Scan(&afterSeq)
