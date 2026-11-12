@@ -212,17 +212,10 @@ func searchRequestToQueryOptionsWithIdentifiers(r torznab.SearchRequest, include
 		}
 	}
 
-	limit := r.Profile.DefaultLimit
-	if r.Limit.Valid {
-		limit = r.Limit.Uint
-		if limit > r.Profile.MaxLimit {
-			limit = r.Profile.MaxLimit
-		}
-	}
-
+	limit, offset := requestPagination(r)
 	options = append(options, query.Limit(limit))
 	if r.Offset.Valid {
-		options = append(options, query.Offset(r.Offset.Uint))
+		options = append(options, query.Offset(offset))
 	}
 
 	if len(r.Profile.Tags) > 0 {
@@ -276,4 +269,19 @@ func identifierRefs(function, source, id string) []model.ContentRef {
 		refs = append(refs, model.ContentRef{Type: kind, Source: source, ID: id})
 	}
 	return refs
+}
+
+func requestPagination(r torznab.SearchRequest) (uint, uint) {
+	limit := r.Profile.DefaultLimit
+	if r.Limit.Valid {
+		limit = r.Limit.Uint
+		if limit > r.Profile.MaxLimit {
+			limit = r.Profile.MaxLimit
+		}
+	}
+	var offset uint
+	if r.Offset.Valid {
+		offset = r.Offset.Uint
+	}
+	return limit, offset
 }

@@ -178,10 +178,12 @@ func (a Adapter) Search(ctx context.Context, req torznab.SearchRequest) (torznab
 	options := []query.Option{search.TorrentContentDefaultOption(), query.WithTotalCount(false), query.Where(search.LegacyTorrentIdentityCriteria("torrent_contents"))}
 
 	identifiers := requestIdentifierRefs(req)
+	unlinkedSearch, supportsUnlinked := a.search.(search.IdentifierWithUnlinkedTorrentContentSearch)
 	identifierSearch, supportsIdentifiers := a.search.(search.IdentifierTorrentContentSearch)
-	resolveIdentifiers := supportsIdentifiers && len(identifiers) > 0 &&
+	resolveWithUnlinked := supportsUnlinked && len(identifiers) > 0
+	resolveIdentifiers := !resolveWithUnlinked && supportsIdentifiers && len(identifiers) > 0 &&
 		!(len(identifiers) == 1 && identifiers[0].Source == model.SourceTmdb)
-	reqOptions, reqErr := searchRequestToQueryOptionsWithIdentifiers(req, !resolveIdentifiers)
+	reqOptions, reqErr := searchRequestToQueryOptionsWithIdentifiers(req, !(resolveWithUnlinked || resolveIdentifiers))
 	if reqErr != nil {
 		return torznab.SearchResult{}, reqErr
 	}
@@ -190,9 +192,13 @@ func (a Adapter) Search(ctx context.Context, req torznab.SearchRequest) (torznab
 
 	var searchResult search.TorrentContentResult
 	var searchErr error
-	if resolveIdentifiers {
+	switch {
+	case resolveWithUnlinked:
+		limit, offset := requestPagination(req)
+		searchResult, searchErr = unlinkedSearch.TorrentContentByIdentifiersWithUnlinked(ctx, identifiers, limit, offset, options...)
+	case resolveIdentifiers:
 		searchResult, searchErr = identifierSearch.TorrentContentByIdentifiers(ctx, identifiers, options...)
-	} else {
+	default:
 		searchResult, searchErr = a.search.TorrentContent(ctx, options...)
 	}
 	if searchErr != nil {
@@ -214,12 +220,10 @@ func (a Adapter) Search(ctx context.Context, req torznab.SearchRequest) (torznab
 	}
 
 	if a.reranker != nil {
-		// Rerank operates in-place on the items slice; we do not
-		// catch a panic here because the production implementation
-		// (*priors.Ranker) treats every internal failure as a
-		// no-op. If a ranker did panic we'd want to find out about
-		// it loudly, not swallow it.
-		searchResult.Items = a.reranker.Rerank(ctx, searchResult.Items)
+		// Rerank operates in-place on the items slice; when an ID search
+		// returned both linked and unlinked rows, rank each tier separately
+		// so linked rows always remain ahead of unlinked title fallbacks.
+		searchResult.Items = rerankPreservingLinkedFirst(ctx, a.reranker, searchResult.Items, resolveWithUnlinked)
 	}
 
 	return torrentContentResultToTorznabResult(req, searchResult, a.freshness.AuthoritativeZeroOnly), nil
@@ -407,4 +411,34 @@ func hashKey(infoHash []byte) string {
 		out[2*i+1] = hexAlphabet[b&0x0f]
 	}
 	return string(out)
+}
+
+func rerankPreservingLinkedFirst(
+	ctx context.Context,
+	ranker Reranker,
+	items []search.TorrentContentResultItem,
+	preserveLinkedTier bool,
+) []search.TorrentContentResultItem {
+	if !preserveLinkedTier || len(items) <= 1 {
+		return ranker.Rerank(ctx, items)
+	}
+	splitIdx := -1
+	for i := range items {
+		if !items[i].ContentID.Valid {
+			splitIdx = i
+			break
+		}
+	}
+	if splitIdx <= 0 || splitIdx >= len(items) {
+		return ranker.Rerank(ctx, items)
+	}
+	linked := append([]search.TorrentContentResultItem(nil), items[:splitIdx]...)
+	unlinked := append([]search.TorrentContentResultItem(nil), items[splitIdx:]...)
+	if len(linked) > 1 {
+		linked = ranker.Rerank(ctx, linked)
+	}
+	if len(unlinked) > 1 {
+		unlinked = ranker.Rerank(ctx, unlinked)
+	}
+	return append(linked, unlinked...)
 }

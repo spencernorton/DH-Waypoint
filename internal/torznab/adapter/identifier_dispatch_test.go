@@ -75,3 +75,85 @@ func TestAdapterDispatchesIdentifierSnapshotSearch(t *testing.T) {
 	require.Equal(t, 1, s.ordinary)
 	require.Zero(t, s.resolved)
 }
+
+type identifierWithUnlinkedDispatchSearch struct {
+	identifierDispatchSearch
+	unlinked int
+	limit    uint
+	offset   uint
+}
+
+func (s *identifierWithUnlinkedDispatchSearch) TorrentContentByIdentifiersWithUnlinked(
+	ctx context.Context,
+	refs []model.ContentRef,
+	limit, offset uint,
+	_ ...query.Option,
+) (search.TorrentContentResult, error) {
+	s.unlinked++
+	s.ctx = ctx
+	s.refs = refs
+	s.limit = limit
+	s.offset = offset
+	return search.TorrentContentResult{}, nil
+}
+
+func TestAdapterDispatchesIdentifierWithUnlinkedSearch(t *testing.T) {
+	ctx := context.Background()
+	for _, tt := range []struct {
+		name     string
+		req      torznab.SearchRequest
+		unlinked bool
+		refs     []model.ContentRef
+	}{
+		{"typed TMDB", torznab.SearchRequest{Type: torznab.FunctionTV, TMDBID: model.NewNullString("42")}, true,
+			[]model.ContentRef{{Type: model.ContentTypeTvShow, Source: "tmdb", ID: "42"}}},
+		{"IMDb normalized", torznab.SearchRequest{Type: torznab.FunctionTV, IMDBID: model.NewNullString("123")}, true,
+			[]model.ContentRef{{Type: model.ContentTypeTvShow, Source: "imdb", ID: "tt123"}}},
+		{"TVDB mapped", torznab.SearchRequest{Type: torznab.FunctionTV, TVDBID: model.NewNullString("84")}, true,
+			[]model.ContentRef{{Type: model.ContentTypeTvShow, Source: "tvdb", ID: "84"}}},
+		{"plain query without IDs", torznab.SearchRequest{Type: torznab.FunctionTV, Query: "lantern"}, false, nil},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			s := &identifierWithUnlinkedDispatchSearch{}
+			tt.req.Profile = torznab.ProfileDefault
+			tt.req.Limit = model.NewNullUint(25)
+			tt.req.Offset = model.NewNullUint(5)
+			_, err := New(s).Search(ctx, tt.req)
+			require.NoError(t, err)
+			if tt.unlinked {
+				require.Equal(t, 1, s.unlinked)
+				require.Zero(t, s.resolved)
+				require.Zero(t, s.ordinary)
+				require.Equal(t, tt.refs, s.refs)
+				require.Equal(t, uint(25), s.limit)
+				require.Equal(t, uint(5), s.offset)
+			} else {
+				require.Equal(t, 1, s.ordinary)
+				require.Zero(t, s.unlinked)
+			}
+		})
+	}
+}
+
+type reverseReranker struct{}
+
+func (reverseReranker) Rerank(_ context.Context, items []search.TorrentContentResultItem) []search.TorrentContentResultItem {
+	out := make([]search.TorrentContentResultItem, len(items))
+	for i := range items {
+		out[len(items)-1-i] = items[i]
+	}
+	return out
+}
+
+func TestRerankPreservingLinkedFirst(t *testing.T) {
+	items := []search.TorrentContentResultItem{
+		{TorrentContent: model.TorrentContent{ID: "linked-a", ContentID: model.NewNullString("1")}},
+		{TorrentContent: model.TorrentContent{ID: "linked-b", ContentID: model.NewNullString("1")}},
+		{TorrentContent: model.TorrentContent{ID: "unlinked-a"}},
+		{TorrentContent: model.TorrentContent{ID: "unlinked-b"}},
+	}
+	ranked := rerankPreservingLinkedFirst(context.Background(), reverseReranker{}, items, true)
+	require.Equal(t, []string{"linked-b", "linked-a", "unlinked-b", "unlinked-a"}, []string{
+		ranked[0].ID, ranked[1].ID, ranked[2].ID, ranked[3].ID,
+	})
+}
