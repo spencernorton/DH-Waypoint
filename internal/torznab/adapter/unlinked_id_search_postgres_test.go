@@ -49,6 +49,9 @@ func TestTorznabAdapterIDSearchIncludesUnlinkedMatchesEndToEnd(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(admin.Close)
 
+	_, err = admin.Exec(ctx, `SELECT pg_advisory_lock(830571);CREATE EXTENSION IF NOT EXISTS pg_trgm WITH SCHEMA public;CREATE EXTENSION IF NOT EXISTS btree_gin WITH SCHEMA public;SELECT pg_advisory_unlock(830571)`)
+	require.NoError(t, err)
+
 	schema := fmt.Sprintf("torznab_unlinked_e2e_%d", time.Now().UnixNano())
 	quoted := pgx.Identifier{schema}.Sanitize()
 	_, err = admin.Exec(ctx, "CREATE SCHEMA "+quoted)
@@ -60,7 +63,7 @@ func TestTorznabAdapterIDSearchIncludesUnlinkedMatchesEndToEnd(t *testing.T) {
 
 	cfg, err := pgx.ParseConfig(dsn)
 	require.NoError(t, err)
-	cfg.RuntimeParams["search_path"] = schema
+	cfg.RuntimeParams["search_path"] = schema + ",public"
 	sqlDB := stdlib.OpenDB(*cfg)
 	t.Cleanup(func() { require.NoError(t, sqlDB.Close()) })
 
