@@ -1,6 +1,7 @@
 package fts
 
 import (
+	"regexp"
 	"strings"
 
 	"github.com/spencernorton/DH-Waypoint/internal/lexer"
@@ -102,6 +103,22 @@ func (l *queryLexer) readQueryToken() (TokenValue, bool) {
 	}
 }
 
+// seasonTerm is a bare season such as s51. Release names usually glue it to
+// the episode (S51E01), which the tokenizer indexes as the single lexeme s51e01.
+var seasonTerm = regexp.MustCompile(`^s\d+$`)
+
+// queryLexeme quotes one query word. A bare season also matches the glued
+// season-episode lexeme, so s51 finds S51E01 without matching s510.
+// A wildcard the user typed (s51*) already covers it and is left alone.
+func queryLexeme(word string, wildcard bool) string {
+	quoted := quoteLexeme(word, false)
+	if wildcard || !seasonTerm.MatchString(word) {
+		return quoted
+	}
+
+	return "(" + quoted + " | " + word + "e:*)"
+}
+
 func appQueryTokensToTsquery(tokens ...TokenValue) string {
 	var parts []string
 
@@ -115,6 +132,7 @@ outer:
 				break outer
 			}
 			token := tokens[i]
+			wildcard := len(tokens) > i+1 && tokens[i+1].Token == TokenWildcard
 			addExpr := func(expr string) {
 				if len(parts) > 0 {
 					switch operator {
@@ -145,8 +163,8 @@ outer:
 			case TokenQuoted:
 				tokenized := TokenizeFlat(token.Value)
 				var quotedWords []string
-				for _, word := range tokenized {
-					quotedWords = append(quotedWords, quoteLexeme(word, false))
+				for j, word := range tokenized {
+					quotedWords = append(quotedWords, queryLexeme(word, wildcard && j == len(tokenized)-1))
 				}
 				if len(quotedWords) > 0 {
 					addExpr(strings.Join(quotedWords, " <-> "))
@@ -154,10 +172,11 @@ outer:
 			case TokenPhrase:
 				tokenized := Tokenize(token.Value)
 				var phrases []string
-				for _, phrase := range tokenized {
+				for p, phrase := range tokenized {
 					var quotedWords []string
-					for _, word := range phrase {
-						quotedWords = append(quotedWords, quoteLexeme(word, false))
+					for j, word := range phrase {
+						last := p == len(tokenized)-1 && j == len(phrase)-1
+						quotedWords = append(quotedWords, queryLexeme(word, wildcard && last))
 					}
 					if len(quotedWords) > 0 {
 						phrases = append(phrases, strings.Join(quotedWords, " <-> "))
