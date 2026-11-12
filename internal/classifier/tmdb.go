@@ -29,7 +29,7 @@ func (c executionContext) tmdbSearchMovie(title string, year model.Year) (model.
 	}
 
 	queryYear := int(year)
-	bestMatch, ok := fuzzyFindBestMatch[tmdb.SearchMovieResult](
+	ranked := rankMatchCandidates[tmdb.SearchMovieResult](
 		title,
 		searchResult.Results,
 		func(item tmdb.SearchMovieResult) []string {
@@ -38,14 +38,17 @@ func (c executionContext) tmdbSearchMovie(title string, year model.Year) (model.
 		func(item tmdb.SearchMovieResult) int {
 			return yearProximityPenalty(queryYear, yearFromDateString(item.ReleaseDate))
 		},
+		func(item tmdb.SearchMovieResult) candidateTieBreak {
+			return candidateTieBreak{Popularity: item.Popularity, VoteCount: item.VoteCount}
+		},
 		c.fuzzyMatchEnabled,
 	)
 
-	if !ok {
+	if len(ranked) == 0 {
 		return model.Content{}, classification.ErrUnmatched
 	}
 
-	return c.tmdbGetMovieByTMDBID(bestMatch.ID)
+	return c.tmdbGetMovieByTMDBID(ranked[0].ID)
 }
 
 func (c executionContext) tmdbSearchTVShow(title string, year model.Year) (model.Content, error) {
@@ -64,7 +67,7 @@ func (c executionContext) tmdbSearchTVShow(title string, year model.Year) (model
 	}
 
 	queryYear := int(year)
-	bestMatch, ok := fuzzyFindBestMatch[tmdb.SearchTvResult](
+	ranked := rankMatchCandidates[tmdb.SearchTvResult](
 		title,
 		searchResult.Results,
 		func(item tmdb.SearchTvResult) []string {
@@ -73,14 +76,48 @@ func (c executionContext) tmdbSearchTVShow(title string, year model.Year) (model
 		func(item tmdb.SearchTvResult) int {
 			return yearProximityPenalty(queryYear, yearFromDateString(item.FirstAirDate))
 		},
+		func(item tmdb.SearchTvResult) candidateTieBreak {
+			return candidateTieBreak{Popularity: item.Popularity, VoteCount: item.VoteCount}
+		},
 		c.fuzzyMatchEnabled,
 	)
 
-	if !ok {
+	if len(ranked) == 0 {
 		return model.Content{}, classification.ErrUnmatched
 	}
 
-	return c.tmdbGetTVShowByTMDBID(bestMatch.ID)
+	if len(ranked) >= 2 && hasPositiveSeasonOrEpisode(c.result.Episodes) {
+		maxProbe := 3
+		if len(ranked) < maxProbe {
+			maxProbe = len(ranked)
+		}
+		var fallbackContent *model.Content
+		var firstErr error
+		for i := 0; i < maxProbe; i++ {
+			detailsModel, err := c.tmdbGetTVShowByTMDBID(ranked[i].ID)
+			if err != nil {
+				if firstErr == nil {
+					firstErr = err
+				}
+				continue
+			}
+			if fallbackContent == nil {
+				copyModel := detailsModel
+				fallbackContent = &copyModel
+			}
+			if strictOK, _ := contentEpisodeFeasibility(detailsModel, c.result.Episodes); strictOK {
+				return detailsModel, nil
+			}
+		}
+		if fallbackContent != nil {
+			return *fallbackContent, nil
+		}
+		if firstErr != nil {
+			return model.Content{}, firstErr
+		}
+	}
+
+	return c.tmdbGetTVShowByTMDBID(ranked[0].ID)
 }
 
 // yearFromDateString extracts the year component from a TMDB date string of
