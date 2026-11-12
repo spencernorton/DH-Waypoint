@@ -1,6 +1,6 @@
 module github.com/spencernorton/DH-Waypoint
 
-go 1.26.10
+go 1.26.11
 
 require (
 	github.com/99designs/gqlgen v0.17.64
