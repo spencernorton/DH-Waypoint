@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 5.10.1 — 2026-11-12
+
+### Security
+
+- Build with Go 1.26.11, which fixes an HTTP/1 server crash in net/http (GO-2026-6859).
+
+### Fixed
+
+- Include title-matched unlinked torrents (`content_id IS NULL`) after linked results on Torznab external-ID searches (`imdbid`, `tmdbid`, `tvdbid`), preserving episode, category, liveness, freshness, verdict and adult-serving filters.
+- Prevent short TV base titles from matching unrelated titles or single-season homonyms by enforcing first-token and length-scaled Levenshtein gates, ranking exact matches by popularity/votes, validating TV season/episode feasibility, and preserving season claims on confirmed compact season packs (`<= 4 GiB`).
+
 ## 5.10.0 — 2026-11-10
 
 Security release. Read the first four entries before upgrading a Compose
