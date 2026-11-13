@@ -25,8 +25,11 @@ func TestComposeFilesForwardTheAPIKeyAndBindLocally(t *testing.T) {
 		app := compose.Services["dh-waypoint"]
 		require.Contains(t, app.Environment, "HTTP_SERVER_API_KEY", path)
 		require.Contains(t, app.Environment, "HTTP_SERVER_CORS_ALLOWED_ORIGINS", path)
-		// A sweep mode set in .env must reach the container; unset keeps the built-in default.
-		require.Equal(t, "${CSAM_SWEEP_MODE:-apply}", app.Environment["CSAM_SWEEP_MODE"], path)
+		// Bare passthrough: a sweep mode set in .env reaches the container, and
+		// unset passes nothing, so Compose cannot override a config file.
+		mode, passed := app.Environment["CSAM_SWEEP_MODE"]
+		require.True(t, passed, path)
+		require.Nil(t, mode, path)
 		var httpPorts []string
 		for _, port := range app.Ports {
 			if strings.HasSuffix(port, ":3333") {

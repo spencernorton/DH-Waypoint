@@ -59,9 +59,10 @@ services:
       CSAM_BLOCKLIST_FEED_URLS: "${CSAM_BLOCKLIST_FEED_URLS:-}"
       CSAM_BLOCKLIST_EXPORT_ENABLED: "${CSAM_BLOCKLIST_EXPORT_ENABLED:-true}"
       CSAM_BLOCKLIST_EXPORT_UPSTREAM_URL: "${CSAM_BLOCKLIST_EXPORT_UPSTREAM_URL:-}"
-      # Sweep of stored banned-keyword matches: apply (delete, the default),
-      # dry_run (count only) or off. See docs/csam-defense.md.
-      CSAM_SWEEP_MODE: "${CSAM_SWEEP_MODE:-apply}"
+      # Sweep of stored banned-keyword matches: apply (delete), dry_run (count
+      # only) or off. Passed only when .env defines it; unset leaves the mode
+      # to a config file or the built-in default, apply. See docs/csam-defense.md.
+      CSAM_SWEEP_MODE:
       CONTENT_FILTER_ENABLED: "${CONTENT_FILTER_ENABLED:-false}"
       CONTENT_FILTER_ENFORCE: "${CONTENT_FILTER_ENFORCE:-false}"
       RETENTION_ENABLED: "${RETENTION_ENABLED:-false}"
