@@ -15,8 +15,9 @@ func newSourceProvider(config Config, tmdbConfig tmdb.Config) sourceProvider {
 			yamlSourceProvider{rawSourceProvider: xdgSourceProvider{}},
 			yamlSourceProvider{rawSourceProvider: cwdSourceProvider{}},
 			configSourceProvider{
-				config:      config,
-				tmdbEnabled: tmdbConfig.Enabled,
+				config: config,
+				// No key means TMDB is off: its steps are skipped, not failed.
+				tmdbEnabled: tmdbConfig.Enabled && tmdbConfig.APIKey != "",
 			},
 		},
 	}
