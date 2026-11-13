@@ -9,6 +9,7 @@ import (
 	"slices"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -148,9 +149,15 @@ func (s *Store) Scan(ctx context.Context) (int, error) {
 	changed := len(hashes)
 	// The repeated cursor bound keeps both probes on index ranges: without it
 	// the plan merge-joins from the start of the hash space.
-	rows, e = tx.Query(ctx, `SELECT t.info_hash FROM torrents t WHERE t.info_hash>$1 AND EXISTS(SELECT 1 FROM torrent_contents c WHERE c.info_hash=t.info_hash AND c.info_hash>$1)
+	catchUp := `SELECT t.info_hash FROM torrents t WHERE t.info_hash>$1 AND EXISTS(SELECT 1 FROM torrent_contents c WHERE c.info_hash=t.info_hash AND c.info_hash>$1)
  AND NOT EXISTS(SELECT 1 FROM processor_reprocess_requests r WHERE r.info_hash=t.info_hash AND r.state='waiting_core' AND r.info_hash>$1)
- ORDER BY t.info_hash LIMIT $2`, after, s.cfg.ScanBatch-len(hashes))
+ ORDER BY t.info_hash LIMIT $2`
+	if s.publication.RequiredProcessor != "" {
+		// Torrents that fail fileEvidenceSQL are left out: a source trigger
+		// queues them when their files arrive.
+		catchUp = strings.Replace(catchUp, `WHERE `, `WHERE `+fileEvidenceSQL+` AND `, 1)
+	}
+	rows, e = tx.Query(ctx, catchUp, after, s.cfg.ScanBatch-len(hashes))
 	if e != nil {
 		return 0, e
 	}
@@ -240,6 +247,22 @@ func (s *Store) Scan(ctx context.Context) (int, error) {
 				return 0, err
 			}
 			continue
+		}
+		if s.publication.RequiredProcessor != "" {
+			if reason := fileEvidenceReason(src); reason != "" {
+				// The required review could not approve it, so it is not sent.
+				// A source trigger queues it again when its file evidence changes.
+				s.metrics.admission.WithLabelValues("file_evidence").Inc()
+				if priority[string(h)] {
+					if _, err = tx.Exec(ctx, `UPDATE processor_reprocess_requests SET state='held',state_reason=$2,updated_at=clock_timestamp() WHERE info_hash=$1 AND state='ready'`, h, reason); err != nil {
+						return 0, err
+					}
+				}
+				if _, err = tx.Exec(ctx, `DELETE FROM processor_publication_pending WHERE info_hash=$1 AND source_revision<=$2`, h, src.PublicationRevision); err != nil {
+					return 0, err
+				}
+				continue
+			}
 		}
 		effectivePlan := planForSource(planForIdentity(plan, h), src)
 		if len(effectivePlan.Steps) == 0 {
@@ -334,9 +357,10 @@ func (s *Store) Scan(ctx context.Context) (int, error) {
 // control row. Each hash can cost 10-25 ms on the already-current path.
 const scanHoldBound = 150 * time.Millisecond
 
-// pruneOutbox removes content-less rows from a bounded window of the
-// publication outbox before Scan takes the control row. Scan admits only
-// torrents with contents, and a later contents insert re-enrols the torrent
+// pruneOutbox removes rows Scan cannot admit from a bounded window of the
+// publication outbox before Scan takes the control row: content-less rows
+// and, with a required processor, rows whose torrent fails fileEvidenceSQL.
+// A later contents insert or file-evidence change re-enrols the torrent
 // through its trigger, so these rows only slow Scan's held outbox query.
 // A failure skips the prune, never the Scan.
 func (s *Store) pruneOutbox(ctx context.Context) {
@@ -347,22 +371,23 @@ func (s *Store) pruneOutbox(ctx context.Context) {
 		return
 	}
 	defer rollback(tx)
+	gate := s.publication.RequiredProcessor != ""
 	at, after := s.outboxCursor.get()
-	rows, e := tx.Query(ctx, pruneWindowSQL, at, after, outboxPruneWindow)
+	rows, e := tx.Query(ctx, pruneWindowSQL, at, after, outboxPruneWindow, gate)
 	if e != nil {
 		return
 	}
-	var empty [][]byte
+	var drop [][]byte
 	n := 0
 	for rows.Next() {
-		var contentless bool
-		if e = rows.Scan(&after, &at, &contentless); e != nil {
+		var prunable bool
+		if e = rows.Scan(&after, &at, &prunable); e != nil {
 			rows.Close()
 			return
 		}
 		n++
-		if contentless {
-			empty = append(empty, after)
+		if prunable {
+			drop = append(drop, after)
 		}
 	}
 	rows.Close()
@@ -372,17 +397,17 @@ func (s *Store) pruneOutbox(ctx context.Context) {
 	if n < outboxPruneWindow {
 		at, after = time.Time{}, nil
 	}
-	if len(empty) > 0 {
+	if len(drop) > 0 {
 		// Lock, then delete in a new statement. The delete's snapshot sees
-		// every contents insert committed before it; a later insert's trigger
-		// waits on this row lock and re-enrols the torrent once it is gone.
-		// One statement would miss an insert committed between its snapshot
-		// and its lock. Rows held by another transaction are skipped.
+		// every contents insert or torrents update committed before it; a
+		// later one's trigger waits on this row lock and re-enrols the torrent
+		// once it is gone. One statement would miss a write committed between
+		// its snapshot and its lock. Rows held by another transaction are skipped.
 		var held [][]byte
-		if e = queryHashes(ctx, tx, &held, pruneLockSQL, empty); e != nil {
+		if e = queryHashes(ctx, tx, &held, pruneLockSQL, drop); e != nil {
 			return
 		}
-		if _, e = tx.Exec(ctx, pruneDeleteSQL, held); e != nil {
+		if _, e = tx.Exec(ctx, pruneDeleteSQL, held, gate); e != nil {
 			return
 		}
 	}
@@ -393,10 +418,24 @@ func (s *Store) pruneOutbox(ctx context.Context) {
 
 const (
 	outboxPruneWindow = 1024
-	pruneWindowSQL    = `SELECT p.info_hash,p.enqueued_at,NOT EXISTS(SELECT 1 FROM torrent_contents c WHERE c.info_hash=p.info_hash)
+	// fileEvidenceSQL is the part of fileEvidenceReason that a torrents row t
+	// decides alone. Both columns are in the torrents source trigger.
+	fileEvidenceSQL = `t.size>0 AND t.files_status IN('single','multi')`
+	// The last parameter of the window and delete statements is the gate:
+	// true with a required processor.
+	pruneWindowSQL = `SELECT p.info_hash,p.enqueued_at,NOT EXISTS(SELECT 1 FROM torrent_contents c WHERE c.info_hash=p.info_hash)
+ OR $4 AND EXISTS(SELECT 1 FROM torrents t WHERE t.info_hash=p.info_hash AND NOT (` + fileEvidenceSQL + `))
  FROM processor_publication_pending p WHERE (p.enqueued_at,p.info_hash)>($1,$2) ORDER BY p.enqueued_at,p.info_hash LIMIT $3`
 	pruneLockSQL   = `SELECT info_hash FROM processor_publication_pending WHERE info_hash=ANY($1) FOR UPDATE SKIP LOCKED`
-	pruneDeleteSQL = `DELETE FROM processor_publication_pending p WHERE p.info_hash=ANY($1) AND NOT EXISTS(SELECT 1 FROM torrent_contents c WHERE c.info_hash=p.info_hash)`
+	pruneDeleteSQL = `DELETE FROM processor_publication_pending p WHERE p.info_hash=ANY($1) AND (NOT EXISTS(SELECT 1 FROM torrent_contents c WHERE c.info_hash=p.info_hash)
+ OR $2 AND EXISTS(SELECT 1 FROM torrents t WHERE t.info_hash=p.info_hash AND NOT (` + fileEvidenceSQL + `)))`
+	// requeueStaleSQL puts a torrent whose job went stale back into the outbox
+	// at its current revision, with a required processor only: admission
+	// deleted its row, and the catch-up pass may be weeks away. Never
+	// processor_enqueue_publication here: that raises the revision and would
+	// void a current approval.
+	requeueStaleSQL = `INSERT INTO processor_publication_pending(info_hash,source_revision)
+ SELECT info_hash,revision FROM processor_publication_sources WHERE info_hash=$1 ON CONFLICT DO NOTHING`
 )
 
 func queryHashes(ctx context.Context, tx pgx.Tx, out *[][]byte, sql string, args ...any) error {
@@ -721,6 +760,11 @@ func (s *Store) Finish(ctx context.Context, l Lease, j v1.Job, r v1.Result, disp
 	if e != nil {
 		return e
 	}
+	if state == "stale" && s.publication.RequiredProcessor != "" {
+		if _, e = tx.Exec(ctx, requeueStaleSQL, l.Hash); e != nil {
+			return e
+		}
+	}
 	if state == "completed" || state == "stale" {
 		_, e = tx.Exec(ctx, `UPDATE processor_reprocess_requests SET state='settled',state_reason=$2,updated_at=clock_timestamp()
  WHERE result_job_id=$1 AND state='queued'`, l.ID, state+":"+string(r.Outcome))
@@ -730,6 +774,9 @@ func (s *Store) Finish(ctx context.Context, l Lease, j v1.Job, r v1.Result, disp
 	}
 	return tx.Commit(ctx)
 }
+
+// abandon marks a leased job stale and, in the same statement, puts its
+// torrent back into the outbox on requeueStaleSQL's terms.
 func (s *Store) abandon(ctx context.Context, l Lease, reason string) {
 	p, e := s.pool.Get()
 	if e != nil {
@@ -737,9 +784,12 @@ func (s *Store) abandon(ctx context.Context, l Lease, reason string) {
 	}
 	_, _ = p.Exec(ctx, `WITH abandoned AS (
  UPDATE processor_jobs SET state='stale',reason=$3,lease_until=NULL,finished_at=clock_timestamp()
- WHERE job_id=$1 AND state='leased' AND lease_generation=$2 RETURNING job_id,lease_generation)
+ WHERE job_id=$1 AND state='leased' AND lease_generation=$2 RETURNING job_id,lease_generation,info_hash),
+ attempts AS (
  UPDATE processor_attempts a SET finished_at=clock_timestamp(),outcome='unknown',reason='source_or_input_invalid'
- FROM abandoned j WHERE a.job_id=j.job_id AND a.lease_generation=j.lease_generation AND a.finished_at IS NULL`, l.ID, l.Generation, reason)
+ FROM abandoned j WHERE a.job_id=j.job_id AND a.lease_generation=j.lease_generation AND a.finished_at IS NULL)
+ INSERT INTO processor_publication_pending(info_hash,source_revision)
+ SELECT s.info_hash,s.revision FROM processor_publication_sources s JOIN abandoned j ON j.info_hash=s.info_hash WHERE $4 ON CONFLICT DO NOTHING`, l.ID, l.Generation, reason, s.publication.RequiredProcessor != "")
 }
 
 // A preparation failure is local work, not a dispatched service attempt. Keep

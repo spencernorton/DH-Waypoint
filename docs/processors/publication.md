@@ -14,6 +14,15 @@ invalidate approval in the same transaction; restoring an earlier filename or
 recrawling a deleted hash does not restore an old approval. Volatile seed counts
 and observation timestamps do not invalidate it.
 
+Approval needs file evidence: a size and a complete, consistent file list. While
+a processor is required, a torrent without that evidence is not sent to any
+processor and stays unpublished; a reprocess request for it ends `held` with the
+evidence reason. A change to its size or file list queues it for review. A job
+that turns stale before its result is applied returns its torrent to the review
+queue at the same source revision, so a core upgrade does not leave queued
+torrents waiting for the catch-up scan. Without a required processor neither
+rule applies.
+
 The consumer policy applies before filtering, counts, grouping and pagination to
 GraphQL, REST, file queries, Torznab and authenticated public-hash grants. Required
 Torznab and grant responses advertise `X-Publication-Review:
