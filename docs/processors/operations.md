@@ -182,6 +182,12 @@ review current state before issuing a new request ID. The ordinary core queue
 keeps its existing bounded retry behavior. A request waiting for core/admission
 expires after one hour rather than remaining silently pending forever.
 
+The `file_evidence` outcome of `dh_waypoint_processors_admission_total` counts
+only the refusals made at admission. Torrents that the catch-up query leaves out,
+or that the review queue's prune removes, are not counted, so it is not the
+number of torrents kept out of review. Read the review queue's volume from its
+pending depth, the gauge `dh_waypoint_publication_pending_admission`.
+
 Duplicate delivery with the same origin and complete request body returns the
 existing status, including after the origin job expires. Reusing the ID for a
 different body, stale revisions, or concurrent work on the same torrent returns

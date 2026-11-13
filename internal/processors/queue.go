@@ -431,11 +431,14 @@ const (
  OR $2 AND EXISTS(SELECT 1 FROM torrents t WHERE t.info_hash=p.info_hash AND NOT (` + fileEvidenceSQL + `)))`
 	// requeueStaleSQL puts a torrent whose job went stale back into the outbox
 	// at its current revision, with a required processor only: admission
-	// deleted its row, and the catch-up pass may be weeks away. Never
-	// processor_enqueue_publication here: that raises the revision and would
-	// void a current approval.
+	// deleted its row, and the catch-up pass may be weeks away. A torrent
+	// without a processor_publication_sources row is at revision 1, as in
+	// readSource; a deleted torrent gets no row. It writes no sources row, and
+	// never calls processor_enqueue_publication: that raises the revision and
+	// would void a current approval.
 	requeueStaleSQL = `INSERT INTO processor_publication_pending(info_hash,source_revision)
- SELECT info_hash,revision FROM processor_publication_sources WHERE info_hash=$1 ON CONFLICT DO NOTHING`
+ SELECT t.info_hash,COALESCE(s.revision,1) FROM torrents t LEFT JOIN processor_publication_sources s ON s.info_hash=t.info_hash
+ WHERE t.info_hash=$1 ON CONFLICT DO NOTHING`
 )
 
 func queryHashes(ctx context.Context, tx pgx.Tx, out *[][]byte, sql string, args ...any) error {
@@ -776,7 +779,8 @@ func (s *Store) Finish(ctx context.Context, l Lease, j v1.Job, r v1.Result, disp
 }
 
 // abandon marks a leased job stale and, in the same statement, puts its
-// torrent back into the outbox on requeueStaleSQL's terms.
+// torrent back into the outbox on requeueStaleSQL's terms: at its current
+// revision, 1 without a sources row, and only while the torrent exists.
 func (s *Store) abandon(ctx context.Context, l Lease, reason string) {
 	p, e := s.pool.Get()
 	if e != nil {
@@ -789,7 +793,8 @@ func (s *Store) abandon(ctx context.Context, l Lease, reason string) {
  UPDATE processor_attempts a SET finished_at=clock_timestamp(),outcome='unknown',reason='source_or_input_invalid'
  FROM abandoned j WHERE a.job_id=j.job_id AND a.lease_generation=j.lease_generation AND a.finished_at IS NULL)
  INSERT INTO processor_publication_pending(info_hash,source_revision)
- SELECT s.info_hash,s.revision FROM processor_publication_sources s JOIN abandoned j ON j.info_hash=s.info_hash WHERE $4 ON CONFLICT DO NOTHING`, l.ID, l.Generation, reason, s.publication.RequiredProcessor != "")
+ SELECT t.info_hash,COALESCE(s.revision,1) FROM abandoned j JOIN torrents t ON t.info_hash=j.info_hash
+ LEFT JOIN processor_publication_sources s ON s.info_hash=t.info_hash WHERE $4 ON CONFLICT DO NOTHING`, l.ID, l.Generation, reason, s.publication.RequiredProcessor != "")
 }
 
 // A preparation failure is local work, not a dispatched service attempt. Keep

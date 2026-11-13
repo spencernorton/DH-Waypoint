@@ -3,7 +3,9 @@ package processors
 import (
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/spencernorton/DH-Waypoint/internal/serving"
@@ -110,7 +112,7 @@ func TestRequiredReviewSkipsTorrentWithoutFileEvidence(t *testing.T) {
 		require.Equal(t, reviewState{Revision: before[string(h)].Revision}, reviewStateOf(t, p, h))
 	}
 	require.Zero(t, svc.calls.Load())
-	require.GreaterOrEqual(t, gated(s), 1.0)
+	require.Equal(t, 1.0, gated(s), "the prune removed the names-only row before Scan")
 }
 
 // The existing source triggers queue a skipped torrent again when its file
@@ -233,6 +235,56 @@ func TestCatchUpSkipsTorrentWithoutFileEvidence(t *testing.T) {
 	require.Zero(t, gated(s), "left out by the query, not fetched and refused")
 }
 
+// The gate deletes a queue row only up to the revision Scan read, so a newer
+// source change committed after that read stays queued.
+func TestGateKeepsQueueRowOfNewerRevision(t *testing.T) {
+	s, p, svc := reviewerFixture(t)
+	requireReviewer(t, s, svc)
+	// A partial file list passes the prune and is refused in Scan.
+	h := seedTorrent(t, p, 250, "movie")
+	_, e := p.Exec(testContext, `UPDATE torrents SET files_status='multi',files_count=2 WHERE info_hash=$1;
+ UPDATE processor_publication_pending SET source_revision=source_revision+1 WHERE info_hash=$1`, h)
+	require.NoError(t, e)
+	require.Zero(t, scanned(t, s))
+	require.Equal(t, 1.0, gated(s))
+	require.Equal(t, 1, reviewStateOf(t, p, h).Pending)
+}
+
+// The gated prune re-checks file evidence when it deletes: a file list that
+// commits between the prune's window and its delete keeps the row.
+func TestGatedPruneKeepsRowWhoseFilesArriveBeforeTheDelete(t *testing.T) {
+	_, p, _ := fixture(t)
+	x, control := seedNamesOnly(t, p, 251), seedNamesOnly(t, p, 252)
+	tx, e := p.Begin(testContext)
+	require.NoError(t, e)
+	defer rollback(tx)
+	rows, e := tx.Query(testContext, pruneWindowSQL, time.Time{}, []byte{}, outboxPruneWindow, true)
+	require.NoError(t, e)
+	var drop [][]byte
+	for rows.Next() {
+		var h []byte
+		var at time.Time
+		var prunable bool
+		require.NoError(t, rows.Scan(&h, &at, &prunable))
+		if prunable {
+			drop = append(drop, h)
+		}
+	}
+	require.NoError(t, rows.Err())
+	require.ElementsMatch(t, [][]byte{x, control}, drop)
+	_, e = p.Exec(testContext, `UPDATE torrents SET files_status='single' WHERE info_hash=$1`, x)
+	require.NoError(t, e)
+	var held [][]byte
+	require.NoError(t, queryHashes(testContext, tx, &held, pruneLockSQL, drop))
+	require.Len(t, held, 2)
+	tag, e := tx.Exec(testContext, pruneDeleteSQL, held, true)
+	require.NoError(t, e)
+	require.EqualValues(t, 1, tag.RowsAffected(), "the delete's snapshot sees the committed file status")
+	require.NoError(t, tx.Commit(testContext))
+	require.Equal(t, 1, reviewStateOf(t, p, x).Pending)
+	require.Zero(t, reviewStateOf(t, p, control).Pending)
+}
+
 // A job that turns stale because the core policy changed, as it does at every
 // core release, goes back into the queue at the same source revision. Nothing
 // that decides serving is touched.
@@ -331,6 +383,66 @@ func TestNoRequiredProcessorLeavesStaleJobOutOfTheQueue(t *testing.T) {
 	_, e = s.RunOne(testContext)
 	require.ErrorIs(t, e, ErrStale)
 	for _, h := range [][]byte{atPrepare, atFinish} {
+		var state string
+		require.NoError(t, p.QueryRow(testContext, `SELECT state FROM processor_jobs WHERE info_hash=$1`, h).Scan(&state))
+		require.Equal(t, "stale", state)
+		require.Zero(t, reviewStateOf(t, p, h).Pending)
+	}
+}
+
+// A torrent stored before the review queue existed, and unchanged since, has
+// no processor_publication_sources row and is at revision 1. A job found stale
+// at preparation returns it to the queue at revision 1 without writing that
+// row: after a core release, and after a change no trigger covers, such as a
+// new core receipt.
+func TestStaleJobWithoutSourceRowReturnsToTheQueue(t *testing.T) {
+	for name, change := range map[string]func(*testing.T, *Store, *pgxpool.Pool, []byte){
+		"core release": func(_ *testing.T, s *Store, _ *pgxpool.Pool, _ []byte) { s.policy = "synthetic-core-v2" },
+		"new core receipt": func(t *testing.T, s *Store, p *pgxpool.Pool, h []byte) {
+			recordReprocessCore(t, s, p, h, "", "completed")
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			s, p, _ := rfSetup(t)
+			h := seedTorrent(t, p, 253, "movie")
+			_, e := p.Exec(testContext, `DELETE FROM processor_publication_pending WHERE info_hash=$1;
+ DELETE FROM processor_publication_sources WHERE info_hash=$1`, h)
+			require.NoError(t, e)
+			require.Equal(t, 1, scanned(t, s), "the catch-up pass admits it")
+			change(t, s, p, h)
+			_, e = s.RunOne(testContext)
+			require.ErrorIs(t, e, ErrStale)
+			queuedAt, ok := sbOutbox(t, p, h)
+			require.True(t, ok)
+			require.EqualValues(t, 1, queuedAt)
+			require.Equal(t, reviewState{Jobs: 1, Pending: 1}, reviewStateOf(t, p, h), "still no sources row")
+			// Only the queue can find it now.
+			_, e = p.Exec(testContext, `UPDATE processor_control SET scan_after='\xff'::bytea WHERE singleton`)
+			require.NoError(t, e)
+			require.Equal(t, 1, scanned(t, s))
+			require.Equal(t, reviewState{Jobs: 2}, reviewStateOf(t, p, h))
+		})
+	}
+}
+
+// A stale job for a deleted torrent puts nothing back in the queue, at
+// preparation or at the result.
+func TestStaleJobForDeletedTorrentLeavesNoQueueRow(t *testing.T) {
+	s, p, _ := rfSetup(t)
+	a, b := seedTorrent(t, p, 254, "movie"), seedTorrent(t, p, 255, "movie")
+	require.Equal(t, 2, scanned(t, s))
+	l, e := s.Claim(testContext)
+	require.NoError(t, e)
+	require.NotNil(t, l)
+	j, e := s.Prepare(testContext, *l)
+	require.NoError(t, e)
+	require.NoError(t, s.startAttempt(testContext, *l))
+	_, e = p.Exec(testContext, `DELETE FROM torrents WHERE info_hash=ANY($1)`, [][]byte{a, b})
+	require.NoError(t, e)
+	require.NoError(t, s.Finish(testContext, *l, j, policyResult(j), true))
+	_, e = s.RunOne(testContext)
+	require.ErrorIs(t, e, pgx.ErrNoRows)
+	for _, h := range [][]byte{a, b} {
 		var state string
 		require.NoError(t, p.QueryRow(testContext, `SELECT state FROM processor_jobs WHERE info_hash=$1`, h).Scan(&state))
 		require.Equal(t, "stale", state)
