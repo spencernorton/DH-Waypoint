@@ -13,7 +13,7 @@
 services:
 
   dh-waypoint:
-    image: ghcr.io/spencernorton/dh-waypoint:${DH_WAYPOINT_VERSION:-v5.10.1}
+    image: ghcr.io/spencernorton/dh-waypoint:${DH_WAYPOINT_VERSION:-v5.10.2}
     container_name: dh-waypoint
     restart: unless-stopped
     depends_on:
