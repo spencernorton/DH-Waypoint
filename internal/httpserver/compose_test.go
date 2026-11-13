@@ -25,6 +25,8 @@ func TestComposeFilesForwardTheAPIKeyAndBindLocally(t *testing.T) {
 		app := compose.Services["dh-waypoint"]
 		require.Contains(t, app.Environment, "HTTP_SERVER_API_KEY", path)
 		require.Contains(t, app.Environment, "HTTP_SERVER_CORS_ALLOWED_ORIGINS", path)
+		// A sweep mode set in .env must reach the container; unset keeps the built-in default.
+		require.Equal(t, "${CSAM_SWEEP_MODE:-apply}", app.Environment["CSAM_SWEEP_MODE"], path)
 		var httpPorts []string
 		for _, port := range app.Ports {
 			if strings.HasSuffix(port, ":3333") {
