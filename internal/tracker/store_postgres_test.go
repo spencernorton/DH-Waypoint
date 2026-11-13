@@ -265,3 +265,45 @@ func TestPostgresTrackerHTTP(t *testing.T) {
 
 	_ = ctx
 }
+
+// An upload for a hash that is already stored, for example one imported with
+// a name and an approximate size, gives the row the real size, and the row is
+// private if it was already or if the upload says so.
+func TestPostgresUploadCorrectsSizeAndPrivateOfStoredHash(t *testing.T) {
+	store, pool := trackerFixture(t, NewDefaultConfig())
+	ctx := context.Background()
+
+	public := mi.Info{Name: "Public.Release.2026", PieceLength: 16384, Pieces: bytes.Repeat([]byte{9}, 20),
+		Files: []mi.FileInfo{{Length: 700, Path: []string{"film.mkv"}}, {Length: 30, Path: []string{"film.nfo"}}}}
+	infoBytes, err := bencode.Marshal(public)
+	require.NoError(t, err)
+	meta := mi.MetaInfo{InfoBytes: infoBytes}
+	var publicFile bytes.Buffer
+	require.NoError(t, meta.Write(&publicFile))
+
+	for _, tc := range []struct {
+		file                       []byte
+		storedPrivate, wantPrivate bool
+		wantSize                   int
+	}{
+		{file: privateTorrentFile(t), wantPrivate: true, wantSize: 1050},
+		{file: publicFile.Bytes(), storedPrivate: true, wantPrivate: true, wantSize: 730},
+	} {
+		hash, _, err := ParseTorrentFile(tc.file)
+		require.NoError(t, err)
+		_, err = pool.Exec(ctx, `INSERT INTO torrents(info_hash,name,size,private,files_status,created_at,updated_at) VALUES($1,'Stored.First',262144,$2,'no_info',now(),now())`,
+			hash.Bytes(), tc.storedPrivate)
+		require.NoError(t, err)
+
+		result, err := store.Upload(ctx, tc.file)
+		require.NoError(t, err)
+		require.True(t, result.Existed)
+
+		var size, files int
+		var private bool
+		require.NoError(t, pool.QueryRow(ctx, `SELECT size,private,files_count FROM torrents WHERE info_hash=$1`, hash.Bytes()).Scan(&size, &private, &files))
+		require.Equal(t, tc.wantSize, size)
+		require.Equal(t, tc.wantPrivate, private)
+		require.Equal(t, 2, files)
+	}
+}

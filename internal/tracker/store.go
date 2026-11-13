@@ -408,8 +408,10 @@ func (s *Store) recordFiles(ctx context.Context, hash protocol.ID, info metainfo
 			return err
 		}
 	}
-	if _, err := tx.Exec(ctx, `UPDATE torrents SET files_status=$2, files_count=$3, updated_at=clock_timestamp() WHERE info_hash=$1`,
-		hash.Bytes(), string(status), filesCount); err != nil {
+	// A hash stored earlier without its metadata takes the real size, and
+	// stays private once either side says so.
+	if _, err := tx.Exec(ctx, `UPDATE torrents SET size=$4, private=private OR $5, files_status=$2, files_count=$3, updated_at=clock_timestamp() WHERE info_hash=$1`,
+		hash.Bytes(), string(status), filesCount, info.TotalLength(), info.Private != nil && *info.Private); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
