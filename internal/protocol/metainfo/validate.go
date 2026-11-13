@@ -29,6 +29,10 @@ const (
 	// 2-5 levels; 64 is a generous cap that still bounds DoS surface.
 	MaxPathDepth = 64
 
+	// MaxPathLen caps the byte length of a whole Files[i].Path as it is
+	// stored, its components joined by "/". Real paths sit far below it.
+	MaxPathLen = 2000
+
 	// MaxFilesCount caps how many Files entries we accept. The largest
 	// real-world torrents (Linux distro mirrors, BluRay sets) sit in the
 	// low thousands. 100k is the working ceiling.
@@ -60,6 +64,7 @@ var (
 	ErrAbsolutePath       = errors.New("Files[i].Path component contains a path separator")
 	ErrPathTooLong        = errors.New("Files[i].Path component exceeds MaxPathComponentLen")
 	ErrPathTooDeep        = errors.New("Files[i].Path exceeds MaxPathDepth")
+	ErrWholePathTooLong   = errors.New("Files[i].Path exceeds MaxPathLen")
 	ErrTooManyFiles       = errors.New("Files count exceeds MaxFilesCount")
 	ErrPieceLenOutOfRange = errors.New("PieceLength outside [MinPieceLen, MaxPieceLen]")
 )
@@ -83,6 +88,10 @@ func validateInfo(info Info) error {
 	for i, f := range info.Files {
 		if err := validatePath(f.Path); err != nil {
 			return fmt.Errorf("Info.Files[%d].Path: %w", i, err)
+		}
+		// path.utf-8 is the stored form when present.
+		if err := validatePath(f.PathUtf8); err != nil {
+			return fmt.Errorf("Info.Files[%d].PathUtf8: %w", i, err)
 		}
 	}
 	return nil
@@ -114,12 +123,15 @@ func validateName(name string) error {
 // validatePath checks one Files[i].Path slice. Each component must be
 // non-empty, not "." or "..", not contain a path separator (the slice
 // IS the separator), valid UTF-8, NUL-free, control-char-free, and
-// length-bounded. The slice itself is depth-bounded.
+// length-bounded. The slice itself is depth-bounded, and so is its joined
+// length.
 func validatePath(parts []string) error {
 	if len(parts) > MaxPathDepth {
 		return ErrPathTooDeep
 	}
+	total := len(parts) - 1 // the "/" separators
 	for _, p := range parts {
+		total += len(p)
 		if p == "" {
 			return ErrEmptyPathComponent
 		}
@@ -143,6 +155,9 @@ func validatePath(parts []string) error {
 				return ErrAbsolutePath
 			}
 		}
+	}
+	if total > MaxPathLen {
+		return ErrWholePathTooLong
 	}
 	return nil
 }
