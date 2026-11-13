@@ -116,7 +116,7 @@ The classifier runs locally with no external dependencies. TMDB enrichment is op
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `TMDB_API_KEY` | *(none)* | Free TMDB v3 API key. Enriches movie + TV records with title, release year, and episode metadata. Without a key, also set `TMDB_ENABLED=false` so the classifier skips TMDB lookups instead of failing them. Get a key at <https://www.themoviedb.org/settings/api>. |
+| `TMDB_API_KEY` | *(none)* | Free TMDB v3 API key. Enriches movie + TV records with title, release year, and episode metadata. Without a key the classifier skips TMDB lookups and still types movies and TV from the release name; `TMDB_ENABLED=false` does the same with a key set. Get a key at <https://www.themoviedb.org/settings/api>. |
 
 ## Optional processors
 
