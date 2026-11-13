@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+## 5.10.2 — 2026-11-12
+
+### Fixed
+
+- **Bundled Compose files pass `CSAM_SWEEP_MODE` to the container.** Both files left it out, so `CSAM_SWEEP_MODE=dry_run` (or `off`) in `.env` was ignored and the sweep ran as `apply`. Unset still means `apply`.
+- **Full processing mode with no `TMDB_API_KEY` skips TMDB instead of failing.** With the default `TMDB_ENABLED=true` and no key, every movie or TV torrent that reached a TMDB step failed classification and got no content record. Those torrents are now typed from the release name and stay unlinked. Run `dh-waypoint reprocess --orphans` once to process the ones that failed before.
+- **A failed first TMDB call no longer switches TMDB matching off until restart.** The key check on first use kept any error for the life of the process. Now only a rejected key is final; after a timeout or a TMDB outage the next call reaches TMDB again.
+- **Metadata for an already stored hash corrects its size and private flag.** The crawler and the private tracker upload updated the name and file list of an existing row but left its size and its private flag as they were. The row now takes the real size and is private if it was already or if the metadata says so. Rows stored before the upgrade are not rewritten.
+
+### Changed
+
+- Metadata validation bounds the whole length of a file path at 2,000 bytes, next to the existing limits on each component and on depth, and applies the path rules to `path.utf-8` on every parser. Metadata with a longer path is refused.
+
 ## 5.10.1 — 2026-11-12
 
 ### Security
