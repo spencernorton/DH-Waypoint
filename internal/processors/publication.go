@@ -33,7 +33,10 @@ func planForSource(p Plan, src source) Plan {
 	return p
 }
 
-func publicationPayloadReason(src source, kind string) string {
+// fileEvidenceReason says why a source cannot be approved for lack of file
+// evidence, or "". The approval path and Scan's gate both use it, so a
+// torrent is sent for review exactly when this rule could let it through.
+func fileEvidenceReason(src source) string {
 	if src.Size <= 0 {
 		return "missing_payload_evidence"
 	}
@@ -52,6 +55,13 @@ func publicationPayloadReason(src source, kind string) string {
 		if remaining != 0 {
 			return "inconsistent_file_evidence"
 		}
+	}
+	return ""
+}
+
+func publicationPayloadReason(src source, kind string) string {
+	if reason := fileEvidenceReason(src); reason != "" {
+		return reason
 	}
 	if kind == "" || kind == "unknown" {
 		return "unresolved_content_type"

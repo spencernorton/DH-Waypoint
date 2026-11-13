@@ -14,6 +14,23 @@ invalidate approval in the same transaction; restoring an earlier filename or
 recrawling a deleted hash does not restore an old approval. Volatile seed counts
 and observation timestamps do not invalidate it.
 
+Approval needs file evidence: a size and a complete, consistent file list. While
+a processor is required, a torrent without that evidence is not sent to any
+processor and stays unpublished. A reprocess request for it ends `held` with the
+stored reason `missing_payload_evidence`, `incomplete_file_evidence` or
+`inconsistent_file_evidence`. The admission counter counts each refusal under the
+single outcome `file_evidence`, a metric label that is never stored as a reason
+(see [operational controls](operations.md)). A change to the torrent's size or
+file list queues it for review, but a held request stays held: a result bound to
+a request needs a new request once the files arrive.
+
+A job found stale when it is prepared, or when its result arrives, returns its
+torrent to the review queue at the torrent's current source revision, without
+raising it, so a core upgrade does not leave queued torrents waiting for the
+catch-up scan. Jobs made stale by a registry or admission change are not
+re-queued: that change restarts the catch-up scan instead. Without a required
+processor there is neither the file-evidence gate nor the re-queue.
+
 The consumer policy applies before filtering, counts, grouping and pagination to
 GraphQL, REST, file queries, Torznab and authenticated public-hash grants. Required
 Torznab and grant responses advertise `X-Publication-Review:
