@@ -34,6 +34,16 @@ func TestAppQueryToTsquery(t *testing.T) {
 		{"Arabic", "اصنع لي شطيرة", "'Sn`' & ly & 'shTyr@'"},
 		{"Arabic (quoted)", "\"اصنع لي شطيرة\"", "'Sn`' <-> ly <-> 'shTyr@'"},
 		{"ampersand prefix", "&eacute;", "eacute"},
+		{"bare season matches glued episode", "Shrek S51", "shrek & (s51 | s51e:*)"},
+		{"single-digit bare season matches padded and unpadded", "Shrek s5", "shrek & (s5 | s5e:* | s05 | s05e:*)"},
+		{"zero-padded single-digit season matches unpadded too", "Shrek s05", "shrek & (s05 | s05e:* | s5 | s5e:*)"},
+		{"quoted bare season", "\"Shrek s51\"", "shrek <-> (s51 | s51e:*)"},
+		{"negated bare season", "!s1", "! (s1 | s1e:* | s01 | s01e:*)"},
+		{"typed season wildcard", "Shrek s51*", "shrek & s51:*"},
+		{"quoted season wildcard", "\"Shrek s51\"*", "shrek <-> s51:*"},
+		{"season inside quoted wildcard phrase", "\"s51 shrek\"*", "(s51 | s51e:*) <-> shrek:*"},
+		{"full episode unchanged", "Shrek s51e01", "shrek & s51e01"},
+		{"season word unchanged", "season s", "season & s"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
