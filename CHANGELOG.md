@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+## 5.10.2 — 2026-11-18
+
+### Fixed
+
+- **Bundled Compose files pass `CSAM_SWEEP_MODE` to the container.** Both files left it out, so `CSAM_SWEEP_MODE=dry_run` (or `off`) in `.env` was ignored and the sweep ran as `apply`. The variable is passed only when `.env` defines it: left unset, a config file or the built-in default (`apply`) decides as before, and an empty value stops the start.
+- **Full processing mode with no `TMDB_API_KEY` skips TMDB instead of failing.** With the default `TMDB_ENABLED=true` and no key, every movie or TV torrent that reached a TMDB step failed classification and got no content record. Those torrents are now typed from the release name and stay unlinked. Run `dh-waypoint reprocess --orphans` once to process the ones that failed before.
+- **A failed first TMDB call no longer switches TMDB matching off until restart.** The key check on first use kept any error for the life of the process. Now only a rejected key is final; after a timeout or a TMDB outage the next call reaches TMDB again.
+- **Metadata for an already stored hash corrects its size and private flag.** The crawler and the private tracker upload updated the name and file list of an existing row but left its size and its private flag as they were. The row now takes the real size and is private if it was already or if the metadata says so. Rows stored before the upgrade are not rewritten.
+- **Required publication review skips torrents without file evidence and re-queues stale jobs.** While a publication processor is required, admission, catch-up scanning and outbox pruning leave out torrents without a positive size and a complete, consistent file list until file evidence arrives. Jobs that turn stale during preparation or execution return their torrent to the review queue at its current source revision rather than waiting for the catch-up scan.
+
+### Changed
+
+- Metadata validation bounds the whole length of a file path at 2,000 bytes, next to the existing limits on each component and on depth, and applies the path rules to `path.utf-8` on every parser. Metadata with a longer path is refused.
+- `tools/protocolinterop` updates `go.opentelemetry.io/otel/trace` to `v1.47.0`.
+
+## 5.10.1 — 2026-11-12
+
+### Security
+
+- Build with Go 1.26.11, which fixes an HTTP/1 server crash in net/http (GO-2026-6859).
+
+### Fixed
+
+- Include title-matched unlinked torrents (`content_id IS NULL`) after linked results on Torznab external-ID searches (`imdbid`, `tmdbid`, `tvdbid`), preserving episode, category, liveness, freshness, verdict and adult-serving filters.
+- Prevent short TV base titles from matching unrelated titles or single-season homonyms by enforcing first-token and length-scaled Levenshtein gates, ranking exact matches by popularity/votes, validating TV season/episode feasibility, and preserving season claims on confirmed compact season packs (`<= 4 GiB`).
+
 ## 5.10.0 — 2026-11-10
 
 Security release. Read the first four entries before upgrading a Compose

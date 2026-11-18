@@ -77,8 +77,7 @@ func EnrichTypeLocally(ctx context.Context, t model.Torrent, cl classification.R
 	attrs, parseErr := parsers.ParseVideoContentWithOptions(t, cl, parsers.ParseOptions{NoiseV2: opts.ParseNoiseV2})
 	if parseErr == nil {
 		cl.Merge(attrs)
-		if opts.SingleEpisodeMaxBytes > 0 && isSeasonOnlyPack(cl.Episodes) &&
-			int64(t.Size) > 0 && int64(t.Size) <= opts.SingleEpisodeMaxBytes {
+		if shouldDemoteSmallSeasonOnly(t, cl.Episodes, opts.SingleEpisodeMaxBytes) {
 			cl.Episodes = nil
 		}
 	}

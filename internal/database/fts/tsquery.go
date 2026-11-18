@@ -108,12 +108,21 @@ func (l *queryLexer) readQueryToken() (TokenValue, bool) {
 var seasonTerm = regexp.MustCompile(`^s\d+$`)
 
 // queryLexeme quotes one query word. A bare season also matches the glued
-// season-episode lexeme, so s51 finds S51E01 without matching s510.
-// A wildcard the user typed (s51*) already covers it and is left alone.
+// season-episode lexeme, so s51 finds S51E01 without matching s510, and
+// single-digit seasons match both zero-padded (s05/s05e:*) and unpadded
+// (s5/s5e:*) forms. A wildcard the user typed (s51*) already covers it.
 func queryLexeme(word string, wildcard bool) string {
 	quoted := quoteLexeme(word, false)
 	if wildcard || !seasonTerm.MatchString(word) {
 		return quoted
+	}
+	if len(word) == 2 && word[1] >= '1' && word[1] <= '9' {
+		padded := "s0" + word[1:]
+		return "(" + quoted + " | " + word + "e:* | " + padded + " | " + padded + "e:*)"
+	}
+	if len(word) == 3 && word[1] == '0' && word[2] >= '1' && word[2] <= '9' {
+		unpadded := "s" + word[2:]
+		return "(" + quoted + " | " + word + "e:* | " + unpadded + " | " + unpadded + "e:*)"
 	}
 
 	return "(" + quoted + " | " + word + "e:*)"

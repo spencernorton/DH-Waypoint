@@ -47,10 +47,7 @@ func (parseVideoContentAction) compileAction(ctx compilerContext) (action, error
 			// is not classified as a season-level pack.
 			//
 			// The backstop is disabled when SingleEpisodeMaxBytes == 0.
-			if ctx.singleEpisodeMaxBytes > 0 &&
-				isSeasonOnlyPack(cl.Episodes) &&
-				int64(ctx.torrent.Size) > 0 &&
-				int64(ctx.torrent.Size) <= ctx.singleEpisodeMaxBytes {
+			if shouldDemoteSmallSeasonOnly(ctx.torrent, cl.Episodes, ctx.singleEpisodeMaxBytes) {
 				cl.Episodes = nil
 			}
 

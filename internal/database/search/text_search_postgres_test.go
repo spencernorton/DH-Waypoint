@@ -28,6 +28,11 @@ func TestTextSearchPostgresBareSeasonMatchesGluedEpisode(t *testing.T) {
 		require.NoError(t, err, q)
 		require.Equal(t, f.hashes[3:5], adultServingContentHashes(result.Items), q)
 	}
+	for _, q := range []string{"Shrek s5", "Shrek s05", `"Shrek s5"`} {
+		result, err := s.TorrentContent(ctx, append(adultServingExactOptions(model.TableNameTorrentContent), query.SearchString(q))...)
+		require.NoError(t, err, q)
+		require.Equal(t, f.hashes[6:7], adultServingContentHashes(result.Items), q)
+	}
 
 	// Production rows carry a Go-built tsvector rather than the fixture's generated one.
 	tsv := fts.Tsvector{}

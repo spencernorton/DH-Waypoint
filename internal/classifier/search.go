@@ -118,20 +118,56 @@ func (l localSearch) ContentBySearch(
 		return model.Content{}, searchErr
 	}
 
-	bestMatch, ok := fuzzyFindBestMatch[search.ContentResultItem](
+	episodes := searchEpisodesFromContext(ctx)
+	filtered := items
+	strictMap := make(map[model.ContentRef]bool, len(items))
+	if ct == model.ContentTypeTvShow && hasPositiveSeasonOrEpisode(episodes) {
+		filtered = make([]search.ContentResultItem, 0, len(items))
+		for _, item := range items {
+			strictOK, graceOK := contentEpisodeFeasibility(item.Content, episodes)
+			if !graceOK {
+				continue
+			}
+			strictMap[item.Content.Ref()] = strictOK
+			filtered = append(filtered, item)
+		}
+	}
+
+	baseYearPenalty := localContentYearPenalty(ct, year)
+	ranked := rankMatchCandidates[search.ContentResultItem](
 		baseTitle,
-		items,
+		filtered,
 		func(item search.ContentResultItem) []string {
 			return contentMatchCandidates(item, l.altTitleMatch)
 		},
-		localContentYearPenalty(ct, year),
+		func(item search.ContentResultItem) int {
+			p := 0
+			if baseYearPenalty != nil {
+				p += baseYearPenalty(item)
+			}
+			if strictOK, exists := strictMap[item.Content.Ref()]; exists && !strictOK {
+				p += 50
+			}
+			return p
+		},
+		func(item search.ContentResultItem) candidateTieBreak {
+			var pop float32
+			if item.Popularity.Valid {
+				pop = item.Popularity.Float32
+			}
+			var votes int64
+			if item.VoteCount.Valid {
+				votes = int64(item.VoteCount.Uint)
+			}
+			return candidateTieBreak{Popularity: pop, VoteCount: votes}
+		},
 		l.fuzzyMatchEnabled,
 	)
-	if !ok {
+	if len(ranked) == 0 {
 		return model.Content{}, classification.ErrUnmatched
 	}
 
-	return bestMatch.Content, nil
+	return ranked[0].Content, nil
 }
 
 type contentSearchPass struct {

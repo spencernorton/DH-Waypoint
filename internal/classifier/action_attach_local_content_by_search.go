@@ -31,7 +31,7 @@ func (attachLocalContentBySearchAction) compileAction(ctx compilerContext) (acti
 				return cl, classification.ErrUnmatched
 			}
 			content, err := ctx.search.ContentBySearch(
-				ctx.Context,
+				withSearchEpisodes(ctx.Context, cl.Episodes),
 				cl.ContentType.ContentType,
 				cl.BaseTitle.String,
 				cl.Date.Year,

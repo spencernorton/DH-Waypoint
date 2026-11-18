@@ -15,7 +15,12 @@ import (
 // maxAltTitleAttributes bounds how many alternative-title attributes a single
 // content row can accumulate — some franchise titles carry 50+ AKAs and the
 // long tail is noise for matching purposes.
-const maxAltTitleAttributes = 64
+const (
+	maxAltTitleAttributes       = 64
+	maxSeasonEpisodeAttributes  = 64
+	AttrKeyNumberOfSeasons      = "number_of_seasons"
+	AttrKeySeasonEpisodesPrefix = "season_episodes:"
+)
 
 // normalizeAltTitleKey collapses whitespace and case so the same title spelled
 // slightly differently across alternative_titles and translations dedupes.
@@ -242,6 +247,45 @@ func TvShowDetailsToTvShowModel(details TvDetailsResponse) (movie model.Content,
 			Source: model.SourceTmdb,
 			Key:    "backdrop_path",
 			Value:  details.BackdropPath,
+		})
+	}
+
+	maxSeason := details.NumberOfSeasons
+	type seasonCount struct {
+		num   int
+		count int
+	}
+	var seasonCounts []seasonCount
+	seenSeasons := make(map[int]struct{}, len(details.Seasons))
+	for _, season := range details.Seasons {
+		if season.SeasonNumber <= 0 || season.EpisodeCount <= 0 {
+			continue
+		}
+		if season.SeasonNumber > maxSeason {
+			maxSeason = season.SeasonNumber
+		}
+		if _, exists := seenSeasons[season.SeasonNumber]; exists {
+			continue
+		}
+		seenSeasons[season.SeasonNumber] = struct{}{}
+		seasonCounts = append(seasonCounts, seasonCount{num: season.SeasonNumber, count: season.EpisodeCount})
+	}
+	if maxSeason > 0 {
+		attributes = append(attributes, model.ContentAttribute{
+			Source: model.SourceTmdb,
+			Key:    AttrKeyNumberOfSeasons,
+			Value:  strconv.Itoa(maxSeason),
+		})
+	}
+	sort.Slice(seasonCounts, func(i, j int) bool { return seasonCounts[i].num < seasonCounts[j].num })
+	if len(seasonCounts) > maxSeasonEpisodeAttributes {
+		seasonCounts = seasonCounts[:maxSeasonEpisodeAttributes]
+	}
+	for _, sc := range seasonCounts {
+		attributes = append(attributes, model.ContentAttribute{
+			Source: model.SourceTmdb,
+			Key:    AttrKeySeasonEpisodesPrefix + strconv.Itoa(sc.num),
+			Value:  strconv.Itoa(sc.count),
 		})
 	}
 
