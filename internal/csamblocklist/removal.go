@@ -62,6 +62,7 @@ var protectingTables = []string{
 var namelessTables = []string{
 	"junkpurge_student_releases",
 	"processor_core_receipts",
+	"processor_exclusion_events",
 	"processor_payload_pending",
 	"processor_payload_reviews",
 	"processor_payload_work",
