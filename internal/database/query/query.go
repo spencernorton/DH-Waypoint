@@ -10,7 +10,6 @@ import (
 	"sync"
 
 	"github.com/spencernorton/DH-Waypoint/internal/database/dao"
-	"github.com/spencernorton/DH-Waypoint/internal/database/exclause"
 	"github.com/spencernorton/DH-Waypoint/internal/database/fts"
 	"github.com/spencernorton/DH-Waypoint/internal/maps"
 	"github.com/spencernorton/DH-Waypoint/internal/model"
@@ -268,10 +267,8 @@ func (gq *genericQuery[T]) doItems() {
 				// The inner SELECT already contains mandatory base conditions.
 				// A fresh outer statement must not replay table-specific scopes
 				// against the CTE rather than the underlying table.
-				cte := gq.factory(raceCtx, gq.daoQ).UnderlyingDB().Session(&gorm.Session{NewDB: true}).Clauses(
-					exclause.NewWith("cte", sql, true),
-					exclause.NewWith("cte_count", "SELECT COUNT(*) AS total_count FROM cte", true),
-				).Table("cte").Where("(SELECT MAX(total_count) FROM cte_count) < " + strconv.Itoa(stoppingPoint))
+				cteSub := "(WITH cte AS MATERIALIZED (" + sql + "), cte_count AS MATERIALIZED (SELECT COUNT(*) AS total_count FROM cte) SELECT * FROM cte WHERE (SELECT MAX(total_count) FROM cte_count) < " + strconv.Itoa(stoppingPoint) + ") AS cte"
+				cte := gq.factory(raceCtx, gq.daoQ).UnderlyingDB().Session(&gorm.Session{NewDB: true}).Table(cteSub)
 				if postErr := gq.builder.applyPost(cte); postErr != nil {
 					done(nil, postErr)
 					return
