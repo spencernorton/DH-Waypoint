@@ -10,7 +10,6 @@ import (
 	"sync"
 
 	"github.com/spencernorton/DH-Waypoint/internal/database/dao"
-	"github.com/spencernorton/DH-Waypoint/internal/database/exclause"
 	"github.com/spencernorton/DH-Waypoint/internal/database/fts"
 	"github.com/spencernorton/DH-Waypoint/internal/maps"
 	"github.com/spencernorton/DH-Waypoint/internal/model"
@@ -268,10 +267,8 @@ func (gq *genericQuery[T]) doItems() {
 				// The inner SELECT already contains mandatory base conditions.
 				// A fresh outer statement must not replay table-specific scopes
 				// against the CTE rather than the underlying table.
-				cte := gq.factory(raceCtx, gq.daoQ).UnderlyingDB().Session(&gorm.Session{NewDB: true}).Clauses(
-					exclause.NewWith("cte", sql, true),
-					exclause.NewWith("cte_count", "SELECT COUNT(*) AS total_count FROM cte", true),
-				).Table("cte").Where("(SELECT MAX(total_count) FROM cte_count) < " + strconv.Itoa(stoppingPoint))
+				cteSub := "(WITH cte AS MATERIALIZED (" + sql + "), cte_count AS MATERIALIZED (SELECT COUNT(*) AS total_count FROM cte) SELECT * FROM cte WHERE (SELECT MAX(total_count) FROM cte_count) < " + strconv.Itoa(stoppingPoint) + ") AS cte"
+				cte := gq.factory(raceCtx, gq.daoQ).UnderlyingDB().Session(&gorm.Session{NewDB: true}).Table(cteSub)
 				if postErr := gq.builder.applyPost(cte); postErr != nil {
 					done(nil, postErr)
 					return
@@ -812,10 +809,18 @@ func (b optionBuilder) applySelect(db *gorm.DB, withOrderSelect bool) error {
 			"DISTINCT ON ("+b.grouping.distinctOnSQL+") "+b.tableName+".*",
 		)
 	case len(b.selections) == 0:
-		selectQueryParts = append(selectQueryParts, "*")
+		if b.tableName != "" {
+			selectQueryParts = append(selectQueryParts, b.tableName+".*")
+		} else {
+			selectQueryParts = append(selectQueryParts, "*")
+		}
 	default:
 		for _, s := range b.selections {
-			selectQueryParts = append(selectQueryParts, s.SQL)
+			if s.SQL == "*" && b.tableName != "" {
+				selectQueryParts = append(selectQueryParts, b.tableName+".*")
+			} else {
+				selectQueryParts = append(selectQueryParts, s.SQL)
+			}
 			selectQueryArgs = append(selectQueryArgs, s.Vars...)
 		}
 	}
@@ -859,6 +864,17 @@ func (b optionBuilder) applyPre(sq SubQuery, withOrderJoins bool) error {
 
 	if b.tsquery != "" {
 		sq.UnderlyingDB().Where(b.tableName+".tsv @@ ?::tsquery", b.tsquery)
+		if b.tableName == "torrent_contents" && b.grouping == nil {
+			for _, ob := range b.orderBy {
+				if ob.Column.Name == QueryStringRankField {
+					sq.UnderlyingDB().Where(
+						"torrent_contents.id IN (SELECT tc_cap.id FROM torrent_contents tc_cap WHERE tc_cap.tsv @@ ?::tsquery ORDER BY tc_cap.published_at DESC LIMIT 1000)",
+						b.tsquery,
+					)
+					break
+				}
+			}
+		}
 	}
 
 	requiredJoins := b.requiredJoins.Copy()

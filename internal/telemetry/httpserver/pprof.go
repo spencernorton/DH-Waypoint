@@ -2,7 +2,6 @@ package httpserver
 
 import (
 	"net/http/pprof"
-	"runtime"
 
 	"github.com/gin-gonic/gin"
 	pyroscope "github.com/grafana/pyroscope-go/godeltaprof/http/pprof"
@@ -15,8 +14,6 @@ func (pprofBuilder) Key() string {
 }
 
 func (pprofBuilder) Apply(e *gin.Engine) error {
-	runtime.SetMutexProfileFraction(5)
-	runtime.SetBlockProfileRate(5)
 	e.GET("/debug/pprof/", func(c *gin.Context) {
 		pprof.Index(c.Writer, c.Request)
 	})

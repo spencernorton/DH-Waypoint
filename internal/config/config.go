@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"reflect"
 	"sort"
 	"strings"
@@ -199,8 +200,8 @@ func resolveStructNode(
 				StructKey:    field.Name,
 				Value:        rv,
 				ValueRaw:     rv,
-				ValueLabel:   createValueLabel(rv),
-				DefaultLabel: createValueLabel(dv),
+				ValueLabel:   createMaskedValueLabel(strings.Join(append(thisPath, fieldKey), "."), rv),
+				DefaultLabel: createMaskedValueLabel(strings.Join(append(thisPath, fieldKey), "."), dv),
 			}
 		}
 	}
@@ -246,6 +247,57 @@ func resolveStructNode(
 		ValueRaw:   valueMap,
 		ChildMap:   children,
 	}, nil
+}
+
+func isSensitiveConfigPath(path string) bool {
+	p := strings.ToLower(path)
+	for _, needle := range []string{"api_key", "api_keys", "password", "secret", "token", "passkey", "credential", "private_key"} {
+		if strings.Contains(p, needle) {
+			return true
+		}
+	}
+	return false
+}
+
+func redactURLCredentials(raw string) string {
+	if !strings.Contains(raw, "://") || !strings.Contains(raw, "@") {
+		return raw
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.User == nil {
+		return raw
+	}
+	if _, hasPass := u.User.Password(); !hasPass {
+		return raw
+	}
+	u.User = url.UserPassword(u.User.Username(), "***")
+	return strings.Replace(u.String(), "%2A%2A%2A", "***", 1)
+}
+
+func createMaskedValueLabel(path string, value interface{}) string {
+	if value == nil {
+		return createValueLabel(value)
+	}
+	v := reflect.ValueOf(value)
+	if isSensitiveConfigPath(path) {
+		if v.IsValid() && v.Kind() == reflect.String {
+			if v.String() == "" {
+				return "''"
+			}
+			return "[redacted]"
+		}
+		if !v.IsValid() || v.IsZero() {
+			return createValueLabel(value)
+		}
+		return "[redacted]"
+	}
+	if v.IsValid() && v.Kind() == reflect.String {
+		redacted := redactURLCredentials(v.String())
+		if redacted != v.String() {
+			return createValueLabel(redacted)
+		}
+	}
+	return createValueLabel(value)
 }
 
 func createValueLabel(value interface{}) string {

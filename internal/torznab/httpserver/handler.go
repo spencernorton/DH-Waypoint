@@ -1,6 +1,7 @@
 package httpserver
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -123,13 +124,26 @@ func (h handler) handleSearch(ctx *gin.Context, profile torznab.Profile, tp stri
 	}
 
 	offset := model.NullUint{}
-	if intOffset, offsetErr := strconv.Atoi(ctx.Query(torznab.ParamOffset)); offsetErr == nil {
+	if intOffset, offsetErr := strconv.Atoi(ctx.Query(torznab.ParamOffset)); offsetErr == nil && intOffset >= 0 {
+		off := uint(intOffset)
+		if h.config.MaxOffset > 0 && off > h.config.MaxOffset {
+			off = h.config.MaxOffset
+		}
 		offset.Valid = true
-		offset.Uint = uint(intOffset)
+		offset.Uint = off
+	}
+
+	reqCtx := ctx.Request.Context()
+	if h.config.RequestTimeout > 0 {
+		if _, hasDeadline := reqCtx.Deadline(); !hasDeadline {
+			var cancel context.CancelFunc
+			reqCtx, cancel = context.WithTimeout(reqCtx, h.config.RequestTimeout)
+			defer cancel()
+		}
 	}
 
 	t0 := time.Now()
-	result, searchErr := h.client.Search(ctx.Request.Context(), torznab.SearchRequest{
+	result, searchErr := h.client.Search(reqCtx, torznab.SearchRequest{
 		Profile: profile,
 		Query:   ctx.Query(torznab.ParamQuery),
 		Type:    tp,
@@ -219,7 +233,14 @@ func (h handler) getProfile(c *gin.Context) (torznab.Profile, error) {
 	profilePathPart := strings.ToLower(strings.Split(strings.Trim(c.Param("any"), "/"), "/")[0])
 	switch profilePathPart {
 	case "", "api", torznab.ProfileDefault.ID:
-		return torznab.ProfileDefault, nil
+		if custom, ok := h.config.GetProfile(torznab.ProfileDefault.ID); ok {
+			return custom, nil
+		}
+		def := torznab.ProfileDefault
+		if strings.EqualFold(h.config.DefaultOrder, "newest") {
+			def.DisableOrderByRelevance = true
+		}
+		return def, nil
 	default:
 		profile, ok := h.config.GetProfile(profilePathPart)
 		if !ok {

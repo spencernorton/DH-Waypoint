@@ -10,10 +10,11 @@ import (
 // blacklist size is a sampled gauge (see SampleBlacklistSize on the
 // revalidator).
 type Metrics struct {
-	observations    *dualemit.CounterVec
-	blacklistSize   *dualemit.Gauge
-	revalidations   *dualemit.CounterVec
-	torznabExcluded *dualemit.Counter
+	observations        *dualemit.CounterVec
+	blacklistSize       *dualemit.Gauge
+	revalidations       *dualemit.CounterVec
+	torznabExcluded     *dualemit.Counter
+	torznabLookupErrors *dualemit.Counter
 }
 
 // NewMetrics constructs the metric set.
@@ -40,6 +41,10 @@ func NewMetrics() *Metrics {
 			Namespace: namespace, Subsystem: subsystem, Name: "torznab_excluded_total",
 			Help: "Search result items dropped by the Torznab adapter because their info_hash is currently dead.",
 		}),
+		torznabLookupErrors: dualemit.NewCounter(prometheus.CounterOpts{
+			Namespace: namespace, Subsystem: subsystem, Name: "torznab_lookup_errors_total",
+			Help: "Errors encountered by the Torznab adapter while querying the dead-swarm liveness store.",
+		}),
 	}
 }
 
@@ -51,6 +56,7 @@ func (m *Metrics) Collectors() []prometheus.Collector {
 		m.blacklistSize,
 		m.revalidations,
 		m.torznabExcluded,
+		m.torznabLookupErrors,
 	}
 }
 
@@ -75,4 +81,9 @@ func (m *Metrics) Revalidation(outcome string) {
 // because the info_hash is dead.
 func (m *Metrics) TorznabExcluded() {
 	m.torznabExcluded.Inc()
+}
+
+// TorznabLookupError increments the counter of dead-set lookup failures in Torznab.
+func (m *Metrics) TorznabLookupError() {
+	m.torznabLookupErrors.Inc()
 }
