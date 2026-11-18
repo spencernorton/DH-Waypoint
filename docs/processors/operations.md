@@ -172,14 +172,21 @@ Other request states are explicit: `core_only` means normal processing completed
 with no active optional plan (`no_active_processors`), or with no active step
 that applies to the torrent (`no_applicable_processors`); `held` denotes
 unavailable correlated evidence or source, a source or processor input over its
-size limit, or current authority or admission denial (outside the rollout
-cohort, or while draining); `deferred` denotes incomplete or expired normal
+size limit, current authority or admission denial (outside the rollout
+cohort, or while draining), or, while a publication processor is required,
+missing file evidence; `deferred` denotes incomplete or expired normal
 work/admission; `failed` denotes a failed core job; `stale` denotes a changed
 source or pipeline; `canceled` records operator cancellation. Requests cannot
 bypass a rollout cohort. Changing registration/admission may stale the request;
 review current state before issuing a new request ID. The ordinary core queue
 keeps its existing bounded retry behavior. A request waiting for core/admission
 expires after one hour rather than remaining silently pending forever.
+
+The `file_evidence` outcome of `dh_waypoint_processors_admission_total` counts
+only the refusals made at admission. Torrents that the catch-up query leaves out,
+or that the review queue's prune removes, are not counted, so it is not the
+number of torrents kept out of review. Read the review queue's volume from its
+pending depth, the gauge `dh_waypoint_publication_pending_admission`.
 
 Duplicate delivery with the same origin and complete request body returns the
 existing status, including after the origin job expires. Reusing the ID for a

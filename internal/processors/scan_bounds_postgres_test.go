@@ -311,7 +311,7 @@ func TestSbPruneRacingContentsInsertKeepsEnrolment(t *testing.T) {
 	// pruneOutbox does, and returns the hashes it saw without contents.
 	window := func(tx pgx.Tx) [][]byte {
 		t.Helper()
-		rows, e := tx.Query(testContext, pruneWindowSQL, time.Time{}, []byte{}, outboxPruneWindow)
+		rows, e := tx.Query(testContext, pruneWindowSQL, time.Time{}, []byte{}, outboxPruneWindow, false)
 		require.NoError(t, e)
 		var empty [][]byte
 		for rows.Next() {
@@ -340,7 +340,7 @@ func TestSbPruneRacingContentsInsertKeepsEnrolment(t *testing.T) {
 	var held [][]byte
 	require.NoError(t, queryHashes(testContext, tx, &held, pruneLockSQL, empty))
 	require.Len(t, held, 2)
-	tag, e := tx.Exec(testContext, pruneDeleteSQL, held)
+	tag, e := tx.Exec(testContext, pruneDeleteSQL, held, false)
 	require.NoError(t, e)
 	require.EqualValues(t, 1, tag.RowsAffected(), "the delete's snapshot sees the committed contents")
 	require.NoError(t, tx.Commit(testContext))
@@ -365,7 +365,7 @@ func TestSbPruneRacingContentsInsertKeepsEnrolment(t *testing.T) {
 	require.Equal(t, empty, held)
 	pid, inserted := sbSession(p, sbAddContents, y)
 	sbWait(t, p, `SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE pid=$1 AND wait_event_type='Lock')`, sbPid(t, pid, inserted))
-	tag, e = tx.Exec(testContext, pruneDeleteSQL, held)
+	tag, e = tx.Exec(testContext, pruneDeleteSQL, held, false)
 	require.NoError(t, e)
 	require.EqualValues(t, 1, tag.RowsAffected(), "the uncommitted contents are invisible to the delete")
 	require.NoError(t, tx.Commit(testContext))

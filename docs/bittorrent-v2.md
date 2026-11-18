@@ -39,9 +39,9 @@ checks all 32 bytes even when two claimed hashes share the same wire prefix.
 bencoding, duplicate keys, supported metadata version, v2 tree shape, file
 lengths, roots, paths, alternate names and resource bounds are checked before
 indexing. Info dictionaries are capped at 10 MiB, files at 100,000, path depth
-at 64, path components at 255 UTF-8 bytes, and piece length at 16 MiB. V2 pieces
-must be a power of two and at least 16 KiB. Existing database-safe UTF-8 and
-control-character restrictions apply to v2 paths too.
+at 64, path components at 255 UTF-8 bytes, whole paths at 2,000 bytes, and piece
+length at 16 MiB. V2 pieces must be a power of two and at least 16 KiB. Existing
+database-safe UTF-8 and control-character restrictions apply to v2 paths too.
 
 BEP 9 transfers only the info dictionary. The validation result separately
 records whether outer piece layers were available and verified. Large-file
