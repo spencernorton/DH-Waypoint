@@ -98,9 +98,13 @@ func NewStore(c Config, p lazy.Lazy[*pgxpool.Pool], policy string) (*Store, erro
 	if e := c.Validate(); e != nil {
 		return nil, e
 	}
+	metrics := NewMetrics()
 	transport := NewTransport(c.RequestTimeout)
 	transport.CredentialDirectory = c.CredentialDirectory
-	return &Store{pool: p, cfg: c, policy: policy, transport: transport, metrics: NewMetrics(), scanHold: scanHoldBound}, nil
+	transport.onStrictFallback = func(endpoint string) {
+		metrics.strictFallback.WithLabelValues(endpoint).Inc()
+	}
+	return &Store{pool: p, cfg: c, policy: policy, transport: transport, metrics: metrics, scanHold: scanHoldBound}, nil
 }
 
 // SetLogger attaches a logger for background work (plugin directory

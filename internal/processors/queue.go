@@ -34,6 +34,7 @@ type Lease struct {
 	Results                         []Receipt
 	Step, StepAttempts              int
 	AvailableAt                     time.Time
+	CreatedAt                       time.Time
 }
 
 // Scan is a bounded, restartable catch-up sweep, independent of core queue_jobs.
@@ -264,7 +265,7 @@ func (s *Store) Scan(ctx context.Context) (int, error) {
 				continue
 			}
 		}
-		effectivePlan := planForSource(planForIdentity(plan, h), src)
+		effectivePlan := planForSource(planForIdentity(plan, h), src, s.publication.RequiredProcessor)
 		if len(effectivePlan.Steps) == 0 {
 			if priority[string(h)] {
 				// No active step applies to this torrent. Settle it as core_only, as
@@ -501,7 +502,7 @@ func (s *Store) Claim(ctx context.Context) (*Lease, error) {
 	var ib, pb, rb []byte
 	e = tx.QueryRow(ctx, `UPDATE processor_jobs SET state='leased',lease_generation=lease_generation+1,lease_until=clock_timestamp()+$1::interval
  WHERE job_id=(SELECT job_id FROM processor_jobs WHERE state IN('queued','deferred') AND available_at<=clock_timestamp() AND epoch=$2 ORDER BY available_at,created_at,job_id FOR UPDATE SKIP LOCKED LIMIT 1)
- RETURNING job_id,info_hash,input_revision,pipeline_revision,epoch,lease_generation,input,source,plan,results,step,step_attempts,available_at,publication_revision`, (s.cfg.RequestTimeout+5*time.Second).String(), epoch).Scan(&l.ID, &l.Hash, &l.InputRevision, &l.PipelineRevision, &l.Epoch, &l.Generation, &ib, &l.Source, &pb, &rb, &l.Step, &l.StepAttempts, &l.AvailableAt, &l.PublicationRevision)
+ RETURNING job_id,info_hash,input_revision,pipeline_revision,epoch,lease_generation,input,source,plan,results,step,step_attempts,available_at,publication_revision,created_at`, (s.cfg.RequestTimeout+5*time.Second).String(), epoch).Scan(&l.ID, &l.Hash, &l.InputRevision, &l.PipelineRevision, &l.Epoch, &l.Generation, &ib, &l.Source, &pb, &rb, &l.Step, &l.StepAttempts, &l.AvailableAt, &l.PublicationRevision, &l.CreatedAt)
 	if errors.Is(e, pgx.ErrNoRows) {
 		return nil, tx.Commit(ctx)
 	}
@@ -722,7 +723,13 @@ func (s *Store) Finish(ctx context.Context, l Lease, j v1.Job, r v1.Result, disp
 			return e
 		}
 	}
-	policyRetry := l.Step < len(l.Plan.Steps) && l.Plan.Steps[l.Step].Entry.Mode == "apply" && slices.Contains(l.Plan.Steps[l.Step].EffectiveCapabilities(), v1.Policy)
+	isPolicyStep := l.Step < len(l.Plan.Steps) && l.Plan.Steps[l.Step].Entry.Mode == "apply" && slices.Contains(l.Plan.Steps[l.Step].EffectiveCapabilities(), v1.Policy)
+	maxWindow := s.cfg.PolicyMaxRetryWindow
+	if maxWindow <= 0 {
+		maxWindow = 2 * time.Hour
+	}
+	withinWindow := l.CreatedAt.IsZero() || time.Since(l.CreatedAt) < maxWindow
+	policyRetry := isPolicyStep && withinWindow
 	if (r.Outcome == v1.Failed || r.Outcome == v1.Deferred) && (l.StepAttempts+1 < s.cfg.MaxAttempts || policyRetry) && dispatched {
 		delay := max(time.Second*time.Duration(1<<l.StepAttempts), time.Duration(r.RetryAfterSeconds)*time.Second)
 		reset := policyRetry && l.StepAttempts+1 >= s.cfg.MaxAttempts
@@ -730,6 +737,18 @@ func (s *Store) Finish(ctx context.Context, l Lease, j v1.Job, r v1.Result, disp
 			delay = max(30*time.Second, time.Duration(r.RetryAfterSeconds)*time.Second)
 		}
 		_, e = tx.Exec(ctx, `UPDATE processor_jobs SET state='deferred',outcome=$3,reason='retry_scheduled',lease_until=NULL,step_attempts=CASE WHEN $5 THEN 0 ELSE step_attempts END,available_at=clock_timestamp()+$4::interval WHERE job_id=$1 AND lease_generation=$2`, l.ID, l.Generation, string(r.Outcome), delay.String(), reset)
+		if e != nil {
+			return e
+		}
+		return tx.Commit(ctx)
+	}
+	if isPolicyStep && (r.Outcome == v1.Failed || r.Outcome == v1.Deferred) && !withinWindow {
+		s.metrics.policyExhausted.WithLabelValues(l.Plan.Steps[l.Step].Entry.ID).Inc()
+		_, e = tx.Exec(ctx, `UPDATE processor_jobs SET state='failed',outcome=$3,reason='policy_retry_exhausted',lease_until=NULL,finished_at=clock_timestamp() WHERE job_id=$1 AND lease_generation=$2`, l.ID, l.Generation, string(r.Outcome))
+		if e != nil {
+			return e
+		}
+		_, e = tx.Exec(ctx, `UPDATE processor_reprocess_requests SET state='failed',state_reason='policy_retry_exhausted',updated_at=clock_timestamp() WHERE result_job_id=$1 AND state='queued'`, l.ID)
 		if e != nil {
 			return e
 		}
@@ -814,7 +833,11 @@ func (s *Store) failPreparation(ctx context.Context, l Lease) error {
 	if epoch != l.Epoch {
 		return ErrStale
 	}
-	if l.Step < len(l.Plan.Steps) && l.Plan.Steps[l.Step].Entry.Mode == "apply" && slices.Contains(l.Plan.Steps[l.Step].EffectiveCapabilities(), v1.Policy) {
+	maxWindow := s.cfg.PolicyMaxRetryWindow
+	if maxWindow <= 0 {
+		maxWindow = 2 * time.Hour
+	}
+	if (l.CreatedAt.IsZero() || time.Since(l.CreatedAt) < maxWindow) && l.Step < len(l.Plan.Steps) && l.Plan.Steps[l.Step].Entry.Mode == "apply" && slices.Contains(l.Plan.Steps[l.Step].EffectiveCapabilities(), v1.Policy) {
 		tag, e := tx.Exec(ctx, `UPDATE processor_jobs SET preparation_failures=CASE WHEN preparation_failures+1 >= $3 THEN 0 ELSE preparation_failures+1 END,
  state='deferred',outcome='failed',reason='preparation_failed',lease_until=NULL,finished_at=NULL,
  available_at=clock_timestamp()+interval '30 seconds'

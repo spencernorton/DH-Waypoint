@@ -1,6 +1,7 @@
 package processors
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/subtle"
@@ -65,15 +66,17 @@ func (s *Store) applyPayloadHTTP(e *gin.Engine) {
 	g.POST("/lease", func(c *gin.Context) {
 		var request struct {
 			Artifact string `json:"artifact"`
+			Contract string `json:"contract,omitempty"`
 		}
 		if !publicationBody(c, &request, 1024) {
 			return
 		}
-		if request.Artifact != s.publication.RequiredPayloadVerifierArtifactDigest {
+		contract, okContract := resolvePayloadContract(request.Contract)
+		if !okContract || !s.acceptedPayloadArtifact(request.Artifact) {
 			c.AbortWithStatus(409)
 			return
 		}
-		lease, err := s.leasePayload(c.Request.Context())
+		lease, err := s.leasePayloadWith(c.Request.Context(), request.Artifact, contract)
 		if errors.Is(err, pgx.ErrNoRows) {
 			c.Status(204)
 			return
@@ -86,10 +89,10 @@ func (s *Store) applyPayloadHTTP(e *gin.Engine) {
 	})
 	g.POST("/result", func(c *gin.Context) {
 		var w payloadWrite
-		if !publicationBody(c, &w, 26*1024*1024) {
+		if !publicationBody(c, &w, 46*1024*1024) {
 			return
 		}
-		if w.Contract != PayloadEvidenceContract || w.VerifierArtifact != s.publication.RequiredPayloadVerifierArtifactDigest {
+		if (w.Contract != PayloadEvidenceContract && w.Contract != PayloadEvidenceContractV2) || !s.acceptedPayloadArtifact(w.VerifierArtifact) {
 			c.AbortWithStatus(409)
 			return
 		}
@@ -105,8 +108,33 @@ func (s *Store) applyPayloadHTTP(e *gin.Engine) {
 	})
 }
 
+func (s *Store) acceptedPayloadArtifact(artifact string) bool {
+	if artifact == "" {
+		return false
+	}
+	if artifact == s.publication.RequiredPayloadVerifierArtifactDigest {
+		return true
+	}
+	return s.publication.PreviousPayloadVerifierArtifactDigest != "" && artifact == s.publication.PreviousPayloadVerifierArtifactDigest
+}
+
+func resolvePayloadContract(contract string) (string, bool) {
+	switch contract {
+	case "", PayloadEvidenceContract:
+		return PayloadEvidenceContract, true
+	case PayloadEvidenceContractV2:
+		return PayloadEvidenceContractV2, true
+	default:
+		return "", false
+	}
+}
+
 func (s *Store) leasePayload(ctx context.Context) (payloadLease, error) {
-	out := payloadLease{Contract: PayloadEvidenceContract, VerifierArtifact: s.publication.RequiredPayloadVerifierArtifactDigest, ProbeBytes: payloadProbeBytes, MaxProofBytes: payloadProofBytes, MaxInfoBytes: payloadInfoBytes}
+	return s.leasePayloadWith(ctx, s.publication.RequiredPayloadVerifierArtifactDigest, PayloadEvidenceContract)
+}
+
+func (s *Store) leasePayloadWith(ctx context.Context, artifact string, contract string) (payloadLease, error) {
+	out := payloadLease{Contract: contract, VerifierArtifact: artifact, ProbeBytes: payloadProbeBytes, MaxProofBytes: payloadProofBytes, MaxInfoBytes: payloadInfoBytes}
 	tx, err := s.begin(ctx)
 	if err != nil {
 		return out, err
@@ -132,7 +160,7 @@ func (s *Store) leasePayload(ctx context.Context) (payloadLease, error) {
 	if err != nil {
 		return out, err
 	}
-	candidates, err := s.payloadCandidates(ctx, tx, admissions%4 != 3)
+	candidates, err := s.payloadCandidates(ctx, tx, admissions%4 != 3, out.VerifierArtifact, out.Contract)
 	if err != nil {
 		return out, err
 	}
@@ -157,7 +185,7 @@ func (s *Store) leasePayload(ctx context.Context) (payloadLease, error) {
 			continue
 		}
 		var alreadyValid bool
-		if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM processor_payload_reviews WHERE info_hash=$1 AND source_revision=$2 AND verifier_artifact=$3 AND policy=$4 AND approved AND expires_at>clock_timestamp())`, hash, out.SourceRevision, out.VerifierArtifact, PayloadEvidenceContract).Scan(&alreadyValid); err != nil {
+		if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM processor_payload_reviews WHERE info_hash=$1 AND source_revision=$2 AND verifier_artifact=$3 AND policy IN ($4,$5) AND approved AND expires_at>clock_timestamp()+interval '24 hours')`, hash, out.SourceRevision, out.VerifierArtifact, PayloadEvidenceContract, PayloadEvidenceContractV2).Scan(&alreadyValid); err != nil {
 			return out, err
 		}
 		if alreadyValid {
@@ -204,6 +232,9 @@ func (s *Store) issuePayloadLease(ctx context.Context, tx pgx.Tx, out payloadLea
 	}
 	if src.FilesStatus == "single" {
 		out.Files = []sourceFile{{Index: 0, Path: src.Name, Size: src.Size}}
+		if out.Contract == PayloadEvidenceContractV2 {
+			out.MaxProofBytes = payloadSingleFileProofBytes
+		}
 	}
 	err = tx.QueryRow(ctx, `INSERT INTO processor_payload_work(info_hash,source_revision,verifier_artifact,lease_id,lease_until,available_at)
  VALUES($1,$2,$3,$4,clock_timestamp()+interval '2 minutes',clock_timestamp()+interval '2 minutes')
@@ -264,7 +295,7 @@ SELECT w.info_hash,w.source_revision,w.enqueued_at,CASE
  WHEN NOT COALESCE(review.approved AND source.info_hash IS NOT NULL AND registry.state='active' AND registry.mode='apply'
   AND review.policy_contract=$9 AND registry.execution_generation=review.execution_generation
   AND registry.manifest->'processor'=review.processor_identity AND review.processor_identity->>'artifact_digest'=$6
-  AND NOT EXISTS(SELECT 1 FROM processor_payload_reviews proof WHERE proof.info_hash=w.info_hash AND proof.source_revision=w.source_revision AND proof.verifier_artifact=$7 AND proof.policy=$8 AND proof.approved AND proof.expires_at>CURRENT_TIMESTAMP)
+  AND NOT EXISTS(SELECT 1 FROM processor_payload_reviews proof WHERE proof.info_hash=w.info_hash AND proof.source_revision=w.source_revision AND proof.verifier_artifact=$7 AND proof.policy IN ($8,'piece-bound-media-format-v1','piece-bound-media-format-v2') AND proof.approved AND proof.expires_at>CURRENT_TIMESTAMP+interval '24 hours')
   AND NOT EXISTS(SELECT 1 FROM processor_publication_holds h WHERE h.info_hash=w.info_hash AND h.held)
   AND NOT EXISTS(SELECT 1 FROM processor_exclusions x WHERE x.info_hash=w.info_hash),false) THEN 'drop'
  WHEN work.info_hash IS NULL OR work.source_revision<>w.source_revision OR work.verifier_artifact<>$7 OR (work.lease_until<CURRENT_TIMESTAMP AND work.available_at<=CURRENT_TIMESTAMP) THEN 'eligible'
@@ -282,7 +313,7 @@ ORDER BY w.enqueued_at,w.info_hash`
 // to payloadLeaseAttempts eligible rows from the first window holding one.
 // Lease drops are safe because every enqueuePayload caller holds the control
 // row this call holds FOR UPDATE; rows another transaction holds are skipped.
-func (s *Store) payloadCandidates(ctx context.Context, tx pgx.Tx, highFirst bool) ([]payloadCandidate, error) {
+func (s *Store) payloadCandidates(ctx context.Context, tx pgx.Tx, highFirst bool, verifierArtifact string, contract string) ([]payloadCandidate, error) {
 	priorities := []int{1, 0}
 	if !highFirst {
 		priorities = []int{0, 1}
@@ -296,7 +327,7 @@ func (s *Store) payloadCandidates(ctx context.Context, tx pgx.Tx, highFirst bool
 				return nil, nil
 			}
 			rows, err := tx.Query(ctx, payloadClassify, priority, at, after, n, s.publication.RequiredProcessor, s.publication.RequiredProcessorArtifactDigest,
-				s.publication.RequiredPayloadVerifierArtifactDigest, PayloadEvidenceContract, serving.PublicationReviewPolicy)
+				verifierArtifact, contract, serving.PublicationReviewPolicy)
 			if err != nil {
 				return nil, err
 			}
@@ -353,7 +384,9 @@ func (s *Store) refillPayload(ctx context.Context, tx pgx.Tx) (func(), error) {
 	var lastHash, queuedHash []byte
 	err := tx.QueryRow(ctx, `WITH w AS MATERIALIZED (
  SELECT info_hash,source_revision,approved,expires_at FROM processor_payload_reviews
- WHERE (expires_at,info_hash)>($1,$2) AND expires_at<=CURRENT_TIMESTAMP ORDER BY expires_at,info_hash LIMIT $3),
+ WHERE (expires_at,info_hash)>($1,$2) AND expires_at<=CURRENT_TIMESTAMP+interval '24 hours'
+  AND (approved OR expires_at<=CURRENT_TIMESTAMP)
+ ORDER BY expires_at,info_hash LIMIT $3),
 due AS MATERIALIZED (SELECT w.* FROM w WHERE NOT EXISTS(SELECT 1 FROM processor_payload_pending p WHERE p.info_hash=w.info_hash)),
 ok AS MATERIALIZED (
  SELECT due.info_hash,due.source_revision,due.expires_at,CASE WHEN due.approved OR t.created_at>=CURRENT_TIMESTAMP-interval '24 hours' THEN 1 ELSE 0 END AS priority
@@ -428,7 +461,7 @@ func (s *Store) finishPayload(ctx context.Context, w payloadWrite) error {
 		if err = json.Unmarshal(src.Contents[0], &content); err != nil {
 			return err
 		}
-		receipt, err = validatePayloadEvidence(hash, src, content.Type, *w.Evidence)
+		receipt, err = validatePayloadEvidenceForContract(hash, src, content.Type, w.Contract, *w.Evidence)
 		if err != nil {
 			return err
 		}
@@ -438,16 +471,21 @@ func (s *Store) finishPayload(ctx context.Context, w payloadWrite) error {
 		return err
 	}
 	delay := "7 days"
-	if w.Outcome == "deferred" {
+	workDelay := "7 days"
+	if w.Outcome == "approved" {
+		delay = "30 days"
+		workDelay = "29 days"
+	} else if w.Outcome == "deferred" {
 		delay = "5 minutes"
+		workDelay = "5 minutes"
 	}
 	_, err = tx.Exec(ctx, `INSERT INTO processor_payload_reviews(info_hash,source_revision,verifier_artifact,policy,approved,reason,receipt,expires_at)
  VALUES($1,$2,$3,$4,$5,$6,$7,clock_timestamp()+$8::interval)
- ON CONFLICT(info_hash) DO UPDATE SET source_revision=$2,verifier_artifact=$3,policy=$4,approved=$5,reason=$6,receipt=$7,evaluated_at=clock_timestamp(),expires_at=EXCLUDED.expires_at`, hash, w.SourceRevision, w.VerifierArtifact, PayloadEvidenceContract, w.Outcome == "approved", w.Reason, string(raw), delay)
+ ON CONFLICT(info_hash) DO UPDATE SET source_revision=$2,verifier_artifact=$3,policy=$4,approved=$5,reason=$6,receipt=$7,evaluated_at=clock_timestamp(),expires_at=EXCLUDED.expires_at`, hash, w.SourceRevision, w.VerifierArtifact, w.Contract, w.Outcome == "approved", w.Reason, string(raw), delay)
 	if err != nil {
 		return err
 	}
-	_, err = tx.Exec(ctx, `UPDATE processor_payload_work SET outcome=$2,lease_until=clock_timestamp(),available_at=clock_timestamp()+$3::interval WHERE info_hash=$1`, hash, w.Outcome, delay)
+	_, err = tx.Exec(ctx, `UPDATE processor_payload_work SET outcome=$2,lease_until=clock_timestamp(),available_at=clock_timestamp()+$3::interval WHERE info_hash=$1`, hash, w.Outcome, workDelay)
 	if err != nil {
 		return err
 	}
@@ -464,8 +502,8 @@ func (s *Store) enqueuePayload(ctx context.Context, tx pgx.Tx, hash []byte, revi
 	_, err := tx.Exec(ctx, `INSERT INTO processor_payload_pending(info_hash,source_revision,priority)
  SELECT $1,$2,CASE WHEN EXISTS(SELECT 1 FROM torrents WHERE info_hash=$1 AND created_at>=CURRENT_TIMESTAMP-interval '24 hours') OR EXISTS(SELECT 1 FROM processor_payload_reviews WHERE info_hash=$1 AND approved) THEN 1 ELSE 0 END
  WHERE EXISTS(SELECT 1 FROM processor_publication_reviews r WHERE r.info_hash=$1 AND r.processor_id=$3 AND r.source_revision=$2 AND r.approved AND r.policy_contract=$6)
- AND NOT EXISTS(SELECT 1 FROM processor_payload_reviews p WHERE p.info_hash=$1 AND p.source_revision=$2 AND p.verifier_artifact=$4 AND p.policy=$5 AND p.expires_at>CURRENT_TIMESTAMP)
- ON CONFLICT(info_hash) DO UPDATE SET source_revision=$2,priority=EXCLUDED.priority`, hash, revision, s.publication.RequiredProcessor, s.publication.RequiredPayloadVerifierArtifactDigest, PayloadEvidenceContract, serving.PublicationReviewPolicy)
+ AND NOT EXISTS(SELECT 1 FROM processor_payload_reviews p WHERE p.info_hash=$1 AND p.source_revision=$2 AND p.verifier_artifact=$4 AND p.policy IN ($5,$7) AND p.expires_at>CURRENT_TIMESTAMP+interval '24 hours')
+ ON CONFLICT(info_hash) DO UPDATE SET source_revision=$2,priority=EXCLUDED.priority`, hash, revision, s.publication.RequiredProcessor, s.publication.RequiredPayloadVerifierArtifactDigest, PayloadEvidenceContract, serving.PublicationReviewPolicy, PayloadEvidenceContractV2)
 	return err
 }
 
@@ -545,6 +583,89 @@ func (s *Store) applyPublicationAdminHTTP(g *gin.RouterGroup) {
 		}
 		c.JSON(200, result)
 	})
+	g.POST("/exclusions/:hash/retract", func(c *gin.Context) {
+		var w exclusionRetractWrite
+		if !publicationBody(c, &w, 2048) {
+			return
+		}
+		if !jobIdentity.MatchString(w.RequestID) || w.ExpectedRevision < 1 || !publicationReason.MatchString(w.Reason) {
+			apiError(c, ErrControl)
+			return
+		}
+		hash, err := s.publicationHash(c.Request.Context(), c.Param("hash"))
+		if err != nil {
+			apiError(c, err)
+			return
+		}
+		result, err := s.retractExclusion(c.Request.Context(), hash, w)
+		if err != nil {
+			apiError(c, err)
+			return
+		}
+		c.JSON(200, result)
+	})
+}
+
+type exclusionRetractWrite struct {
+	RequestID        string `json:"request_id"`
+	ExpectedRevision int64  `json:"expected_source_revision"`
+	Reason           string `json:"reason"`
+}
+
+func (s *Store) retractExclusion(ctx context.Context, hash []byte, w exclusionRetractWrite) (map[string]any, error) {
+	out := map[string]any{"request_id": w.RequestID, "info_hash": hex.EncodeToString(hash)}
+	tx, err := s.begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer rollback(tx)
+	src, _, err := readSource(ctx, tx, hash, true)
+	if err != nil {
+		return nil, err
+	}
+	if src.Private || src.PrivateEvidence {
+		return nil, ErrControl
+	}
+	var prevHash []byte
+	var prevExpected, prevAfter int64
+	var prevReason string
+	var prevRemoved int
+	err = tx.QueryRow(ctx, `SELECT info_hash,expected_source_revision,source_revision,removed_count,reason FROM processor_exclusion_events WHERE request_id=$1`, w.RequestID).
+		Scan(&prevHash, &prevExpected, &prevAfter, &prevRemoved, &prevReason)
+	if err == nil {
+		if !bytes.Equal(prevHash, hash) || prevExpected != w.ExpectedRevision || prevReason != w.Reason {
+			return nil, ErrConflict
+		}
+		out["retracted"] = prevRemoved > 0
+		out["removed_count"] = prevRemoved
+		out["source_revision"] = prevAfter
+		return out, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return nil, err
+	}
+	if src.PublicationRevision != w.ExpectedRevision {
+		return nil, ErrConflict
+	}
+	tag, err := tx.Exec(ctx, `DELETE FROM processor_exclusions WHERE info_hash=$1`, hash)
+	if err != nil {
+		return nil, err
+	}
+	removed := int(tag.RowsAffected())
+	afterRevision := src.PublicationRevision
+	if removed > 0 {
+		if err = tx.QueryRow(ctx, `SELECT revision FROM processor_publication_sources WHERE info_hash=$1`, hash).Scan(&afterRevision); err != nil {
+			return nil, err
+		}
+	}
+	if _, err = tx.Exec(ctx, `INSERT INTO processor_exclusion_events(request_id,info_hash,expected_source_revision,source_revision,removed_count,reason) VALUES($1,$2,$3,$4,$5,$6)`,
+		w.RequestID, hash, w.ExpectedRevision, afterRevision, removed, w.Reason); err != nil {
+		return nil, err
+	}
+	out["retracted"] = removed > 0
+	out["removed_count"] = removed
+	out["source_revision"] = afterRevision
+	return out, tx.Commit(ctx)
 }
 
 func (s *Store) setPublicationHold(ctx context.Context, hash []byte, w publicationHoldWrite) (map[string]any, error) {

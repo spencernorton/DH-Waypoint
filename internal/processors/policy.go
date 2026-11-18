@@ -3,7 +3,6 @@ package processors
 import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/spencernorton/DH-Waypoint/internal/buildidentity"
 	"github.com/spencernorton/DH-Waypoint/internal/classifier"
 	"github.com/spencernorton/DH-Waypoint/internal/classifier/contentfilter"
 	"github.com/spencernorton/DH-Waypoint/internal/lazy"
@@ -16,7 +15,7 @@ func NewConfiguredStore(c Config, p lazy.Lazy[*pgxpool.Pool], cc classifier.Conf
 	// The processing mode is included: it changes the deterministic facts
 	// every processor input is derived from, so flipping it must stale
 	// outstanding pipelines like any other core policy change.
-	s, e := NewStore(c, p, digest([]any{"processor-core-policy-v1", buildidentity.CurrentBuildIdentity(), cc, cf, pc.Mode.Normalize()}))
+	s, e := NewStore(c, p, digest([]any{"processor-core-policy-v1", cc, cf, pc.Mode.Normalize()}))
 	if e != nil {
 		return nil, e
 	}

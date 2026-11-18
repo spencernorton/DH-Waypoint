@@ -71,7 +71,7 @@ func TestQueuePayloadIndexDropUpDown(t *testing.T) {
  VALUES ('synthetic','process_torrent','{"InfoHashes":["ab"]}',now(),'1 hour',now())`)
 	require.NoError(t, err)
 
-	_, err = provider.Up(ctx)
+	_, err = provider.UpTo(ctx, 77)
 	require.NoError(t, err)
 	after := indexes()
 	require.NotContains(t, after, index)
@@ -84,7 +84,7 @@ func TestQueuePayloadIndexDropUpDown(t *testing.T) {
 	// A database where the index was already removed by hand still migrates.
 	_, err = db.ExecContext(ctx, "DROP INDEX "+index)
 	require.NoError(t, err)
-	_, err = provider.Up(ctx)
+	_, err = provider.UpTo(ctx, 77)
 	require.NoError(t, err)
 	require.Equal(t, after, indexes())
 	var jobs int

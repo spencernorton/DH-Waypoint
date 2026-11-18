@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"path"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -21,8 +22,10 @@ import (
 )
 
 const PayloadEvidenceContract = serving.PayloadEvidenceContract
+const PayloadEvidenceContractV2 = serving.PayloadEvidenceContractV2
 const payloadProbeBytes = int64(2 * 1024 * 1024)
 const payloadProofBytes = 16 * 1024 * 1024
+const payloadSingleFileProofBytes = 32 * 1024 * 1024
 const payloadInfoBytes = 2 * 1024 * 1024
 
 var errPayloadEvidence = errors.New("invalid_payload_evidence")
@@ -150,6 +153,127 @@ func slicesString(values []string, value string) bool {
 }
 
 func validatePayloadEvidence(hash []byte, src source, kind string, evidence payloadEvidence) (payloadReceipt, error) {
+	return validatePayloadEvidenceForContract(hash, src, kind, PayloadEvidenceContract, evidence)
+}
+
+// SelectPayloadProbeFiles deterministically chooses the media files whose head
+// and tail pieces must be verified under contract. Under v1 every media file
+// (1..32) must fit within 16 MiB. Under v2 a single media file may use up to
+// 32 MiB (one 16 MiB head piece plus one 16 MiB tail piece), while multi-file
+// releases prove the largest media file plus a deterministic hash-seeded
+// sample of remaining media files within the 16 MiB piece budget.
+func SelectPayloadProbeFiles(infoHashHex string, mediaFiles []payloadProbeFile, pieceLength, totalSize int64, contract string) ([]payloadProbeFile, int, bool) {
+	if len(mediaFiles) == 0 || pieceLength <= 0 || totalSize <= 0 {
+		return nil, 0, false
+	}
+	piecesForFile := func(f payloadProbeFile) map[int]struct{} {
+		out := map[int]struct{}{}
+		first := min(payloadProbeBytes, f.Size)
+		tail := max(first, f.Size-payloadProbeBytes)
+		for _, span := range [][2]int64{{f.Offset, first}, {f.Offset + tail, f.Size - tail}} {
+			if span[1] > 0 {
+				startIdx := int(span[0] / pieceLength)
+				endIdx := int((span[0] + span[1] - 1) / pieceLength)
+				for idx := startIdx; idx <= endIdx; idx++ {
+					out[idx] = struct{}{}
+				}
+			}
+		}
+		return out
+	}
+	pieceBytes := func(set map[int]struct{}) int64 {
+		var sum int64
+		for idx := range set {
+			sum += min(pieceLength, totalSize-int64(idx)*pieceLength)
+		}
+		return sum
+	}
+
+	if contract != PayloadEvidenceContractV2 {
+		if len(mediaFiles) > 32 {
+			return nil, 0, false
+		}
+		needed := map[int]struct{}{}
+		for _, f := range mediaFiles {
+			for idx := range piecesForFile(f) {
+				needed[idx] = struct{}{}
+			}
+		}
+		if pieceBytes(needed) > int64(payloadProofBytes) {
+			return nil, 0, false
+		}
+		return mediaFiles, payloadProofBytes, true
+	}
+
+	if len(mediaFiles) > 256 {
+		return nil, 0, false
+	}
+	if len(mediaFiles) == 1 {
+		needed := piecesForFile(mediaFiles[0])
+		if pieceBytes(needed) > int64(payloadSingleFileProofBytes) {
+			return nil, 0, false
+		}
+		return mediaFiles, payloadSingleFileProofBytes, true
+	}
+
+	largestPos := 0
+	for i := 1; i < len(mediaFiles); i++ {
+		if mediaFiles[i].Size > mediaFiles[largestPos].Size ||
+			(mediaFiles[i].Size == mediaFiles[largestPos].Size && mediaFiles[i].Index < mediaFiles[largestPos].Index) {
+			largestPos = i
+		}
+	}
+	needed := piecesForFile(mediaFiles[largestPos])
+	if pieceBytes(needed) > int64(payloadProofBytes) {
+		return nil, 0, false
+	}
+	selected := []payloadProbeFile{mediaFiles[largestPos]}
+
+	type rankedFile struct {
+		file payloadProbeFile
+		key  [32]byte
+	}
+	normHash := strings.ToLower(infoHashHex)
+	candidates := make([]rankedFile, 0, len(mediaFiles)-1)
+	for i, f := range mediaFiles {
+		if i == largestPos {
+			continue
+		}
+		candidates = append(candidates, rankedFile{
+			file: f,
+			key:  sha256.Sum256([]byte(normHash + ":" + strconv.Itoa(f.Index))),
+		})
+	}
+	slices.SortFunc(candidates, func(a, b rankedFile) int {
+		if cmp := bytes.Compare(a.key[:], b.key[:]); cmp != 0 {
+			return cmp
+		}
+		return a.file.Index - b.file.Index
+	})
+	for _, cand := range candidates {
+		if len(selected) >= 32 {
+			break
+		}
+		fPieces := piecesForFile(cand.file)
+		merged := make(map[int]struct{}, len(needed)+len(fPieces))
+		for idx := range needed {
+			merged[idx] = struct{}{}
+		}
+		for idx := range fPieces {
+			merged[idx] = struct{}{}
+		}
+		if pieceBytes(merged) <= int64(payloadProofBytes) {
+			needed = merged
+			selected = append(selected, cand.file)
+		}
+	}
+	slices.SortFunc(selected, func(a, b payloadProbeFile) int {
+		return a.Index - b.Index
+	})
+	return selected, payloadProofBytes, true
+}
+
+func validatePayloadEvidenceForContract(hash []byte, src source, kind string, contract string, evidence payloadEvidence) (payloadReceipt, error) {
 	out := payloadReceipt{PieceSHA256: map[int]string{}}
 	bad := func(reason string) (payloadReceipt, error) {
 		return out, fmt.Errorf("%s: %w", reason, errPayloadEvidence)
@@ -207,6 +331,20 @@ func validatePayloadEvidence(hash []byte, src source, kind string, evidence payl
 	if total <= 0 || total > 1<<40 {
 		return bad("payload_size")
 	}
+	allProbeFiles, err := projectedFilesForProbe(projected, rawFiles)
+	if err != nil {
+		return bad("source_layout")
+	}
+	mediaFiles := make([]payloadProbeFile, 0, len(allProbeFiles))
+	for _, f := range allProbeFiles {
+		if format, _ := mediaProbeFormat(f.Path, kind); format != "" {
+			mediaFiles = append(mediaFiles, f)
+		}
+	}
+	selectedMedia, maxProofBudget, okBudget := SelectPayloadProbeFiles(hex.EncodeToString(hash), mediaFiles, meta.Info.PieceLength, total, contract)
+	if !okBudget {
+		return bad("piece_bounds")
+	}
 	pieces := map[int][]byte{}
 	bytesUsed := 0
 	for _, p := range evidence.Pieces {
@@ -218,7 +356,7 @@ func validatePayloadEvidence(hash []byte, src source, kind string, evidence payl
 		}
 		want := min(meta.Info.PieceLength, total-int64(p.Index)*meta.Info.PieceLength)
 		bytesUsed += len(p.Data)
-		if int64(len(p.Data)) != want || bytesUsed > payloadProofBytes {
+		if int64(len(p.Data)) != want || bytesUsed > maxProofBudget {
 			return bad("piece_bounds")
 		}
 		digest := sha1.Sum(p.Data)
@@ -256,11 +394,7 @@ func validatePayloadEvidence(hash []byte, src source, kind string, evidence payl
 		reports[r.Index] = r
 	}
 	checked := 0
-	probeFiles, err := projectedFilesForProbe(projected, rawFiles)
-	if err != nil {
-		return bad("source_layout")
-	}
-	for _, f := range probeFiles {
+	for _, f := range selectedMedia {
 		format, stream := mediaProbeFormat(f.Path, kind)
 		if format == "" {
 			continue

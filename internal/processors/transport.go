@@ -24,10 +24,21 @@ import (
 
 var authName = regexp.MustCompile(`^DH_WAYPOINT_PROCESSOR_TOKEN_[A-Z0-9_]{1,64}$`)
 
+const defaultStrictFallbackTTL = 15 * time.Minute
+
 type Transport struct {
 	client              *http.Client
 	CredentialDirectory string
 	strictEndpoints     sync.Map
+	strictTTL           time.Duration
+	onStrictFallback    func(endpoint string)
+}
+
+func (t *Transport) effectiveStrictTTL() time.Duration {
+	if t.strictTTL > 0 {
+		return t.strictTTL
+	}
+	return defaultStrictFallbackTTL
 }
 
 var errBadRequest = errors.New("bad_request")
@@ -166,12 +177,18 @@ func (t *Transport) Process(ctx context.Context, endpoint, auth string, j v1.Job
 		r.FillDefaultBinding(j)
 		return r, validateResult(r, j)
 	}
-	if _, strict := t.strictEndpoints.Load(endpoint); strict {
-		return t.processStrictV1(ctx, endpoint, auth, j)
+	if val, strict := t.strictEndpoints.Load(endpoint); strict {
+		if until, ok := val.(time.Time); ok && time.Now().Before(until) {
+			return t.processStrictV1(ctx, endpoint, auth, j)
+		}
+		t.strictEndpoints.Delete(endpoint)
 	}
 	e := t.call(ctx, endpoint, auth, "/v1/process", j, &r)
 	if errors.Is(e, errBadRequest) {
-		t.strictEndpoints.Store(endpoint, true)
+		t.strictEndpoints.Store(endpoint, time.Now().Add(t.effectiveStrictTTL()))
+		if t.onStrictFallback != nil {
+			t.onStrictFallback(endpoint)
+		}
 		return t.processStrictV1(ctx, endpoint, auth, j)
 	}
 	if e != nil {
@@ -301,6 +318,27 @@ func (t *Transport) processStrictV1(ctx context.Context, endpoint, auth string, 
 			}
 			if sr.Proposal.Embedding != nil {
 				mergedProp.Embedding = sr.Proposal.Embedding
+			}
+			for _, tag := range sr.Proposal.AddTags {
+				if !slices.Contains(mergedProp.AddTags, tag) {
+					mergedProp.AddTags = append(mergedProp.AddTags, tag)
+				}
+			}
+			for _, tag := range sr.Proposal.RemoveTags {
+				if !slices.Contains(mergedProp.RemoveTags, tag) {
+					mergedProp.RemoveTags = append(mergedProp.RemoveTags, tag)
+				}
+			}
+			if len(sr.Proposal.Weights) > 0 {
+				if mergedProp.Weights == nil {
+					mergedProp.Weights = make(map[string]float64, len(sr.Proposal.Weights))
+				}
+				for k, v := range sr.Proposal.Weights {
+					mergedProp.Weights[k] = v
+				}
+			}
+			if sr.Proposal.Liveness != nil {
+				mergedProp.Liveness = sr.Proposal.Liveness
 			}
 		}
 	}

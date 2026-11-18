@@ -6,6 +6,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestServingAdultExclusionIsExplicitAndDefaultsOff(t *testing.T) {
@@ -24,15 +25,27 @@ func TestRequiredPublicationReviewEnvironmentIsPinned(t *testing.T) {
 		"SERVING_REQUIRED_PROCESSOR":                        "synthetic-reviewer",
 		"SERVING_REQUIRED_PROCESSOR_ARTIFACT_DIGEST":        strings.Repeat("a", 64),
 		"SERVING_REQUIRED_PAYLOAD_VERIFIER_ARTIFACT_DIGEST": strings.Repeat("b", 64),
+		"SERVING_PREVIOUS_PAYLOAD_VERIFIER_ARTIFACT_DIGEST": strings.Repeat("c", 64),
 	}).(serving.Config)
 	require.Equal(t, "synthetic-reviewer", cfg.RequiredProcessor)
 	require.Equal(t, strings.Repeat("a", 64), cfg.RequiredProcessorArtifactDigest)
 	require.Equal(t, strings.Repeat("b", 64), cfg.RequiredPayloadVerifierArtifactDigest)
-	processorCfg := resolveSectionFromEnv(t, "processors", processors.NewDefaultConfig(), map[string]string{"PROCESSORS_PAYLOAD_VERIFIER_TOKEN": strings.Repeat("s", 48)}).(processors.Config)
+	require.Equal(t, strings.Repeat("c", 64), cfg.PreviousPayloadVerifierArtifactDigest)
+	processorCfg := resolveSectionFromEnv(t, "processors", processors.NewDefaultConfig(), map[string]string{
+		"PROCESSORS_PAYLOAD_VERIFIER_TOKEN":  strings.Repeat("s", 48),
+		"PROCESSORS_POLICY_MAX_RETRY_WINDOW": "45m",
+	}).(processors.Config)
 	require.Equal(t, strings.Repeat("s", 48), string(processorCfg.PayloadVerifierToken))
+	require.Equal(t, 45*time.Minute, processorCfg.PolicyMaxRetryWindow)
 	_, err := serving.NewPolicy(cfg, []string{"syntheticadult"}, []string{"mkv"})
 	require.NoError(t, err)
-	for _, broken := range []serving.Config{{RequiredProcessor: "synthetic-reviewer"}, {RequiredProcessorArtifactDigest: strings.Repeat("a", 64)}, {RequiredProcessor: "synthetic-reviewer", RequiredProcessorArtifactDigest: "latest"}} {
+	for _, broken := range []serving.Config{
+		{RequiredProcessor: "synthetic-reviewer"},
+		{RequiredProcessorArtifactDigest: strings.Repeat("a", 64)},
+		{RequiredProcessor: "synthetic-reviewer", RequiredProcessorArtifactDigest: "latest"},
+		{RequiredProcessor: "synthetic-reviewer", RequiredProcessorArtifactDigest: strings.Repeat("a", 64), PreviousPayloadVerifierArtifactDigest: strings.Repeat("c", 64)},
+		{RequiredProcessor: "synthetic-reviewer", RequiredProcessorArtifactDigest: strings.Repeat("a", 64), RequiredPayloadVerifierArtifactDigest: strings.Repeat("b", 64), PreviousPayloadVerifierArtifactDigest: "invalid"},
+	} {
 		_, err = serving.NewPolicy(broken, []string{"syntheticadult"}, []string{"mkv"})
 		require.Error(t, err)
 	}

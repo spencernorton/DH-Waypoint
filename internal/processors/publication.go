@@ -13,7 +13,10 @@ import (
 )
 
 // Identity evidence protects enrichment, never exempts local policy review.
-func planForSource(p Plan, src source) Plan {
+// The serving-required processor keeps its full stage list so its review can
+// complete and approve canonical-labelled releases (apply still refuses to
+// overwrite an established content type or canonical identity).
+func planForSource(p Plan, src source, requiredProcessor ...string) Plan {
 	var canonical struct {
 		MediaID *string `json:"media_id"`
 	}
@@ -21,8 +24,16 @@ func planForSource(p Plan, src source) Plan {
 	if canonical.MediaID == nil || *canonical.MediaID == "" {
 		return p
 	}
+	req := ""
+	if len(requiredProcessor) > 0 {
+		req = requiredProcessor[0]
+	}
 	steps := []Step{}
 	for _, st := range p.Steps {
+		if req != "" && st.Entry.ID == req {
+			steps = append(steps, st)
+			continue
+		}
 		if slices.Contains(st.EffectiveCapabilities(), v1.Policy) {
 			st.Stage = v1.Policy
 			st.Capabilities = []v1.Stage{v1.Policy}
