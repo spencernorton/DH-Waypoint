@@ -812,10 +812,18 @@ func (b optionBuilder) applySelect(db *gorm.DB, withOrderSelect bool) error {
 			"DISTINCT ON ("+b.grouping.distinctOnSQL+") "+b.tableName+".*",
 		)
 	case len(b.selections) == 0:
-		selectQueryParts = append(selectQueryParts, "*")
+		if b.tableName != "" {
+			selectQueryParts = append(selectQueryParts, b.tableName+".*")
+		} else {
+			selectQueryParts = append(selectQueryParts, "*")
+		}
 	default:
 		for _, s := range b.selections {
-			selectQueryParts = append(selectQueryParts, s.SQL)
+			if s.SQL == "*" && b.tableName != "" {
+				selectQueryParts = append(selectQueryParts, b.tableName+".*")
+			} else {
+				selectQueryParts = append(selectQueryParts, s.SQL)
+			}
 			selectQueryArgs = append(selectQueryArgs, s.Vars...)
 		}
 	}
@@ -859,6 +867,17 @@ func (b optionBuilder) applyPre(sq SubQuery, withOrderJoins bool) error {
 
 	if b.tsquery != "" {
 		sq.UnderlyingDB().Where(b.tableName+".tsv @@ ?::tsquery", b.tsquery)
+		if b.tableName == "torrent_contents" && b.grouping == nil {
+			for _, ob := range b.orderBy {
+				if ob.Column.Name == QueryStringRankField {
+					sq.UnderlyingDB().Where(
+						"torrent_contents.id IN (SELECT tc_cap.id FROM torrent_contents tc_cap WHERE tc_cap.tsv @@ ?::tsquery ORDER BY tc_cap.published_at DESC LIMIT 1000)",
+						b.tsquery,
+					)
+					break
+				}
+			}
+		}
 	}
 
 	requiredJoins := b.requiredJoins.Copy()

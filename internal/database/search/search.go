@@ -6,6 +6,7 @@ import (
 	"github.com/spencernorton/DH-Waypoint/internal/lazy"
 	"github.com/spencernorton/DH-Waypoint/internal/serving"
 	"go.uber.org/fx"
+	"time"
 )
 
 type Search interface {
@@ -20,8 +21,9 @@ type Search interface {
 type ServingSearch interface{ Search }
 
 type search struct {
-	q           *dao.Query
-	adultPolicy *serving.Policy
+	q               *dao.Query
+	adultPolicy     *serving.Policy
+	unlinkedTimeout time.Duration
 }
 
 type Params struct {

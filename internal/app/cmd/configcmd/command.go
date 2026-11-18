@@ -27,7 +27,6 @@ func New(p Params) (Result, error) {
 				Name:  "show",
 				Usage: "Shows all available configuration parameters and resolved values",
 				Action: func(ctx *cli.Context) error {
-					p.Logger.Debugw("resolved config", "cfg", p.Config)
 					tw := table.NewWriter()
 					tw.SetOutputMirror(ctx.App.Writer)
 					tw.AppendHeader(table.Row{"path", "Type", "Value", "Default", "From"})

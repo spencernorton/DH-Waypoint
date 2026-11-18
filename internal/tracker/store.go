@@ -335,7 +335,7 @@ func (s *Store) Upload(ctx context.Context, torrentFile []byte) (UploadResult, e
 			Source:   UploadSource,
 			InfoHash: protocol.InfoHashV1(hash),
 			Name:     info.BestName(),
-			Size:     uint(info.TotalLength()),
+			Size:     uint(realInfoSize(info)),
 			Private:  private,
 		}); err != nil {
 			_ = ai.Close()
@@ -369,7 +369,7 @@ func (s *Store) Upload(ctx context.Context, torrentFile []byte) (UploadResult, e
 	return UploadResult{
 		InfoHash: hash.String(),
 		Name:     info.BestName(),
-		Size:     info.TotalLength(),
+		Size:     realInfoSize(info),
 		Private:  private,
 		Existed:  existed,
 	}, nil
@@ -383,6 +383,24 @@ var (
 // recordFiles mirrors the crawler's file-inventory persistence for
 // an uploaded torrent (the importer alone leaves files_status at
 // no-info).
+func realInfoSize(info metainfo.Info) int64 {
+	if len(info.Files) == 0 {
+		return info.TotalLength()
+	}
+	var sum int64
+	for _, f := range info.Files {
+		parts := f.Path
+		if len(f.PathUtf8) > 0 {
+			parts = f.PathUtf8
+		}
+		if model.IsPaddingFile(f.Attr, parts) {
+			continue
+		}
+		sum += f.Length
+	}
+	return sum
+}
+
 func (s *Store) recordFiles(ctx context.Context, hash protocol.ID, info metainfo.Info) error {
 	p, err := s.pool.Get()
 	if err != nil {
@@ -390,28 +408,37 @@ func (s *Store) recordFiles(ctx context.Context, hash protocol.ID, info metainfo
 	}
 	status := model.FilesStatusSingle
 	var filesCount *uint
-	if len(info.Files) > 0 {
-		status = model.FilesStatusMulti
-		n := uint(len(info.Files))
-		filesCount = &n
-	}
+	realSize := realInfoSize(info)
 	tx, err := p.Begin(ctx)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	for i, f := range info.Files {
-		if _, err := tx.Exec(ctx, `
-			INSERT INTO torrent_files(info_hash, index, path, size, created_at, updated_at)
-			VALUES($1,$2,$3,$4, clock_timestamp(), clock_timestamp())
-			ON CONFLICT DO NOTHING`, hash.Bytes(), i, f.DisplayPath(&info), f.Length); err != nil {
-			return err
+	if len(info.Files) > 0 {
+		status = model.FilesStatusMulti
+		var n uint
+		for i, f := range info.Files {
+			parts := f.Path
+			if len(f.PathUtf8) > 0 {
+				parts = f.PathUtf8
+			}
+			if model.IsPaddingFile(f.Attr, parts) {
+				continue
+			}
+			n++
+			if _, err := tx.Exec(ctx, `
+				INSERT INTO torrent_files(info_hash, index, path, size, created_at, updated_at)
+				VALUES($1,$2,$3,$4, clock_timestamp(), clock_timestamp())
+				ON CONFLICT DO NOTHING`, hash.Bytes(), i, f.DisplayPath(&info), f.Length); err != nil {
+				return err
+			}
 		}
+		filesCount = &n
 	}
 	// A hash stored earlier without its metadata takes the real size, and
 	// stays private once either side says so.
 	if _, err := tx.Exec(ctx, `UPDATE torrents SET size=$4, private=private OR $5, files_status=$2, files_count=$3, updated_at=clock_timestamp() WHERE info_hash=$1`,
-		hash.Bytes(), string(status), filesCount, info.TotalLength(), info.Private != nil && *info.Private); err != nil {
+		hash.Bytes(), string(status), filesCount, realSize, info.Private != nil && *info.Private); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)

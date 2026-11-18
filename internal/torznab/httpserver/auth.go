@@ -18,7 +18,10 @@ package httpserver
 
 import (
 	"encoding/xml"
+	"log"
 	"net/http"
+	"sync/atomic"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/spencernorton/DH-Waypoint/internal/torznab"
@@ -37,6 +40,8 @@ const headerAPIKey = "X-Api-Key"
 // key's name. Read by handler.handleRequest to attach the key_name
 // label to per-request metrics. Empty = open-mode (no key configured).
 const ctxKeyAPIKeyName = "torznab_api_key_name"
+
+var lastTorznabAuthWarnUnix atomic.Int64
 
 // requireAPIKey gates every torznab request against the configured key
 // set. Skipped entirely when no key is configured (operator opted in
@@ -69,6 +74,11 @@ func (h handler) requireAPIKey(ctx *gin.Context) bool {
 	// in its UI ("Indexer test failed: Incorrect user credentials").
 	// We write the 401 response directly rather than via writeXML
 	// because writeXML force-sets status 200 (it's the success path).
+	nowUnix := time.Now().Unix()
+	prevUnix := lastTorznabAuthWarnUnix.Load()
+	if nowUnix-prevUnix >= 60 && lastTorznabAuthWarnUnix.CompareAndSwap(prevUnix, nowUnix) {
+		log.Printf("WARN torznab: rejected unauthorized request from %s (rate-limited 1/min)", ctx.ClientIP())
+	}
 	body, _ := xml.Marshal(torznab.Error{
 		Code:        100,
 		Description: "Incorrect user credentials",

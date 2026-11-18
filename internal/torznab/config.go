@@ -3,6 +3,7 @@ package torznab
 import (
 	"crypto/subtle"
 	"strings"
+	"time"
 
 	"github.com/spencernorton/DH-Waypoint/internal/slice"
 )
@@ -67,6 +68,17 @@ type Config struct {
 	//
 	// Set via env TORZNAB_ZERO_SEEDERS_AUTHORITATIVE_ONLY.
 	ZeroSeedersAuthoritativeOnly bool `yaml:"zero_seeders_authoritative_only"`
+
+	// DefaultOrder controls default free-text query ordering on the built-in
+	// default profile when not overridden per profile ("newest" or "relevance").
+	DefaultOrder string `yaml:"default_order"`
+
+	// RequestTimeout bounds each HTTP /torznab search when the incoming request
+	// carries no deadline. Default 30s.
+	RequestTimeout time.Duration `yaml:"request_timeout"`
+
+	// MaxOffset caps deep pagination offsets on /torznab requests. Default 10000.
+	MaxOffset uint `yaml:"max_offset"`
 }
 
 // NamedAPIKey is a parsed entry from Config.APIKeys.
@@ -172,6 +184,9 @@ func NewDefaultConfig() Config {
 		HideZeroSeeders:              true,
 		HideUnknownSeedersAgeDays:    7,
 		ZeroSeedersAuthoritativeOnly: true,
+		DefaultOrder:                 "newest",
+		RequestTimeout:               30 * time.Second,
+		MaxOffset:                    10000,
 	}
 }
 

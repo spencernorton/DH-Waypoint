@@ -3,6 +3,7 @@ package search
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"strings"
 	"time"
 	"unicode"
@@ -53,7 +54,12 @@ func (s search) TorrentContentByIdentifiersWithUnlinked(
 	}
 
 	db := s.q.TorrentContent.WithContext(ctx).UnderlyingDB().Session(&gorm.Session{NewDB: true})
+	fallbackTimeout := s.unlinkedTimeout
+	if fallbackTimeout == 0 {
+		fallbackTimeout = ResolveUnlinkedFallbackTimeout()
+	}
 	err = db.Transaction(func(tx *gorm.DB) error {
+		_ = tx.Exec("SET LOCAL max_parallel_workers_per_gather = 0").Error
 		snapshot := s
 		snapshot.q = dao.Use(tx)
 
@@ -84,9 +90,32 @@ func (s search) TorrentContentByIdentifiersWithUnlinked(
 			return nil
 		}
 
-		contents, contentErr := snapshot.resolveCanonicalContents(ctx, tx, keys)
+		unlinkedCtx := ctx
+		var cancelUnlinked context.CancelFunc
+		useSavepoint := fallbackTimeout > 0 && ctx.Err() == nil
+		if useSavepoint {
+			if spErr := tx.Exec("SAVEPOINT unlinked_fallback").Error; spErr != nil {
+				useSavepoint = false
+			} else {
+				unlinkedCtx, cancelUnlinked = context.WithTimeout(ctx, fallbackTimeout)
+				defer cancelUnlinked()
+			}
+		}
+		handleUnlinkedErr := func(uErr error, partial []TorrentContentResultItem) error {
+			if useSavepoint && ctx.Err() == nil && (errors.Is(uErr, context.DeadlineExceeded) || unlinkedCtx.Err() != nil || strings.Contains(uErr.Error(), "57014") || strings.Contains(uErr.Error(), "canceling statement")) {
+				_ = tx.Exec("ROLLBACK TO SAVEPOINT unlinked_fallback").Error
+				unlinkedTimeoutCounter.Inc()
+				if len(partial) > 0 {
+					result.Items = append(result.Items, partial...)
+				}
+				return nil
+			}
+			return uErr
+		}
+
+		contents, contentErr := snapshot.resolveCanonicalContents(unlinkedCtx, tx, keys)
 		if contentErr != nil {
-			return contentErr
+			return handleUnlinkedErr(contentErr, nil)
 		}
 		if len(contents) == 0 {
 			return nil
@@ -108,9 +137,9 @@ func (s search) TorrentContentByIdentifiersWithUnlinked(
 				query.WithTotalCount(true),
 				query.WithAggregationBudget(0),
 			)
-			linkedCountRes, countErr := snapshot.torrentContent(ctx, true, countOpts...)
+			linkedCountRes, countErr := snapshot.torrentContent(unlinkedCtx, true, countOpts...)
 			if countErr != nil {
-				return countErr
+				return handleUnlinkedErr(countErr, nil)
 			}
 			if offset > linkedCountRes.TotalCount {
 				unlinkedSkip = offset - linkedCountRes.TotalCount
@@ -155,16 +184,16 @@ func (s search) TorrentContentByIdentifiersWithUnlinked(
 				query.Limit(batchSize),
 				query.Offset(sqlOffset),
 			)
-			page, pageErr := snapshot.torrentContent(ctx, true, pageOpts...)
+			page, pageErr := snapshot.torrentContent(unlinkedCtx, true, pageOpts...)
 			if pageErr != nil {
-				return pageErr
+				return handleUnlinkedErr(pageErr, matched)
 			}
 			if len(page.Items) == 0 {
 				break
 			}
 
-			if hydrateErr := hydrateMissingTorrentNames(ctx, tx, page.Items); hydrateErr != nil {
-				return hydrateErr
+			if hydrateErr := hydrateMissingTorrentNames(unlinkedCtx, tx, page.Items); hydrateErr != nil {
+				return handleUnlinkedErr(hydrateErr, matched)
 			}
 
 			for _, item := range page.Items {

@@ -28,6 +28,12 @@ type LivenessMetrics interface {
 	TorznabExcluded()
 }
 
+// LivenessErrorMetrics is an optional extension implemented by *liveness.Metrics
+// so dead-set lookup failures are observable without breaking minimal mocks.
+type LivenessErrorMetrics interface {
+	TorznabLookupError()
+}
+
 // VerdictsFilter is the optional phase-B verdict-ledger reader
 // (docs/design/verdict-ledger.md §4): implemented in production by
 // *verdicts.Store; nil disables the consult entirely.
@@ -190,33 +196,72 @@ func (a Adapter) Search(ctx context.Context, req torznab.SearchRequest) (torznab
 
 	options = append(options, reqOptions...)
 
-	var searchResult search.TorrentContentResult
-	var searchErr error
-	switch {
-	case resolveWithUnlinked:
-		limit, offset := requestPagination(req)
-		searchResult, searchErr = unlinkedSearch.TorrentContentByIdentifiersWithUnlinked(ctx, identifiers, limit, offset, options...)
-	case resolveIdentifiers:
-		searchResult, searchErr = identifierSearch.TorrentContentByIdentifiers(ctx, identifiers, options...)
-	default:
-		searchResult, searchErr = a.search.TorrentContent(ctx, options...)
+	limit, baseOffset := requestPagination(req)
+	hasPostFilters := a.liveness != nil || a.verdicts != nil || !a.freshness.IsZero()
+	fetchFilteredPage := func(pageOffset uint) (search.TorrentContentResult, int, error) {
+		pageReq := req
+		if pageOffset != baseOffset {
+			pageReq.Offset = model.NewNullUint(pageOffset)
+		}
+		pageOptions := options
+		if pageOffset != baseOffset {
+			rebuilt, rErr := searchRequestToQueryOptionsWithIdentifiers(pageReq, !(resolveWithUnlinked || resolveIdentifiers))
+			if rErr != nil {
+				return search.TorrentContentResult{}, 0, rErr
+			}
+			pageOptions = append([]query.Option{search.TorrentContentDefaultOption(), query.WithTotalCount(false), query.Where(search.LegacyTorrentIdentityCriteria("torrent_contents"))}, rebuilt...)
+		}
+		var rawRes search.TorrentContentResult
+		var sErr error
+		switch {
+		case resolveWithUnlinked:
+			rawRes, sErr = unlinkedSearch.TorrentContentByIdentifiersWithUnlinked(ctx, identifiers, limit, pageOffset, pageOptions...)
+		case resolveIdentifiers:
+			rawRes, sErr = identifierSearch.TorrentContentByIdentifiers(ctx, identifiers, pageOptions...)
+		default:
+			rawRes, sErr = a.search.TorrentContent(ctx, pageOptions...)
+		}
+		if sErr != nil {
+			return search.TorrentContentResult{}, 0, sErr
+		}
+		rawCount := len(rawRes.Items)
+		if a.liveness != nil || a.verdicts != nil {
+			filtered, ferr := a.applyLivenessFilter(ctx, rawRes)
+			if ferr == nil {
+				rawRes = filtered
+			} else if errSink, ok := a.livenessMetrics.(LivenessErrorMetrics); ok {
+				errSink.TorznabLookupError()
+			}
+		}
+		if !a.freshness.IsZero() {
+			rawRes = a.applyFreshnessFilter(rawRes)
+		}
+		return rawRes, rawCount, nil
 	}
+
+	searchResult, rawCount, searchErr := fetchFilteredPage(baseOffset)
 	if searchErr != nil {
 		return torznab.SearchResult{}, searchErr
 	}
-
-	if a.liveness != nil || a.verdicts != nil {
-		filtered, ferr := a.applyLivenessFilter(ctx, searchResult)
-		if ferr == nil {
-			searchResult = filtered
+	// When post-SQL filters drop rows from a full SQL page, fetch up to 2 bounded
+	// follow-up pages so *arr consumers do not see prematurely empty pages.
+	if hasPostFilters && limit > 0 && rawCount == int(limit) && len(searchResult.Items) < int(limit) {
+		nextOffset := baseOffset + limit
+		for topUp := 0; topUp < 2 && len(searchResult.Items) < int(limit); topUp++ {
+			moreRes, moreRaw, moreErr := fetchFilteredPage(nextOffset)
+			if moreErr != nil || moreRaw == 0 {
+				break
+			}
+			needed := int(limit) - len(searchResult.Items)
+			if len(moreRes.Items) > needed {
+				moreRes.Items = moreRes.Items[:needed]
+			}
+			searchResult.Items = append(searchResult.Items, moreRes.Items...)
+			if moreRaw < int(limit) {
+				break
+			}
+			nextOffset += limit
 		}
-		// On filter error fall through to the unfiltered response.
-		// Availability of search dominates; a dead-set lookup miss
-		// is not a reason to fail the request.
-	}
-
-	if !a.freshness.IsZero() {
-		searchResult = a.applyFreshnessFilter(searchResult)
 	}
 
 	if a.reranker != nil {
