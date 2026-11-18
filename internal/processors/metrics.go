@@ -15,6 +15,9 @@ type Metrics struct {
 	registry           *prometheus.GaugeVec
 	publicationPending prometheus.Gauge
 	publicationOldest  prometheus.Gauge
+	strictFallback     *prometheus.CounterVec
+	policyExhausted    *prometheus.CounterVec
+	typeDisagreement   *prometheus.CounterVec
 	mu                 sync.Mutex
 	seen               map[string][]string
 }
@@ -30,11 +33,14 @@ func NewMetrics() *Metrics {
 		prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "dh_waypoint_processors_registry_info", Help: "Active registry execution versions"}, []string{"processor_id", "generation", "version", "model_version", "policy_version"}),
 		prometheus.NewGauge(prometheus.GaugeOpts{Name: "dh_waypoint_publication_pending_admission", Help: "Source changes awaiting bounded processor admission"}),
 		prometheus.NewGauge(prometheus.GaugeOpts{Name: "dh_waypoint_publication_oldest_pending_admission_seconds", Help: "Age of oldest source change awaiting processor admission"}),
+		prometheus.NewCounterVec(prometheus.CounterOpts{Name: "dh_waypoint_processors_strict_fallback_total", Help: "Endpoints temporarily downgraded to strict v1 wire compatibility"}, []string{"endpoint"}),
+		prometheus.NewCounterVec(prometheus.CounterOpts{Name: "dh_waypoint_processors_policy_retry_exhausted_total", Help: "Policy-step jobs parked after exhausting the retry window"}, []string{"processor_id"}),
+		prometheus.NewCounterVec(prometheus.CounterOpts{Name: "dh_waypoint_processors_type_disagreement_total", Help: "Completed proposals whose content_type differed from core classification"}, []string{"core_type", "processor_type"}),
 		sync.Mutex{}, map[string][]string{},
 	}
 }
 func (m *Metrics) Collectors() []prometheus.Collector {
-	return []prometheus.Collector{m.attempts, m.outcomes, m.wait, m.duration, m.admission, m.jobs, m.registry, m.publicationPending, m.publicationOldest}
+	return []prometheus.Collector{m.attempts, m.outcomes, m.wait, m.duration, m.admission, m.jobs, m.registry, m.publicationPending, m.publicationOldest, m.strictFallback, m.policyExhausted, m.typeDisagreement}
 }
 
 func (m *Metrics) note(id, generation string) {

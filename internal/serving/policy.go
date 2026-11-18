@@ -16,6 +16,7 @@ import (
 const PublicationReviewContract = "required-publication-review-v1"
 const PublicationReviewPolicy = "core-publication-policy-v1"
 const PayloadEvidenceContract = "piece-bound-media-format-v1"
+const PayloadEvidenceContractV2 = "piece-bound-media-format-v2"
 
 // Config applies to consumer APIs, not processing or operator recovery reads.
 type Config struct {
@@ -24,6 +25,7 @@ type Config struct {
 	RequiredProcessor                     string `yaml:"required_processor"`
 	RequiredProcessorArtifactDigest       string `yaml:"required_processor_artifact_digest"`
 	RequiredPayloadVerifierArtifactDigest string `yaml:"required_payload_verifier_artifact_digest"`
+	PreviousPayloadVerifierArtifactDigest string `yaml:"previous_payload_verifier_artifact_digest"`
 }
 
 // Policy retains source-complete quarantine exclusion and optionally excludes
@@ -34,6 +36,7 @@ type Policy struct {
 	requiredProcessor       string
 	requiredArtifact        string
 	requiredPayloadArtifact string
+	previousPayloadArtifact string
 	strongPattern           string
 	candidateNeedles        []string
 	mediaExtensions         []string
@@ -54,6 +57,9 @@ func NewPolicy(cfg Config, strongKeywords, mediaExtensions []string, names ...*n
 	if cfg.RequiredPayloadVerifierArtifactDigest != "" && (cfg.RequiredProcessor == "" || !regexp.MustCompile(`^[a-f0-9]{64}$`).MatchString(cfg.RequiredPayloadVerifierArtifactDigest)) {
 		return nil, fmt.Errorf("payload evidence needs a required processor and pinned verifier artifact digest")
 	}
+	if cfg.PreviousPayloadVerifierArtifactDigest != "" && (cfg.RequiredPayloadVerifierArtifactDigest == "" || !regexp.MustCompile(`^[a-f0-9]{64}$`).MatchString(cfg.PreviousPayloadVerifierArtifactDigest)) {
+		return nil, fmt.Errorf("previous payload verifier artifact digest needs an active verifier digest and 64-hex pin")
+	}
 	if len(names) > 1 {
 		return nil, fmt.Errorf("serving name policy must be a single instance")
 	}
@@ -72,6 +78,7 @@ func NewPolicy(cfg Config, strongKeywords, mediaExtensions []string, names ...*n
 	p := &Policy{processorExclusions: cfg.ProcessorExclusions, excludeAdult: cfg.ExcludeAdult, strongPattern: pattern, mediaExtensions: append([]string(nil), mediaExtensions...)}
 	p.requiredProcessor, p.requiredArtifact = cfg.RequiredProcessor, cfg.RequiredProcessorArtifactDigest
 	p.requiredPayloadArtifact = cfg.RequiredPayloadVerifierArtifactDigest
+	p.previousPayloadArtifact = cfg.PreviousPayloadVerifierArtifactDigest
 	p.candidateNeedles = candidateForPattern(r.String()).needles
 	if len(names) == 1 {
 		p.names = names[0]
@@ -136,12 +143,21 @@ func (p *Policy) TorrentCondition(table string) clause.Expr {
 		args = append(args, p.requiredProcessor, PublicationReviewPolicy, p.requiredArtifact)
 	}
 	if p.requiredPayloadArtifact != "" {
-		sql += ` AND ` + root + ` IN (
+		if p.previousPayloadArtifact != "" && p.previousPayloadArtifact != p.requiredPayloadArtifact {
+			sql += ` AND ` + root + ` IN (
  SELECT payload.info_hash FROM processor_payload_reviews payload
  JOIN processor_publication_sources payload_source ON payload_source.info_hash=payload.info_hash
  WHERE payload.approved AND payload.source_revision=payload_source.revision
- AND payload.verifier_artifact=? AND payload.policy=? AND payload.expires_at>CURRENT_TIMESTAMP)`
-		args = append(args, p.requiredPayloadArtifact, PayloadEvidenceContract)
+ AND payload.verifier_artifact IN (?,?) AND payload.policy IN (?,?) AND payload.expires_at>CURRENT_TIMESTAMP)`
+			args = append(args, p.requiredPayloadArtifact, p.previousPayloadArtifact, PayloadEvidenceContract, PayloadEvidenceContractV2)
+		} else {
+			sql += ` AND ` + root + ` IN (
+ SELECT payload.info_hash FROM processor_payload_reviews payload
+ JOIN processor_publication_sources payload_source ON payload_source.info_hash=payload.info_hash
+ WHERE payload.approved AND payload.source_revision=payload_source.revision
+ AND payload.verifier_artifact=? AND payload.policy IN (?,?) AND payload.expires_at>CURRENT_TIMESTAMP)`
+			args = append(args, p.requiredPayloadArtifact, PayloadEvidenceContract, PayloadEvidenceContractV2)
+		}
 	}
 	// Authentic source snapshots were added with the complete recovery producer.
 	// Do not silently elevate legacy marker-only records into consumer authority.

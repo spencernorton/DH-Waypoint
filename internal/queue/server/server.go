@@ -195,24 +195,19 @@ func (h *serverHandler) handleJob(
 	conds ...gen.Condition,
 ) (jobID string, processed bool, err error) {
 	err = h.query.Transaction(func(tx *dao.Query) error {
-		job, findErr := tx.QueueJob.WithContext(ctx).Where(
-			append(
-				conds,
-				h.query.QueueJob.Queue.Eq(h.Queue),
-				h.query.QueueJob.Status.In(
-					string(model.QueueJobStatusPending),
-					string(model.QueueJobStatusRetry),
-				),
-				h.query.QueueJob.RunAfter.Lte(time.Now()),
-			)...,
-		).Order(
-			h.query.QueueJob.Status.Eq(string(model.QueueJobStatusRetry)),
-			h.query.QueueJob.Priority,
-			h.query.QueueJob.RunAfter,
-		).Clauses(clause.Locking{
-			Strength: "UPDATE",
-			Options:  "SKIP LOCKED",
-		}).First()
+		// Status literals allow PostgreSQL to prove the partial predicate and
+		// walk queue_jobs_pick_idx in order without sorting waiting jobs.
+		var picked model.QueueJob
+		findErr := tx.QueueJob.WithContext(ctx).
+			Where(append(conds, h.query.QueueJob.Queue.Eq(h.Queue), h.query.QueueJob.RunAfter.Lte(time.Now()))...).
+			UnderlyingDB().
+			Where("queue_jobs.status IN ('pending', 'retry')").
+			Order("(queue_jobs.status = 'retry'), queue_jobs.priority, queue_jobs.run_after").
+			Clauses(clause.Locking{
+				Strength: "UPDATE",
+				Options:  "SKIP LOCKED",
+			}).First(&picked).Error
+		job := &picked
 		if findErr != nil {
 			if errors.Is(findErr, gorm.ErrRecordNotFound) {
 				return nil

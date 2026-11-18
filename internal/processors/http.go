@@ -280,7 +280,13 @@ func (s *Store) Apply(e *gin.Engine) error {
 			apiError(c, ErrControl)
 			return
 		}
-		page, err := s.Feedback(c.Request.Context(), c.Query("processor_id"), after, limit, c.Query("tier"), c.Query("consumer_id"))
+		consumerID := c.Query("consumer_id")
+		var page v1.FeedbackPage
+		if consumerID == "" && c.Query("subscribe") != "true" {
+			page, err = s.FeedbackReadOnly(c.Request.Context(), c.Query("processor_id"), after, limit, c.Query("tier"))
+		} else {
+			page, err = s.Feedback(c.Request.Context(), c.Query("processor_id"), after, limit, c.Query("tier"), consumerID)
+		}
 		if err != nil {
 			apiError(c, err)
 			return

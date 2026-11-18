@@ -161,6 +161,9 @@ func (s *Store) apply(ctx context.Context, tx pgx.Tx, l Lease, src source) error
 			continue
 		}
 		appliedAny := false
+		if p.ContentType != "" && tc.ContentType.Valid && string(tc.ContentType.ContentType) != p.ContentType {
+			s.metrics.typeDisagreement.WithLabelValues(string(tc.ContentType.ContentType), p.ContentType).Inc()
+		}
 		if p.ContentType != "" && !tc.ContentType.Valid && src.HintIsEmpty() {
 			// Type output cannot overwrite any core or operator type. The normal
 			// parser supplies release details; a plugin cannot invent them.

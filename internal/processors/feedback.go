@@ -339,8 +339,16 @@ func (s *Store) RecordFeedback(ctx context.Context, w v1.FeedbackWrite) ([]v1.Fe
 }
 
 func (s *Store) Feedback(ctx context.Context, processorID string, afterSeq int64, limit int, tier string, consumerID string) (v1.FeedbackPage, error) {
+	return s.feedback(ctx, processorID, afterSeq, limit, tier, consumerID, true)
+}
+
+func (s *Store) FeedbackReadOnly(ctx context.Context, processorID string, afterSeq int64, limit int, tier string) (v1.FeedbackPage, error) {
+	return s.feedback(ctx, processorID, afterSeq, limit, tier, "", false)
+}
+
+func (s *Store) feedback(ctx context.Context, processorID string, afterSeq int64, limit int, tier string, consumerID string, registerConsumer bool) (v1.FeedbackPage, error) {
 	out := v1.FeedbackPage{Contract: v1.FeedbackContract, Items: []v1.FeedbackEvent{}}
-	if limit < 1 || limit > 100 || afterSeq < 0 {
+	if limit < 1 || limit > 100 || afterSeq < 0 || len(processorID) > 96 || len(consumerID) > 96 {
 		return out, ErrControl
 	}
 	if tier != "" && !slices.Contains(v1.FeedbackTiers, tier) {
@@ -350,7 +358,7 @@ func (s *Store) Feedback(ctx context.Context, processorID string, afterSeq int64
 	if err != nil {
 		return out, err
 	}
-	if processorID != "" {
+	if processorID != "" && registerConsumer {
 		// A pull registers its consumer: automatic events are stored only for a
 		// processor that has one, so the first pull must not need an ack.
 		consumer := consumerID
