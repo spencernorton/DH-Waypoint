@@ -284,12 +284,12 @@ func createMaskedValueLabel(path string, value interface{}) string {
 			if v.String() == "" {
 				return "''"
 			}
-			return "'***'"
+			return "[redacted]"
 		}
 		if !v.IsValid() || v.IsZero() {
 			return createValueLabel(value)
 		}
-		return "'***'"
+		return "[redacted]"
 	}
 	if v.IsValid() && v.Kind() == reflect.String {
 		redacted := redactURLCredentials(v.String())

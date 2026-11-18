@@ -39,9 +39,9 @@ func TestConfigShowMasksSecretPathsAndURLPasswordsPreservingRuntimeValues(t *tes
 	require.Equal(t, synKey, typed.APIKey, "runtime config keeps real value")
 	require.Equal(t, synPass, typed.Password)
 
-	require.Equal(t, "'***'", node.ChildMap["api_key"].ValueLabel)
+	require.Equal(t, "[redacted]", node.ChildMap["api_key"].ValueLabel)
 	require.Equal(t, "''", node.ChildMap["api_keys"].ValueLabel, "unset field remains distinguishable from set field")
-	require.Equal(t, "'***'", node.ChildMap["password"].ValueLabel)
+	require.Equal(t, "[redacted]", node.ChildMap["password"].ValueLabel)
 	require.NotContains(t, node.ChildMap["database"].DefaultLabel, synDBPass)
 	require.Contains(t, node.ChildMap["database"].DefaultLabel, "postgres://app:***@")
 }
