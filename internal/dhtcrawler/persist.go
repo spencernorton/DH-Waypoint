@@ -105,16 +105,24 @@ func (c *crawler) runPersistTorrents(ctx context.Context) {
 			}
 
 			if persistErr := c.dao.Transaction(func(tx *dao.Query) error {
-				if err := tx.WithContext(ctx).Torrent.Clauses(clause.OnConflict{
+				// A hash stored earlier without its metadata (an import) takes the
+				// real size, and stays private once either side says so. gen refuses
+				// any expression in ON CONFLICT, so this one statement uses the
+				// underlying gorm handle; the expression is a constant.
+				if err := tx.WithContext(ctx).Torrent.UnderlyingDB().Clauses(clause.OnConflict{
 					Columns: []clause.Column{{Name: string(c.dao.Torrent.InfoHash.ColumnName())}},
-					DoUpdates: clause.AssignmentColumns([]string{
+					DoUpdates: append(clause.AssignmentColumns([]string{
 						string(c.dao.Torrent.Name.ColumnName()),
+						string(c.dao.Torrent.Size.ColumnName()),
 						string(c.dao.Torrent.InfoHashV2.ColumnName()),
 						string(c.dao.Torrent.FilesStatus.ColumnName()),
 						string(c.dao.Torrent.FilesCount.ColumnName()),
 						string(c.dao.Torrent.UpdatedAt.ColumnName()),
+					}), clause.Assignment{
+						Column: clause.Column{Name: string(c.dao.Torrent.Private.ColumnName())},
+						Value:  clause.Expr{SQL: "torrents.private OR excluded.private"},
 					}),
-				}).CreateInBatches(torrentsToPersist, 100); err != nil {
+				}).CreateInBatches(torrentsToPersist, 100).Error; err != nil {
 					return err
 				}
 				if len(torrentFilesToPersist) > 0 {
