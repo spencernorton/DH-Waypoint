@@ -69,7 +69,13 @@ func newRequester(ctx context.Context, config Config, logger *zap.SugaredLogger)
 		return nil, fmt.Errorf("configured TMDB API key rejected: %w", err)
 	}
 
-	return r, err
+	if err != nil {
+		// Only a rejected key is final. Any other failure may pass, so the
+		// requester is kept and later calls reach TMDB again.
+		logger.Warnw("TMDB key check did not complete, continuing without it", "error", err)
+	}
+
+	return r, nil
 }
 
 func newRestyClient(config Config, logger *zap.SugaredLogger) *resty.Client {
