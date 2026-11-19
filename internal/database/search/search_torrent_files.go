@@ -23,6 +23,13 @@ func (s search) TorrentFiles(ctx context.Context, options ...query.Option) (Torr
 		model.TableNameTorrentFile,
 		func(ctx context.Context, q *dao.Query) query.SubQuery {
 			base := q.TorrentFile.WithContext(ctx).ReadDB()
+			// Bundle-first dual-read: the effective view exposes legacy-shaped
+			// rows under the torrent_files alias every criterion expects.
+			base = base.Scopes(func(d gen.Dao) gen.Dao {
+				do := d.(*gen.DO)
+				do.ReplaceDB(do.UnderlyingDB().Table("torrent_files_effective AS torrent_files"))
+				return d
+			})
 			if s.adultPolicy != nil {
 				predicate := s.adultPolicy.TorrentCondition(model.TableNameTorrentFile)
 				base = base.Scopes(func(d gen.Dao) gen.Dao {

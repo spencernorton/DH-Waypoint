@@ -21,6 +21,7 @@ import (
 	"github.com/spencernorton/DH-Waypoint/internal/app/cmd/reprocesscmd"
 	"github.com/spencernorton/DH-Waypoint/internal/app/cmd/searchcmd"
 	"github.com/spencernorton/DH-Waypoint/internal/app/cmd/setupcmd"
+	"github.com/spencernorton/DH-Waypoint/internal/app/cmd/storagecmd"
 	"github.com/spencernorton/DH-Waypoint/internal/app/cmd/torrentcmd"
 	"github.com/spencernorton/DH-Waypoint/internal/app/cmd/workercmd"
 	"github.com/spencernorton/DH-Waypoint/internal/attribution"
@@ -145,6 +146,7 @@ func New() fx.Option {
 			searchcmd.New,
 			processcmd.New,
 			setupcmd.New,
+			storagecmd.New,
 			torrentcmd.New,
 			policyshadowcmd.New,
 			workercmd.New,

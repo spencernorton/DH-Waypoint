@@ -90,9 +90,41 @@ type Snapshot struct {
 
 // Include every raw-torrent cascading relation. Retained external evidence,
 // canonical labels, metadata, quarantines, liveness and audit rows are untouched.
-var tables = []string{"torrents", "torrent_sources", "torrents_torrent_sources", "torrent_files", "torrent_pieces", "torrent_hints", "torrent_tags", "torrent_contents", "torrent_tracker_seeds", "junkpurge_sync_claims"}
+var tables = []string{"torrents", "torrent_sources", "torrents_torrent_sources", "torrent_files", "torrent_file_bundles", "torrent_pieces", "torrent_hints", "torrent_tags", "torrent_contents", "torrent_tracker_seeds", "junkpurge_sync_claims"}
 
 type payload map[string]json.RawMessage
+
+// existingTables filters the snapshot table list to relations present in the
+// current schema, so recovery still operates after newer independent
+// migrations (such as the bundle sidecar) have been rolled back. A snapshot
+// taken at another schema level then fails the length/schema gates closed.
+func existingTables(ctx context.Context, tx pgx.Tx) ([]string, error) {
+	rows, err := tx.Query(ctx, `select c.relname from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname=current_schema() and c.relkind in ('r','p') and c.relname=any($1)`, tables)
+	if err != nil {
+		return nil, err
+	}
+	present := map[string]bool{}
+	for rows.Next() {
+		var name string
+		if err = rows.Scan(&name); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		present[name] = true
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	rows.Close()
+	out := make([]string, 0, len(tables))
+	for _, table := range tables {
+		if present[table] {
+			out = append(out, table)
+		}
+	}
+	return out, nil
+}
 
 func validateNow(now time.Time) error {
 	if now.IsZero() {
@@ -233,12 +265,16 @@ func (s *Store) removeTx(ctx context.Context, tx pgx.Tx, hash []byte, mechanism,
 	if err = s.protected(ctx, tx, hash, true); err != nil {
 		return out, err
 	}
-	if err = checkCascade(ctx, tx); err != nil {
+	activeTables, err := existingTables(ctx, tx)
+	if err != nil {
+		return out, err
+	}
+	if err = checkCascade(ctx, tx, activeTables); err != nil {
 		return out, err
 	}
 	p := payload{}
 	var size, rowCount int64
-	for _, table := range tables {
+	for _, table := range activeTables {
 		where := `info_hash=$1`
 		if table == "torrent_sources" {
 			where = `key in(select source from torrents_torrent_sources where info_hash=$1)`
@@ -278,7 +314,7 @@ func (s *Store) removeTx(ctx context.Context, tx pgx.Tx, hash []byte, mechanism,
 		p[table] = json.RawMessage(b)
 	}
 	var schema []byte
-	if err = tx.QueryRow(ctx, schemaQuery, tables).Scan(&schema); err != nil {
+	if err = tx.QueryRow(ctx, schemaQuery, activeTables).Scan(&schema); err != nil {
 		return out, err
 	}
 	p["_schema"] = schema
@@ -328,9 +364,9 @@ func (s *Store) removeTx(ctx context.Context, tx pgx.Tx, hash []byte, mechanism,
 // Metadata changes invalidate restoration even when names remain compatible.
 const schemaQuery = `select coalesce(jsonb_agg(jsonb_build_object('table',c.relname,'column',a.attname,'type',format_type(a.atttypid,a.atttypmod),'notnull',a.attnotnull,'generated',a.attgenerated,'identity',a.attidentity,'default',pg_get_expr(d.adbin,d.adrelid),'constraints',(select coalesce(jsonb_agg(pg_get_constraintdef(k.oid) order by pg_get_constraintdef(k.oid)), '[]'::jsonb) from pg_constraint k where k.conrelid=c.oid)) order by c.relname,a.attnum),'[]'::jsonb) from pg_class c join pg_namespace n on n.oid=c.relnamespace join pg_attribute a on a.attrelid=c.oid and a.attnum>0 and not a.attisdropped left join pg_attrdef d on d.adrelid=c.oid and d.adnum=a.attnum where n.nspname=current_schema() and c.relname=any($1)`
 
-func checkCascade(ctx context.Context, tx pgx.Tx) error {
+func checkCascade(ctx context.Context, tx pgx.Tx, activeTables []string) error {
 	var unsupported bool
-	err := tx.QueryRow(ctx, `select exists(select 1 from pg_constraint where contype='f' and confrelid='torrents'::regclass and conrelid::regclass::text<>all($1))`, tables).Scan(&unsupported)
+	err := tx.QueryRow(ctx, `select exists(select 1 from pg_constraint where contype='f' and confrelid='torrents'::regclass and conrelid::regclass::text<>all($1))`, activeTables).Scan(&unsupported)
 	if err != nil {
 		return err
 	}
@@ -467,7 +503,11 @@ func (s *Store) Restore(ctx context.Context, id int64, now time.Time) (bool, err
 	if !now.Before(expiry) {
 		return false, ErrExpired
 	}
-	if err = checkCascade(ctx, tx); err != nil {
+	activeTables, err := existingTables(ctx, tx)
+	if err != nil {
+		return false, err
+	}
+	if err = checkCascade(ctx, tx, activeTables); err != nil {
 		return false, err
 	}
 	if err = s.protected(ctx, tx, hash, false); err != nil {
@@ -496,13 +536,25 @@ func (s *Store) Restore(ctx context.Context, id int64, now time.Time) (bool, err
 		return false, ErrConflict
 	}
 	var schema []byte
-	if err = tx.QueryRow(ctx, schemaQuery, tables).Scan(&schema); err != nil {
+	if err = tx.QueryRow(ctx, schemaQuery, activeTables).Scan(&schema); err != nil {
 		return false, err
 	}
 	if !compatibleIdentitySchema(p["_schema"], schema) {
 		return false, ErrConflict
 	}
-	if len(p) != len(tables)+1 {
+	activeSet := make(map[string]bool, len(activeTables))
+	for _, table := range activeTables {
+		activeSet[table] = true
+	}
+	for key, raw := range p {
+		if key == "_schema" || activeSet[key] {
+			continue
+		}
+		// A snapshot from schema >= 81 with zero bundle rows can still restore
+		// if migration 81 was rolled back; non-empty bundles fail closed.
+		if key == "torrent_file_bundles" && isEmptyJSONArray(raw) {
+			continue
+		}
 		return false, ErrConflict
 	}
 	// The built-in banned-keyword list applies before a torrent row is
@@ -511,8 +563,12 @@ func (s *Store) Restore(ctx context.Context, id int64, now time.Time) (bool, err
 	if err = json.Unmarshal(p["torrents"], &torrentRows); err != nil {
 		return false, err
 	}
+	fileRows, err := snapshotFileRows(p)
+	if err != nil {
+		return false, err
+	}
 	for _, row := range torrentRows {
-		banned, err := csamblocklist.SnapshotMatchesBannedKeyword(row, p["torrent_files"])
+		banned, err := csamblocklist.SnapshotMatchesBannedKeyword(row, fileRows)
 		if err != nil {
 			return false, err
 		}
@@ -520,9 +576,13 @@ func (s *Store) Restore(ctx context.Context, id int64, now time.Time) (bool, err
 			return false, ErrBannedKeyword
 		}
 	}
-	for _, table := range tables {
+	for _, table := range activeTables {
 		b, ok := p[table]
 		if !ok {
+			// Pre-migration-81 snapshots carry all file rows in torrent_files.
+			if table == "torrent_file_bundles" {
+				continue
+			}
 			return false, ErrConflict
 		}
 		if err = restoreTable(ctx, tx, table, b); err != nil {
@@ -546,6 +606,41 @@ func (s *Store) Restore(ctx context.Context, id int64, now time.Time) (bool, err
 		return false, err
 	}
 	return true, nil
+}
+
+func isEmptyJSONArray(raw json.RawMessage) bool {
+	var rows []json.RawMessage
+	return json.Unmarshal(raw, &rows) == nil && len(rows) == 0
+}
+
+// snapshotFileRows merges legacy per-file rows and compact bundle paths into
+// the [{"path":...}] shape the banned-keyword snapshot check consumes.
+func snapshotFileRows(p payload) ([]byte, error) {
+	type fileRow struct {
+		Path string `json:"path"`
+	}
+	files := []fileRow{}
+	var legacy []fileRow
+	if raw := p["torrent_files"]; len(raw) > 0 {
+		if err := json.Unmarshal(raw, &legacy); err != nil {
+			return nil, err
+		}
+		files = append(files, legacy...)
+	}
+	var bundles []struct {
+		Paths []string `json:"paths"`
+	}
+	if raw := p["torrent_file_bundles"]; len(raw) > 0 {
+		if err := json.Unmarshal(raw, &bundles); err != nil {
+			return nil, err
+		}
+		for _, b := range bundles {
+			for _, path := range b.Paths {
+				files = append(files, fileRow{Path: path})
+			}
+		}
+	}
+	return json.Marshal(files)
 }
 
 // Filter combines the caller's bloom result with exact, current recovery blocks

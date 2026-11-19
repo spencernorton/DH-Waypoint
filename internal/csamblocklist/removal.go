@@ -41,6 +41,7 @@ var ErrNotBannedKeyword = errors.New("csamblocklist: torrent does not match the 
 var cascadingTables = []string{
 	"junkpurge_sync_claims",
 	"torrent_contents",
+	"torrent_file_bundles",
 	"torrent_files",
 	"torrent_hints",
 	"torrent_pieces",
@@ -84,7 +85,7 @@ var namelessTables = []string{
 // hash, because side tables may be keyed by either.
 var removalSteps = []struct{ table, sql string }{
 	// First, so the publication triggers on the tables below find no torrent
-	// to queue work for. The eight cascading tables go with it.
+	// to queue work for. The nine cascading tables go with it.
 	{"torrents", `delete from torrents where info_hash=any($1)`},
 	// Retired LLM queue: events and applications point at the task, and
 	// migration 61 kept a copy of unfinished tasks.
@@ -211,7 +212,7 @@ func removeStored(ctx context.Context, pool *pgxpool.Pool, hashes [][]byte) (Out
 	// The row lock keeps new child rows out until this ends. The row may be
 	// gone already when only side tables still hold the name.
 	rows, err := tx.Query(ctx, `select t.info_hash_v2,jsonb_build_object('name',t.name,'files_status',t.files_status),
- coalesce((select jsonb_agg(jsonb_build_object('path',f.path)) from torrent_files f where f.info_hash=t.info_hash),'[]')
+ coalesce((select jsonb_agg(jsonb_build_object('path',f.path)) from torrent_files_for_hash(t.info_hash) f),'[]')
  from torrents t where t.info_hash=any($1) for update of t`, hashes)
 	if err != nil {
 		return "", nil, err

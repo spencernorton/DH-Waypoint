@@ -42,7 +42,7 @@ func TestV511GovernanceAndConcurrentIndexesUpDown(t *testing.T) {
 	provider, err := goose.NewProvider(goose.DialectPostgres, db, FS)
 	require.NoError(t, err)
 
-	_, err = provider.Up(ctx)
+	_, err = provider.UpTo(ctx, 79)
 	require.NoError(t, err)
 
 	var validNew int
@@ -102,9 +102,7 @@ func TestV511GovernanceAndConcurrentIndexesUpDown(t *testing.T) {
 	require.Greater(t, revAfter, revBefore, "deleting the final qb_state_observation must bump source_revision")
 
 	// Step down both 00079 and 00078 and verify restoration.
-	_, err = provider.Down(ctx)
-	require.NoError(t, err)
-	_, err = provider.Down(ctx)
+	_, err = provider.DownTo(ctx, 77)
 	require.NoError(t, err)
 	err = db.QueryRowContext(ctx, `SELECT count(*) FROM pg_index i
  JOIN pg_class c ON c.oid=i.indexrelid JOIN pg_namespace n ON n.oid=c.relnamespace

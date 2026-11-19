@@ -16,6 +16,7 @@ import (
 	"github.com/spencernorton/DH-Waypoint/internal/classifier/contentfilter"
 	"github.com/spencernorton/DH-Waypoint/internal/csamblocklist"
 	"github.com/spencernorton/DH-Waypoint/internal/database/dao"
+	"github.com/spencernorton/DH-Waypoint/internal/database/filebundles"
 	"github.com/spencernorton/DH-Waypoint/internal/database/query"
 	"github.com/spencernorton/DH-Waypoint/internal/database/search"
 	"github.com/spencernorton/DH-Waypoint/internal/model"
@@ -111,7 +112,6 @@ func (c processor) Process(ctx context.Context, params MessageParams) error {
 		params.InfoHashes,
 		query.Preload(func(q *dao.Query) []field.RelationField {
 			return []field.RelationField{
-				q.Torrent.Files.RelationField,
 				q.Torrent.Hint.RelationField,
 				q.Torrent.Sources.RelationField,
 			}
@@ -119,6 +119,22 @@ func (c processor) Process(ctx context.Context, params MessageParams) error {
 	)
 	if searchErr != nil {
 		return searchErr
+	}
+	{
+		// Single-file torrents store no file rows, and a caller that already
+		// populated Files (tests, narrow wiring) keeps them untouched.
+		var ptrs []*model.Torrent
+		for i := range searchResult.Torrents {
+			t := &searchResult.Torrents[i]
+			if len(t.Files) == 0 && (t.FilesStatus == model.FilesStatusMulti || t.FilesStatus == model.FilesStatusOverThreshold) {
+				ptrs = append(ptrs, t)
+			}
+		}
+		if len(ptrs) > 0 {
+			if err := filebundles.FillTorrentFilesGORM(ctx, c.dao.Torrent.WithContext(ctx).UnderlyingDB(), ptrs); err != nil {
+				return err
+			}
+		}
 	}
 
 	tcResult, tcErr := c.search.TorrentContent(

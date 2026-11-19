@@ -16,6 +16,7 @@ import (
 	"github.com/spencernorton/DH-Waypoint/internal/verdicts"
 
 	"github.com/spencernorton/DH-Waypoint/internal/database/dao"
+	"github.com/spencernorton/DH-Waypoint/internal/database/filebundles"
 	"github.com/spencernorton/DH-Waypoint/internal/model"
 	"github.com/spencernorton/DH-Waypoint/internal/protocol"
 	"gorm.io/gorm/clause"
@@ -290,8 +291,11 @@ func guardPreservedApplications(ctx context.Context, tx *dao.Query, guards map[p
 		if !matched {
 			return llmwork.ErrHeld
 		}
-		t, err := tx.Torrent.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).Where(tx.Torrent.InfoHash.Eq(hash)).Preload(tx.Torrent.Files, tx.Torrent.Hint).First()
+		t, err := tx.Torrent.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).Where(tx.Torrent.InfoHash.Eq(hash)).Preload(tx.Torrent.Hint).First()
 		if err != nil {
+			return err
+		}
+		if err = db.Exec(`SELECT 1 FROM torrent_file_bundles WHERE info_hash=? FOR SHARE`, hash.Bytes()).Error; err != nil {
 			return err
 		}
 		if err = db.Exec(`SELECT 1 FROM torrent_files WHERE info_hash=? FOR SHARE`, hash.Bytes()).Error; err != nil {
@@ -301,8 +305,11 @@ func guardPreservedApplications(ctx context.Context, tx *dao.Query, guards map[p
 			return err
 		}
 		// Hydrate again after child locks to exclude a concurrent edit of an existing file.
-		t, err = tx.Torrent.WithContext(ctx).Where(tx.Torrent.InfoHash.Eq(hash)).Preload(tx.Torrent.Files, tx.Torrent.Hint).First()
+		t, err = tx.Torrent.WithContext(ctx).Where(tx.Torrent.InfoHash.Eq(hash)).Preload(tx.Torrent.Hint).First()
 		if err != nil {
+			return err
+		}
+		if err = filebundles.FillTorrentFilesGORM(ctx, db, []*model.Torrent{t}); err != nil {
 			return err
 		}
 		if !bytes.Equal(llmwork.SourceDigest(*t), g.SourceDigest) {

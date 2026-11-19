@@ -198,7 +198,13 @@ func current(ctx context.Context, tx pgx.Tx, hash protocol.InfoHash, names ...*n
 		return t, tc, ErrChanged
 	}
 
-	fileRows, err := tx.Query(ctx, `SELECT "index",path,size,extension FROM torrent_files WHERE info_hash=$1 ORDER BY "index",path FOR SHARE`, hash.Bytes())
+	if _, err = tx.Exec(ctx, `SELECT info_hash FROM torrent_file_bundles WHERE info_hash=$1 FOR SHARE`, hash.Bytes()); err != nil {
+		return t, tc, err
+	}
+	if _, err = tx.Exec(ctx, `SELECT info_hash FROM torrent_files WHERE info_hash=$1 FOR SHARE`, hash.Bytes()); err != nil {
+		return t, tc, err
+	}
+	fileRows, err := tx.Query(ctx, `SELECT "index",path,size,extension FROM torrent_files_for_hash($1) ORDER BY "index",path`, hash.Bytes())
 	if err != nil {
 		return t, tc, err
 	}

@@ -223,7 +223,7 @@ func loadInput(ctx context.Context, tx pgx.Tx, hash []byte, now time.Time, cfg A
 	if private {
 		return in, ErrPrivate
 	}
-	rows, err := tx.Query(ctx, `select path,updated_at from torrent_files where info_hash=$1 order by index limit $2`, hash, maxFiles+1)
+	rows, err := tx.Query(ctx, `select path,updated_at from torrent_files_for_hash($1) order by "index" limit $2`, hash, maxFiles+1)
 	if err != nil {
 		return in, err
 	}

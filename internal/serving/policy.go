@@ -227,10 +227,9 @@ func (p *Policy) TorrentCondition(table string) clause.Expr {
   AND (CASE WHEN serving_t.files_status = 'single'
    THEN serving_t.size > 0 AND serving_t.extension IN (` + placeholders + `)
    ELSE COALESCE((SELECT sum(CASE WHEN serving_f.extension IN (` + placeholders + `)
-    THEN serving_f.size ELSE -serving_f.size END) FROM torrent_files serving_f
-    WHERE serving_f.info_hash = serving_t.info_hash), 0) > 0 END)
-  AND (` + nameMatch + ` OR EXISTS (SELECT 1 FROM torrent_files serving_f
-   WHERE serving_f.info_hash = serving_t.info_hash AND ` + fileMatch + `)))`
+    THEN serving_f.size ELSE -serving_f.size END) FROM torrent_files_for_hash(serving_t.info_hash) serving_f), 0) > 0 END)
+  AND (` + nameMatch + ` OR EXISTS (SELECT 1 FROM torrent_files_for_hash(serving_t.info_hash) serving_f
+   WHERE ` + fileMatch + `)))`
 		for range 2 {
 			for _, extension := range p.mediaExtensions {
 				args = append(args, extension)

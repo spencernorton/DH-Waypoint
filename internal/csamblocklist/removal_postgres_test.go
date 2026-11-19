@@ -107,7 +107,7 @@ func TestRemovalClassifiesEveryHashTable(t *testing.T) {
 			group[table] = name
 		}
 	}
-	for _, table := range strings1(t, pool, `select table_name::text from information_schema.columns where table_schema=current_schema() and column_name='info_hash' order by 1`) {
+	for _, table := range strings1(t, pool, `select c.table_name::text from information_schema.columns c join information_schema.tables t on t.table_schema=c.table_schema and t.table_name=c.table_name where c.table_schema=current_schema() and c.column_name='info_hash' and t.table_type='BASE TABLE' order by 1`) {
 		require.NotEmpty(t, group[table], "%s has an info_hash column: add it to a removal step or to one of the table groups in removal.go", table)
 	}
 	follows := strings1(t, pool, `select conrelid::regclass::text from pg_constraint where contype='f' and confdeltype='c' and confrelid='torrents'::regclass order by 1`)

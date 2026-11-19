@@ -6,6 +6,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/spencernorton/DH-Waypoint/internal/database/dao"
+	"github.com/spencernorton/DH-Waypoint/internal/database/filebundles"
 	"github.com/spencernorton/DH-Waypoint/internal/model"
 	"github.com/spencernorton/DH-Waypoint/internal/processor"
 	"github.com/spencernorton/DH-Waypoint/internal/protocol"
@@ -126,9 +127,11 @@ func (c *crawler) runPersistTorrents(ctx context.Context) {
 					return err
 				}
 				if len(torrentFilesToPersist) > 0 {
-					if err := tx.WithContext(ctx).TorrentFile.Clauses(clause.OnConflict{
-						DoNothing: true,
-					}).CreateInBatches(torrentFilesToPersist, 100); err != nil {
+					mode, err := filebundles.WriteModeFromEnv()
+					if err != nil {
+						return err
+					}
+					if err := filebundles.PersistTorrentFiles(ctx, tx.WithContext(ctx).TorrentFile.UnderlyingDB(), mode, torrentFilesToPersist); err != nil {
 						return err
 					}
 				}

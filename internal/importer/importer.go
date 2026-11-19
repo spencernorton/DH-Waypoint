@@ -12,6 +12,7 @@ import (
 	"github.com/spencernorton/DH-Waypoint/internal/blocking"
 	"github.com/spencernorton/DH-Waypoint/internal/csamblocklist"
 	"github.com/spencernorton/DH-Waypoint/internal/database/dao"
+	"github.com/spencernorton/DH-Waypoint/internal/database/filebundles"
 	"github.com/spencernorton/DH-Waypoint/internal/model"
 	"github.com/spencernorton/DH-Waypoint/internal/namepolicy"
 	"github.com/spencernorton/DH-Waypoint/internal/processor"
@@ -478,7 +479,11 @@ func (i *activeImport) persistItemsTx(tx *dao.Query, items []Item, committedSour
 		}
 	}
 	if len(torrentFiles) > 0 {
-		if err := tx.TorrentFile.WithContext(i.ctx).Clauses(clause.OnConflict{DoNothing: true}).CreateInBatches(torrentFiles, 100); err != nil {
+		mode, err := filebundles.WriteModeFromEnv()
+		if err != nil {
+			return err
+		}
+		if err := filebundles.PersistTorrentFiles(i.ctx, tx.TorrentFile.WithContext(i.ctx).UnderlyingDB(), mode, torrentFiles); err != nil {
 			return err
 		}
 	}

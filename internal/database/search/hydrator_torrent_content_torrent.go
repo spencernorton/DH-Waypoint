@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/spencernorton/DH-Waypoint/internal/database/dao"
+	"github.com/spencernorton/DH-Waypoint/internal/database/filebundles"
 	"github.com/spencernorton/DH-Waypoint/internal/database/query"
 	"github.com/spencernorton/DH-Waypoint/internal/model"
 	"github.com/spencernorton/DH-Waypoint/internal/protocol"
@@ -69,14 +70,21 @@ func (h torrentContentTorrentHydrator) GetSubs(
 						q.Torrent.Tags.RelationField,
 					)
 				}
-				if h.files {
-					preload = append(preload, q.Torrent.Files.RelationField)
-				}
-
 				return preload
 			}))
 	if err != nil {
 		return nil, err
+	}
+	if h.files {
+		// GORM preload cannot read the bundle-first view, so files are
+		// filled from torrent_files_effective in one batched query.
+		ptrs := make([]*model.Torrent, len(result.Items))
+		for i := range result.Items {
+			ptrs[i] = &result.Items[i]
+		}
+		if err := filebundles.FillTorrentFilesGORM(ctx, dbCtx.Query().Torrent.WithContext(ctx).UnderlyingDB(), ptrs); err != nil {
+			return nil, err
+		}
 	}
 
 	return result.Items, nil

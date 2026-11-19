@@ -8,6 +8,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/spencernorton/DH-Waypoint/internal/database/filebundles"
 	"github.com/spencernorton/DH-Waypoint/internal/importer"
 	"github.com/spencernorton/DH-Waypoint/internal/lazy"
 	"github.com/spencernorton/DH-Waypoint/internal/model"
@@ -274,7 +275,7 @@ func (s *Store) Detail(ctx context.Context, hash protocol.ID) (Detail, error) {
 	if err != nil {
 		return Detail{}, err
 	}
-	rows, err := p.Query(ctx, `SELECT path, size FROM torrent_files WHERE info_hash=$1 ORDER BY index`, hash.Bytes())
+	rows, err := p.Query(ctx, `SELECT path, size FROM torrent_files_for_hash($1) ORDER BY "index"`, hash.Bytes())
 	if err != nil {
 		return Detail{}, err
 	}
@@ -416,7 +417,7 @@ func (s *Store) recordFiles(ctx context.Context, hash protocol.ID, info metainfo
 	defer func() { _ = tx.Rollback(ctx) }()
 	if len(info.Files) > 0 {
 		status = model.FilesStatusMulti
-		var n uint
+		files := make([]model.TorrentFile, 0, len(info.Files))
 		for i, f := range info.Files {
 			parts := f.Path
 			if len(f.PathUtf8) > 0 {
@@ -425,14 +426,17 @@ func (s *Store) recordFiles(ctx context.Context, hash protocol.ID, info metainfo
 			if model.IsPaddingFile(f.Attr, parts) {
 				continue
 			}
-			n++
-			if _, err := tx.Exec(ctx, `
-				INSERT INTO torrent_files(info_hash, index, path, size, created_at, updated_at)
-				VALUES($1,$2,$3,$4, clock_timestamp(), clock_timestamp())
-				ON CONFLICT DO NOTHING`, hash.Bytes(), i, f.DisplayPath(&info), f.Length); err != nil {
-				return err
-			}
+			files = append(files, model.TorrentFile{InfoHash: protocol.InfoHashV1(hash), Index: uint(i), Path: f.DisplayPath(&info), Size: uint(f.Length)})
 		}
+		mode, err := filebundles.WriteModeFromEnv()
+		if err != nil {
+			return err
+		}
+		files = filebundles.DeduplicateFiles(files)
+		if err := filebundles.PersistTorrentFilesPgx(ctx, tx, mode, files); err != nil {
+			return err
+		}
+		n := uint(len(files))
 		filesCount = &n
 	}
 	// A hash stored earlier without its metadata takes the real size, and
