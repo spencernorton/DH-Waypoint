@@ -238,7 +238,7 @@ func (s *Store) issuePayloadLease(ctx context.Context, tx pgx.Tx, out payloadLea
 	}
 	err = tx.QueryRow(ctx, `INSERT INTO processor_payload_work(info_hash,source_revision,verifier_artifact,lease_id,lease_until,available_at)
  VALUES($1,$2,$3,$4,clock_timestamp()+interval '2 minutes',clock_timestamp()+interval '2 minutes')
- ON CONFLICT(info_hash) DO UPDATE SET source_revision=$2,verifier_artifact=$3,lease_id=$4,lease_until=EXCLUDED.lease_until,available_at=EXCLUDED.available_at,attempts=processor_payload_work.attempts+1,outcome='leased'
+ ON CONFLICT(info_hash) DO UPDATE SET source_revision=$2,verifier_artifact=$3,lease_id=$4,lease_until=EXCLUDED.lease_until,available_at=EXCLUDED.available_at,attempts=CASE WHEN processor_payload_work.source_revision<>$2 OR processor_payload_work.verifier_artifact<>$3 OR processor_payload_work.outcome='approved' THEN 1 ELSE processor_payload_work.attempts+1 END,outcome='leased'
  WHERE processor_payload_work.source_revision<>$2 OR processor_payload_work.verifier_artifact<>$3 OR (processor_payload_work.lease_until<clock_timestamp() AND processor_payload_work.available_at<=clock_timestamp())
  RETURNING lease_until`, hash, out.SourceRevision, out.VerifierArtifact, out.LeaseID).Scan(&out.Deadline)
 	if err != nil {
@@ -418,6 +418,40 @@ SELECT (SELECT count(*) FROM w),(SELECT expires_at FROM w ORDER BY expires_at DE
 	}
 }
 
+// payloadDeferredBackoff returns the PostgreSQL interval before a deferred
+// payload review becomes eligible for re-leasing. Local contention reasons
+// keep a short 5-minute retry window, unreleased claims start at 1 hour, and
+// unreachable/unavailable swarms step exponentially up to 24 hours so dead
+// backlog rows do not starve fresh releases.
+func payloadDeferredBackoff(reason string, attempts int) string {
+	switch reason {
+	case "proof_capacity", "decoder_timeout", "lease_expiring", "decoder_unavailable":
+		return "5 minutes"
+	case "claim_not_available":
+		switch {
+		case attempts <= 1:
+			return "1 hour"
+		case attempts == 2:
+			return "6 hours"
+		default:
+			return "24 hours"
+		}
+	default:
+		switch {
+		case attempts <= 1:
+			return "5 minutes"
+		case attempts == 2:
+			return "15 minutes"
+		case attempts == 3:
+			return "1 hour"
+		case attempts == 4:
+			return "4 hours"
+		default:
+			return "24 hours"
+		}
+	}
+}
+
 var publicationReason = regexp.MustCompile(`^[a-z][a-z0-9_]{0,127}$`)
 
 func (s *Store) finishPayload(ctx context.Context, w payloadWrite) error {
@@ -446,7 +480,8 @@ func (s *Store) finishPayload(ctx context.Context, w payloadWrite) error {
 		return ErrStale
 	}
 	var valid bool
-	err = tx.QueryRow(ctx, `SELECT lease_id=$2 AND source_revision=$3 AND verifier_artifact=$4 AND lease_until>clock_timestamp() AND outcome='leased' FROM processor_payload_work WHERE info_hash=$1 FOR UPDATE`, hash, w.LeaseID, w.SourceRevision, w.VerifierArtifact).Scan(&valid)
+	var attempts int
+	err = tx.QueryRow(ctx, `SELECT lease_id=$2 AND source_revision=$3 AND verifier_artifact=$4 AND lease_until>clock_timestamp() AND outcome='leased', attempts FROM processor_payload_work WHERE info_hash=$1 FOR UPDATE`, hash, w.LeaseID, w.SourceRevision, w.VerifierArtifact).Scan(&valid, &attempts)
 	if err != nil {
 		return err
 	}
@@ -476,8 +511,8 @@ func (s *Store) finishPayload(ctx context.Context, w payloadWrite) error {
 		delay = "30 days"
 		workDelay = "29 days"
 	} else if w.Outcome == "deferred" {
-		delay = "5 minutes"
-		workDelay = "5 minutes"
+		delay = payloadDeferredBackoff(w.Reason, attempts)
+		workDelay = delay
 	}
 	_, err = tx.Exec(ctx, `INSERT INTO processor_payload_reviews(info_hash,source_revision,verifier_artifact,policy,approved,reason,receipt,expires_at)
  VALUES($1,$2,$3,$4,$5,$6,$7,clock_timestamp()+$8::interval)
