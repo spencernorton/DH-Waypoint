@@ -49,6 +49,15 @@ var (
 	capabilityCache sync.Map // *sql.DB -> dbCapabilities
 )
 
+// PrometheusCollectors returns the search-layer Prometheus collectors to
+// register with the application metrics registry.
+func PrometheusCollectors() []prometheus.Collector {
+	return []prometheus.Collector{
+		unlinkedTimeoutCounter,
+		query.SearchQueriesCounter(),
+	}
+}
+
 type dbCapabilities struct {
 	paradeDBBM25    bool
 	bm25EpisodeText bool
@@ -369,6 +378,10 @@ var bm25PlanQueries = []struct {
 	{
 		name: "relevance_content_type",
 		sql:  `SELECT torrent_contents.*, pdb.score(torrent_contents.id) AS _order_0 FROM torrent_contents WHERE torrent_contents.search_text &&& 'synthetic 1080p' AND torrent_contents.content_type = 'movie' ORDER BY _order_0 DESC LIMIT 10`,
+	},
+	{
+		name: "relevance_episodes",
+		sql:  `SELECT torrent_contents.*, pdb.score(torrent_contents.id) AS _order_0 FROM torrent_contents WHERE torrent_contents.search_text &&& 'synthetic 1080p' AND torrent_contents.ep_text ||| 's1all s1e1' ORDER BY _order_0 DESC LIMIT 10`,
 	},
 }
 

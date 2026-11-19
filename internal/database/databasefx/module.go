@@ -51,6 +51,10 @@ func New() fx.Option {
 			Group:  "prometheus_collectors,flatten",
 			Target: func(m *serving.Metrics) []prometheus.Collector { return m.Collectors() },
 		}),
+		fx.Provide(fx.Annotated{
+			Group:  "prometheus_collectors,flatten",
+			Target: search.PrometheusCollectors,
+		}),
 		fx.Decorate(
 			cache.NewDecorator,
 		),
