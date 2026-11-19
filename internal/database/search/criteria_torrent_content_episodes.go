@@ -1,6 +1,7 @@
 package search
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -19,14 +20,17 @@ import (
 //     Uses jsonb_exists() rather than the `?` operator because DBCriteria.SQL is
 //     raw SQL where GORM treats a literal `?` as a bind placeholder.
 //   - Episode request ({season: {episodes}}): match rows whose season is a
-//     whole-season pack OR that enumerate all requested episodes.
-//
-// Before this, season-only queries matched only exact whole-season packs
-// (excluding partial packs and single episodes) and episode queries excluded
-// whole-season packs — both contradicting HasEpisode and silently under-serving
-// Sonarr/Prowlarr season and episode searches.
+//     whole-season pack OR that enumerate all requested episodes. When ParadeDB
+//     BM25 with the generated ep_text column is active, emit an equivalent
+//     ep_text Tantivy predicate so episode filtering pushes into the BM25 scan.
 func TorrentContentEpisodesCriteria(episodes model.Episodes) query.Criteria {
-	return query.GenCriteria(func(query.DBContext) (query.Criteria, error) {
+	return query.GenCriteria(func(dbCtx query.DBContext) (query.Criteria, error) {
+		useBM25EpText := false
+		if dbCtx != nil && ResolveBM25Mode() != BM25ModeOff {
+			db := dbCtx.Query().TorrentContent.UnderlyingDB()
+			useBM25EpText = HasParadeDBBM25(context.Background(), db) && HasBM25EpisodeText(context.Background(), db)
+		}
+
 		and := make([]query.Criteria, 0, len(episodes))
 
 		for _, s := range episodes.SeasonEntries() {
@@ -37,10 +41,27 @@ func TorrentContentEpisodesCriteria(episodes model.Episodes) query.Criteria {
 						s.Season,
 					),
 				})
+			} else if useBM25EpText {
+				wholeTok := fmt.Sprintf("s%dall", s.Season)
+				if len(s.Episodes) == 1 {
+					and = append(and, query.DBCriteria{
+						SQL:  "torrent_contents.ep_text ||| ?",
+						Args: []interface{}{fmt.Sprintf("%s s%de%d", wholeTok, s.Season, s.Episodes[0])},
+					})
+				} else {
+					epToks := make([]string, 0, len(s.Episodes))
+					for _, e := range s.Episodes {
+						epToks = append(epToks, fmt.Sprintf("s%de%d", s.Season, e))
+					}
+					and = append(and, query.DBCriteria{
+						SQL:  "(torrent_contents.ep_text &&& ? OR torrent_contents.ep_text &&& ?)",
+						Args: []interface{}{wholeTok, strings.Join(epToks, " ")},
+					})
+				}
 			} else {
 				keyParts := make([]string, 0, len(s.Episodes))
 				for _, e := range s.Episodes {
-					keyParts = append(keyParts, fmt.Sprintf("\"%d\":{}", e))
+					keyParts = append(keyParts, fmt.Sprintf(`"%d":{}`, e))
 				}
 
 				and = append(and, query.DBCriteria{

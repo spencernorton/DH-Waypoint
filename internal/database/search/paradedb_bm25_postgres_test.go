@@ -11,11 +11,13 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5/stdlib"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/spencernorton/DH-Waypoint/internal/database/dao"
 	"github.com/spencernorton/DH-Waypoint/internal/database/fts"
 	"github.com/spencernorton/DH-Waypoint/internal/database/query"
 	"github.com/spencernorton/DH-Waypoint/internal/model"
 	"github.com/spencernorton/DH-Waypoint/internal/protocol"
+	"github.com/spencernorton/DH-Waypoint/internal/serving"
 	"github.com/stretchr/testify/require"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -296,7 +298,7 @@ func TestParadeDBBM25Postgres(t *testing.T) {
 	t.Run("explain topk", func(t *testing.T) {
 		checks, verifyErr := VerifyParadeDBBM25Plan(ctx, f.db)
 		require.NoError(t, verifyErr)
-		require.Len(t, checks, 3)
+		require.Len(t, checks, 4)
 		for _, check := range checks {
 			require.True(t, check.UsesBM25Scan, check.Name)
 			require.True(t, check.UsesTopK, check.Name)
@@ -329,4 +331,288 @@ func TestParadeDBBM25Postgres(t *testing.T) {
 		require.NoError(t, searchErr)
 		require.Contains(t, bm25ResultHashes(got.Items), copperHash)
 	})
+}
+
+// TestParadeDBBM25ServingPolicyTopKPrefixPostgres verifies that ungrouped BM25
+// relevance searches under full serving.Policy (adult exclusion, quarantine,
+// publication holds, joins, and ep_text episode pushdown) execute via the
+// progressive Top-K candidate prefix path, retain TopKScanExecState on Step 1,
+// expand cleanly past heavy policy filtering, and match stock tsquery results.
+func TestParadeDBBM25ServingPolicyTopKPrefixPostgres(t *testing.T) {
+	f := newBM25PostgresFixture(t)
+	ctx := context.Background()
+	status, err := ParadeDBBM25Status(ctx, f.db)
+	require.NoError(t, err)
+	if !status.ExtensionAvailable {
+		t.Skip("pg_search is not available on this PostgreSQL")
+	}
+
+	// Provision the supporting tables required by serving.Policy alongside the
+	// full torrent_contents schema created by newBM25PostgresFixture.
+	_, err = f.pool.Exec(ctx, `
+CREATE TABLE torrents (
+  info_hash bytea PRIMARY KEY, name text NOT NULL, size bigint NOT NULL DEFAULT 4096,
+  info_hash_v2 bytea,
+  private boolean NOT NULL DEFAULT false, files_status text NOT NULL DEFAULT 'single',
+  extension text DEFAULT 'mkv', files_count integer DEFAULT 1,
+  created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(),
+  tsv tsvector GENERATED ALWAYS AS (to_tsvector('simple', name)) STORED
+);
+CREATE TABLE content (
+  type text NOT NULL, source text NOT NULL, id text NOT NULL, title text NOT NULL,
+  adult boolean, created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY (type, source, id)
+);
+CREATE TABLE torrent_files (
+  info_hash bytea NOT NULL REFERENCES torrents(info_hash), "index" integer NOT NULL DEFAULT 0,
+  path text NOT NULL, extension text NOT NULL DEFAULT 'mkv', size bigint NOT NULL DEFAULT 4096,
+  created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (info_hash, path)
+);
+CREATE TABLE torrent_file_bundles (
+  info_hash bytea PRIMARY KEY REFERENCES torrents(info_hash) ON DELETE CASCADE,
+  indexes integer[] NOT NULL, paths text[] NOT NULL,
+  sizes bigint[] NOT NULL, extensions text[] NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE FUNCTION torrent_files_for_hash(target_hash bytea)
+RETURNS TABLE(info_hash bytea, "index" integer, path text, size bigint, extension text, created_at timestamptz, updated_at timestamptz)
+LANGUAGE sql STABLE AS $func$
+ SELECT b.info_hash, u.i, u.p, u.s, u.e, b.created_at, b.updated_at
+ FROM torrent_file_bundles b
+ CROSS JOIN LATERAL unnest(b.indexes, b.paths, b.sizes, b.extensions) AS u(i, p, s, e)
+ WHERE b.info_hash = target_hash
+ UNION ALL
+ SELECT f.info_hash, f."index", f.path, f.size, f.extension, f.created_at, f.updated_at
+ FROM torrent_files f
+ WHERE f.info_hash = target_hash
+  AND NOT EXISTS (SELECT 1 FROM torrent_file_bundles b2 WHERE b2.info_hash = target_hash)
+$func$;
+CREATE VIEW torrent_files_effective AS
+SELECT b.info_hash, u.i AS "index", u.p AS path, u.s AS size, u.e AS extension, b.created_at, b.updated_at
+FROM torrent_file_bundles b
+CROSS JOIN LATERAL unnest(b.indexes, b.paths, b.sizes, b.extensions) AS u(i, p, s, e)
+UNION ALL
+SELECT f.info_hash, f."index", f.path, f.size, f.extension, f.created_at, f.updated_at
+FROM torrent_files f
+WHERE NOT EXISTS (SELECT 1 FROM torrent_file_bundles b2 WHERE b2.info_hash = f.info_hash);
+CREATE TABLE junkpurge_quarantine (
+  info_hash bytea PRIMARY KEY, torrent_name text NOT NULL, verdict text NOT NULL,
+  confidence real NOT NULL, quarantined_at timestamptz NOT NULL DEFAULT now(),
+  expired_at timestamptz, torrent_snapshot jsonb NOT NULL,
+  files_snapshot jsonb, sources_snapshot jsonb
+);
+CREATE TABLE label_evidence (info_hash bytea, source text, category text);
+CREATE TABLE torrent_canonical_labels (info_hash bytea PRIMARY KEY, category text);
+CREATE TABLE torrent_tags (info_hash bytea, name text);
+CREATE TABLE processor_publication_holds (info_hash bytea PRIMARY KEY, held boolean NOT NULL);
+`)
+	require.NoError(t, err)
+
+	require.NoError(t, EnableParadeDBBM25(ctx, f.db))
+	t.Cleanup(func() {
+		_ = DisableParadeDBBM25(context.Background(), f.db)
+	})
+
+	mkHash := func(seed int) protocol.InfoHash {
+		var h protocol.InfoHash
+		h[0] = byte(seed >> 24)
+		h[1] = byte(seed >> 16)
+		h[2] = byte(seed >> 8)
+		h[3] = byte(seed)
+		h[19] = 0xB5
+		return h
+	}
+	now := time.Now().UTC()
+	seedRow := func(seed int, id, name, ext, contentType string, episodes any, seeders int) protocol.InfoHash {
+		h := mkHash(seed)
+		_, e := f.pool.Exec(ctx, `INSERT INTO torrents (info_hash, name, size, private, files_status, extension) VALUES ($1, $2, 4096, false, 'single', $3)`,
+			h.Bytes(), name, ext)
+		require.NoError(t, e)
+		tsv := fts.Tsvector{}
+		tsv.AddText(name, fts.TsvectorWeightA)
+		_, e = f.pool.Exec(ctx, `INSERT INTO torrent_contents (id, info_hash, content_type, episodes, tsv, seeders, published_at)
+VALUES ($1, $2, $3, $4, $5::tsvector, $6, $7)`, id, h.Bytes(), contentType, episodes, tsv.String(), seeders, now.Add(-time.Duration(seed)*time.Minute))
+		require.NoError(t, e)
+		return h
+	}
+
+	adultHash := seedRow(1, "bm25-srv-adult", "Synthetic Obsidian 1080p Adult", "mkv", "xxx", nil, 999)
+	heldHash := seedRow(2, "bm25-srv-held", "Synthetic Obsidian 1080p Held", "mkv", "movie", nil, 998)
+	_, err = f.pool.Exec(ctx, `INSERT INTO processor_publication_holds (info_hash, held) VALUES ($1, true)`, heldHash.Bytes())
+	require.NoError(t, err)
+	quarantinedHash := seedRow(3, "bm25-srv-quarantined", "Synthetic Obsidian 1080p Quarantined", "mkv", "movie", nil, 997)
+	_, err = f.pool.Exec(ctx, `INSERT INTO junkpurge_quarantine (info_hash, torrent_name, verdict, confidence, torrent_snapshot, sources_snapshot)
+SELECT t.info_hash, t.name, 'junk', 0.99, to_jsonb(t), '[]'::jsonb
+FROM torrents t WHERE t.info_hash = $1`, quarantinedHash.Bytes())
+	require.NoError(t, err)
+
+	ep5Hash := seedRow(4, "bm25-srv-ep5", "Synthetic Harbor Lights S02E05 1080p", "mkv", "tv_show", `{"2":{"5":{}}}`, 45)
+	packHash := seedRow(5, "bm25-srv-pack", "Synthetic Harbor Lights S02 Complete 1080p", "mkv", "tv_show", `{"2":{}}`, 35)
+	ep6Hash := seedRow(6, "bm25-srv-ep6", "Synthetic Harbor Lights S02E06 1080p", "mp4", "tv_show", `{"2":{"6":{}}}`, 25)
+	ep56Hash := seedRow(7, "bm25-srv-ep56", "Synthetic Harbor Lights S02E05-E06 1080p", "mkv", "tv_show", `{"2":{"5":{},"6":{}}}`, 30)
+	ep7Hash := seedRow(8, "bm25-srv-ep7", "Synthetic Harbor Lights S02E07 1080p", "mkv", "tv_show", `{"2":{"7":{}}}`, 15)
+
+	for i := 10; i < 60; i++ {
+		ext := "mkv"
+		if i%3 == 0 {
+			ext = "mp4"
+		}
+		seedRow(i, fmt.Sprintf("bm25-srv-item-%d", i), fmt.Sprintf("Synthetic Obsidian Release %d 1080p", i), ext, "movie", nil, i)
+	}
+
+	// Seed 135 policy-excluded rows plus 15 eligible rows for a distinct query so
+	// the initial 128-row candidate prefix cannot satisfy Limit(10) and must
+	// expand progressively (128 -> 512).
+	for i := 100; i < 235; i++ {
+		seedRow(i, fmt.Sprintf("bm25-exp-adult-%d", i), "Synthetic Cobalt Cascade 1080p", "mkv", "xxx", nil, 500+i)
+	}
+	var cobaltEligible []protocol.InfoHash
+	for i := 300; i < 315; i++ {
+		cobaltEligible = append(cobaltEligible, seedRow(i, fmt.Sprintf("bm25-exp-ok-%d", i), fmt.Sprintf("Synthetic Cobalt Cascade Archive %d 1080p", i), "mkv", "movie", nil, i))
+	}
+
+	_, err = f.pool.Exec(ctx, `ANALYZE torrent_contents`)
+	require.NoError(t, err)
+	ResetDBCapabilitiesCache()
+
+	// Verify Step 1's single-table candidate query natively uses ParadeDB
+	// TopKScanExecState.
+	var explainLines []string
+	rows, err := f.pool.Query(ctx, `EXPLAIN (COSTS OFF) SELECT torrent_contents.id AS id, pdb.score(torrent_contents.id) AS score FROM torrent_contents WHERE torrent_contents.search_text &&& 'synthetic obsidian 1080p' ORDER BY score DESC LIMIT 128`)
+	require.NoError(t, err)
+	for rows.Next() {
+		var line string
+		require.NoError(t, rows.Scan(&line))
+		explainLines = append(explainLines, line)
+	}
+	require.NoError(t, rows.Err())
+	rows.Close()
+	require.Contains(t, fmt.Sprint(explainLines), "TopKScanExecState")
+
+	countPrefix := func() float64 {
+		reg := prometheus.NewRegistry()
+		for _, c := range PrometheusCollectors() {
+			_ = reg.Register(c)
+		}
+		mfs, gErr := reg.Gather()
+		require.NoError(t, gErr)
+		for _, mf := range mfs {
+			if mf.GetName() != "dh_waypoint_search_queries_total" {
+				continue
+			}
+			for _, m := range mf.GetMetric() {
+				var eng, path string
+				for _, lp := range m.GetLabel() {
+					switch lp.GetName() {
+					case "engine":
+						eng = lp.GetValue()
+					case "path":
+						path = lp.GetValue()
+					}
+				}
+				if eng == "bm25" && path == "prefix" && m.GetCounter() != nil {
+					return m.GetCounter().GetValue()
+				}
+			}
+		}
+		return 0
+	}
+
+	policy, err := serving.NewPolicy(serving.Config{ExcludeAdult: true}, []string{"siterip"}, []string{"mkv", "jpg"})
+	require.NoError(t, err)
+	freshSearch := f.fresh(t)
+	freshSearch.adultPolicy = policy
+
+	beforePrefix := countPrefix()
+	t.Setenv("SEARCH_BM25_MODE", "on")
+	page, err := freshSearch.TorrentContent(ctx,
+		query.SearchString("synthetic obsidian 1080p"),
+		query.OrderByQueryStringRank(),
+		query.Limit(10),
+		query.WithHasNextPage(true),
+		query.WithTotalCount(true),
+		query.WithAggregationBudget(0),
+	)
+	require.NoError(t, err)
+	require.Greater(t, countPrefix(), beforePrefix, "serving-policy BM25 relevance query must take the Top-K prefix path")
+	require.Len(t, page.Items, 10)
+	require.True(t, page.HasNextPage)
+	require.EqualValues(t, 50, page.TotalCount)
+	require.NotContains(t, bm25ResultHashes(page.Items), adultHash)
+	require.NotContains(t, bm25ResultHashes(page.Items), heldHash)
+	require.NotContains(t, bm25ResultHashes(page.Items), quarantinedHash)
+
+	t.Run("policy_prefix_expansion_128_to_512", func(t *testing.T) {
+		before := countPrefix()
+		t.Setenv("SEARCH_BM25_MODE", "on")
+		expPage, expErr := freshSearch.TorrentContent(ctx,
+			query.SearchString("synthetic cobalt cascade 1080p"),
+			query.OrderByQueryStringRank(),
+			query.Limit(10),
+			query.WithHasNextPage(true),
+			query.WithTotalCount(true),
+			query.WithAggregationBudget(0),
+		)
+		require.NoError(t, expErr)
+		require.Greater(t, countPrefix(), before)
+		require.Len(t, expPage.Items, 10)
+		require.True(t, expPage.HasNextPage)
+		require.EqualValues(t, len(cobaltEligible), expPage.TotalCount)
+		for _, h := range bm25ResultHashes(expPage.Items) {
+			require.Contains(t, cobaltEligible, h)
+		}
+	})
+
+	for _, tc := range []struct {
+		name        string
+		opts        []query.Option
+		wantExact   []protocol.InfoHash
+		wantExclude []protocol.InfoHash
+	}{
+		{
+			name:        "policy_full_set",
+			opts:        []query.Option{query.SearchString("synthetic obsidian 1080p"), query.OrderByQueryStringRank(), query.Limit(100), query.WithTotalCount(true), query.WithAggregationBudget(0)},
+			wantExclude: []protocol.InfoHash{adultHash, heldHash, quarantinedHash},
+		},
+		{
+			name:        "policy_episodes_ep_text_pushdown",
+			opts:        []query.Option{query.SearchString("harbor"), query.Where(TorrentContentEpisodesCriteria(model.Episodes{2: {5: {}}})), query.OrderByQueryStringRank(), query.Limit(20), query.WithTotalCount(true), query.WithAggregationBudget(0)},
+			wantExact:   []protocol.InfoHash{ep5Hash, ep56Hash, packHash},
+			wantExclude: []protocol.InfoHash{ep6Hash, ep7Hash},
+		},
+		{
+			name:        "policy_multi_episodes_ep_text_pushdown",
+			opts:        []query.Option{query.SearchString("harbor"), query.Where(TorrentContentEpisodesCriteria(model.Episodes{2: {5: {}, 6: {}}})), query.OrderByQueryStringRank(), query.Limit(20), query.WithTotalCount(true), query.WithAggregationBudget(0)},
+			wantExact:   []protocol.InfoHash{ep56Hash, packHash},
+			wantExclude: []protocol.InfoHash{ep5Hash, ep6Hash, ep7Hash},
+		},
+		{
+			name:        "policy_joined_extension",
+			opts:        []query.Option{TorrentContentCoreJoins(), query.SearchString("synthetic obsidian 1080p"), query.Where(TorrentFileExtensionCriteria("mkv")), query.OrderByQueryStringRank(), query.Limit(100), query.WithTotalCount(true), query.WithAggregationBudget(0)},
+			wantExclude: []protocol.InfoHash{adultHash, heldHash, quarantinedHash},
+		},
+		{
+			name: "policy_short_page_no_hits",
+			opts: []query.Option{query.SearchString("nonexistenttermxyz"), query.OrderByQueryStringRank(), query.Limit(10), query.WithHasNextPage(true), query.WithTotalCount(true), query.WithAggregationBudget(0)},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("SEARCH_BM25_MODE", "off")
+			offRes, offErr := freshSearch.TorrentContent(ctx, tc.opts...)
+			require.NoError(t, offErr)
+			t.Setenv("SEARCH_BM25_MODE", "on")
+			onRes, onErr := freshSearch.TorrentContent(ctx, tc.opts...)
+			require.NoError(t, onErr)
+			require.Equal(t, offRes.TotalCount, onRes.TotalCount)
+			require.Equal(t, offRes.HasNextPage, onRes.HasNextPage)
+			require.ElementsMatch(t, bm25ResultHashes(offRes.Items), bm25ResultHashes(onRes.Items))
+			for _, ex := range tc.wantExclude {
+				require.NotContains(t, bm25ResultHashes(onRes.Items), ex)
+			}
+			if len(tc.wantExact) > 0 {
+				require.ElementsMatch(t, tc.wantExact, bm25ResultHashes(onRes.Items))
+			}
+		})
+	}
 }

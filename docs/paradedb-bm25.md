@@ -96,10 +96,23 @@ Limit
 The same TopK shape holds when `seeders`, `published_at`, and `content_type`
 filters are pushed into the Tantivy query. Note the boundaries:
 
-- Serving-policy semi/anti-joins and SQL JOINs degrade TopK to a normal
-  ParadeDB scan plus sort; results are unchanged, only the top-K fast path is
-  lost.
-- Counts use ParadeDB Aggregate Scan.
+- **Serving-policy and join Top-K prefix**: Ungrouped BM25 relevance searches
+  carrying serving-policy guards (`ExcludeAdult`, required publication review,
+  payload evidence, exclusions) or at-most-one joins (`torrents`, `content`,
+  `metadata_sources`) automatically execute a two-stage `REPEATABLE READ`
+  candidate prefix: Step 1 pulls a bounded top-K `(id, pdb.score(id))` slice
+  directly from single-table `torrent_contents` using `TopKScanExecState`, and
+  Step 2 joins those IDs into the full policy-guarded query without repeating
+  `pdb.score()`. Boundary ties and short pages expand cleanly before falling
+  back to the full scan.
+- **Episode token pushdown**: Specific episode filters (`TorrentContentEpisodesCriteria`
+  with explicit episode numbers) push `ep_text ||| 's<S>all s<S>e<E>'` (or the
+  multi-episode conjunction) straight into the Tantivy boolean query while
+  preserving whole-season-pack semantics.
+- **Counts and observability**: Counts use ParadeDB Aggregate Scan. Prometheus
+  exports `dh_waypoint_search_queries_total{engine="bm25|tsquery",path="prefix|direct"}`,
+  `dh_waypoint_postgres_bm25_index_valid`, `dh_waypoint_postgres_bm25_index_size_bytes`,
+  and `dh_waypoint_postgres_file_bundles_backfill_done`.
 
 Run `dh-waypoint search bm25 verify` after enable and after any ParadeDB
 upgrade. A verify failure means the expected `pg_search` plan shape was not

@@ -49,6 +49,9 @@ type Collector struct {
 	poolAcquiredConns     *prometheus.Desc
 	poolIdleConns         *prometheus.Desc
 	poolMaxConns          *prometheus.Desc
+	bm25IndexValid        *prometheus.Desc
+	bm25IndexSize         *prometheus.Desc
+	fileBundlesDone       *prometheus.Desc
 	scrapeErrorsTotal     *prometheus.Desc
 	scrapeDurationSeconds *prometheus.Desc
 }
@@ -122,6 +125,21 @@ func NewCollector(pool lazy.Lazy[*pgxpool.Pool], logger *zap.SugaredLogger) *Col
 			"Configured maximum size of the pgx pool.",
 			nil, nil,
 		),
+		bm25IndexValid: prometheus.NewDesc(
+			prometheus.BuildFQName(namespace, subsystem, "bm25_index_valid"),
+			"1 when ParadeDB pg_search, search_text, and a valid torrent_contents_bm25_idx are active, else 0.",
+			nil, nil,
+		),
+		bm25IndexSize: prometheus.NewDesc(
+			prometheus.BuildFQName(namespace, subsystem, "bm25_index_size_bytes"),
+			"On-disk size in bytes of torrent_contents_bm25_idx (0 when absent).",
+			nil, nil,
+		),
+		fileBundlesDone: prometheus.NewDesc(
+			prometheus.BuildFQName(namespace, subsystem, "file_bundles_backfill_done"),
+			"1 when key_values storage_file_bundles_backfill cursor reports done=true, else 0.",
+			nil, nil,
+		),
 		scrapeErrorsTotal: prometheus.NewDesc(
 			prometheus.BuildFQName(namespace, subsystem, "scrape_errors_total"),
 			"Cumulative count of pgstats scrape failures. Per-component; non-zero indicates partial data.",
@@ -149,6 +167,9 @@ func (c *Collector) Describe(ch chan<- *prometheus.Desc) {
 	ch <- c.poolAcquiredConns
 	ch <- c.poolIdleConns
 	ch <- c.poolMaxConns
+	ch <- c.bm25IndexValid
+	ch <- c.bm25IndexSize
+	ch <- c.fileBundlesDone
 	ch <- c.scrapeErrorsTotal
 	ch <- c.scrapeDurationSeconds
 }
@@ -179,6 +200,10 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 		if err := c.scrapeConnections(ctx, pool, ch); err != nil {
 			errs["connections"]++
 			c.logger.Warnw("pgstats scrape failed", "component", "connections", "err", err)
+		}
+		if err := c.scrapeSearchAndStorageFeatures(ctx, pool, ch); err != nil {
+			errs["search_storage_features"]++
+			c.logger.Warnw("pgstats scrape failed", "component", "search_storage_features", "err", err)
 		}
 		c.scrapePoolStats(pool, ch) // cannot fail; reads in-process pool state
 	}
@@ -305,4 +330,35 @@ func (c *Collector) scrapePoolStats(pool *pgxpool.Pool, ch chan<- prometheus.Met
 	ch <- prometheus.MustNewConstMetric(
 		c.poolMaxConns, prometheus.GaugeValue, float64(stat.MaxConns()),
 	)
+}
+
+func (c *Collector) scrapeSearchAndStorageFeatures(ctx context.Context, pool *pgxpool.Pool, ch chan<- prometheus.Metric) error {
+	const q = `
+SELECT
+  (EXISTS(SELECT 1 FROM pg_extension WHERE extname = 'pg_search')
+    AND EXISTS(SELECT 1 FROM pg_index WHERE indexrelid = to_regclass('torrent_contents_bm25_idx') AND indisvalid AND indisready)
+    AND EXISTS(SELECT 1 FROM pg_attribute WHERE attrelid = to_regclass('torrent_contents') AND attname = 'search_text' AND NOT attisdropped)) AS bm25_valid,
+  COALESCE(pg_relation_size(to_regclass('torrent_contents_bm25_idx')), 0)::bigint AS bm25_bytes,
+  COALESCE((SELECT CASE WHEN left(btrim(value), 1) = '{' THEN (value::jsonb ->> 'done') = 'true' ELSE false END FROM key_values WHERE key = 'storage_file_bundles_backfill'), false) AS bundles_done`
+
+	var (
+		bm25Valid   bool
+		bm25Bytes   int64
+		bundlesDone bool
+	)
+	if err := pool.QueryRow(ctx, q).Scan(&bm25Valid, &bm25Bytes, &bundlesDone); err != nil {
+		return err
+	}
+	validVal := 0.0
+	if bm25Valid {
+		validVal = 1.0
+	}
+	doneVal := 0.0
+	if bundlesDone {
+		doneVal = 1.0
+	}
+	ch <- prometheus.MustNewConstMetric(c.bm25IndexValid, prometheus.GaugeValue, validVal)
+	ch <- prometheus.MustNewConstMetric(c.bm25IndexSize, prometheus.GaugeValue, float64(bm25Bytes))
+	ch <- prometheus.MustNewConstMetric(c.fileBundlesDone, prometheus.GaugeValue, doneVal)
+	return nil
 }

@@ -206,6 +206,24 @@ func (gq *genericQuery[T]) doItems() {
 			gq.doItemsSerial()
 			return
 		}
+		if items, handled, err := gq.bm25CandidatePrefixItems(); err != nil {
+			gq.addError(err)
+			return
+		} else if handled {
+			if gq.builder.hasNextPage(len(items)) {
+				gq.result.HasNextPage = true
+				items = items[:len(items)-1]
+			}
+			if len(items) > 0 {
+				if cbErr := gq.builder.applyCallbacks(gq.ctx, items); cbErr != nil {
+					gq.addError(cbErr)
+					return
+				}
+			}
+			gq.result.Items = items
+			return
+		}
+		recordSearchQuery(gq.builder, "direct")
 
 		var finalItems []T
 
@@ -328,6 +346,7 @@ func (gq *genericQuery[T]) doItems() {
 }
 
 func (gq *genericQuery[T]) doItemsSerial() {
+	recordSearchQuery(gq.builder, "direct")
 	sq, err := gq.newSubQuery(gq.ctx, true)
 	if err != nil {
 		gq.addError(err)
@@ -562,25 +581,26 @@ type optionBuilder struct {
 	dbContext
 	joins map[string]TableJoin
 	//revive:disable-next-line:nested-structs
-	requiredJoins     maps.InsertMap[string, struct{}]
-	tsquery           string
-	rawQueryString    string
-	bm25Enabled       bool
-	scopes            []Scope
-	selections        []clause.Expr
-	groupBy           []clause.Column
-	grouping          *groupingSpec
-	orderBy           []OrderByColumn
-	limit             model.NullUint
-	nextPage          bool
-	offset            uint
-	facets            []Facet
-	currentFacet      string
-	preloads          []field.RelationField
-	totalCount        bool
-	aggregationBudget float64
-	callbacks         []Callback
-	contextFn         func(context.Context) context.Context
+	requiredJoins       maps.InsertMap[string, struct{}]
+	tsquery             string
+	rawQueryString      string
+	bm25Enabled         bool
+	bm25PrefixScoreExpr string
+	scopes              []Scope
+	selections          []clause.Expr
+	groupBy             []clause.Column
+	grouping            *groupingSpec
+	orderBy             []OrderByColumn
+	limit               model.NullUint
+	nextPage            bool
+	offset              uint
+	facets              []Facet
+	currentFacet        string
+	preloads            []field.RelationField
+	totalCount          bool
+	aggregationBudget   float64
+	callbacks           []Callback
+	contextFn           func(context.Context) context.Context
 }
 
 // groupingSpec configures a DISTINCT-ON-per-key grouping executed as a derived
@@ -849,7 +869,9 @@ func (b optionBuilder) applySelect(db *gorm.DB, withOrderSelect bool) error {
 				rankFragment := "0"
 				args := make([]interface{}, 0)
 
-				if _, bm25 := b.bm25Terms(); bm25 {
+				if b.bm25PrefixScoreExpr != "" {
+					rankFragment = b.bm25PrefixScoreExpr
+				} else if _, bm25 := b.bm25Terms(); bm25 {
 					// pdb.score is evaluated by the ParadeDB scan that also
 					// applies the &&& predicate in applyPre. Count and exists
 					// queries call applySelect without order selections, so
@@ -885,7 +907,10 @@ func (b optionBuilder) applyPre(sq SubQuery, withOrderJoins bool) error {
 	}
 
 	if b.tsquery != "" {
-		if terms, bm25 := b.bm25Terms(); bm25 {
+		if b.bm25PrefixScoreExpr != "" {
+			// Candidate IDs were already matched and scored via BM25 in the
+			// same repeatable-read transaction snapshot.
+		} else if terms, bm25 := b.bm25Terms(); bm25 {
 			// Block-Max WAND prunes globally to top-K, so the newest-1000
 			// tc_cap needed to bound ts_rank_cd heap scoring is skipped.
 			sq.UnderlyingDB().Where(b.tableName+".search_text &&& ?", strings.Join(terms, " "))

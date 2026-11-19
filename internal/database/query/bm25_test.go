@@ -151,3 +151,42 @@ func TestBM25DisablesCteStrategy(t *testing.T) {
 		t.Fatal("BM25 execution must not race the materialized CTE strategy")
 	}
 }
+
+func TestBM25PrefixScoreExprSkipsRedundantPredicateAndScore(t *testing.T) {
+	t.Parallel()
+
+	gdb := newDryRunDB(t)
+	b := bm25Builder(t, gdb, "synthetic 1080p", true, false)
+	b.bm25PrefixScoreExpr = "_bm25_prefix._bm25_score"
+
+	sql := bm25QuerySQL(t, gdb, b)
+	if !strings.Contains(sql, "_bm25_prefix._bm25_score AS _order_0") {
+		t.Errorf("prefix SQL missing precomputed score alias in:\n%s", sql)
+	}
+	for _, unwanted := range []string{"pdb.score(", "search_text &&&", "ts_rank_cd", "tsv @@"} {
+		if strings.Contains(sql, unwanted) {
+			t.Errorf("prefix SQL must not repeat %q in:\n%s", unwanted, sql)
+		}
+	}
+}
+
+func TestBM25ValuesJoinAndExtractResultID(t *testing.T) {
+	t.Parallel()
+
+	sql, args := bm25ValuesJoin([]bm25Candidate{{ID: "a", Score: 2.5}, {ID: "b", Score: 1.25}})
+	if !strings.Contains(sql, "INNER JOIN (VALUES (?, ?::float8), (?, ?::float8)) AS _bm25_prefix(_bm25_id, _bm25_score)") {
+		t.Fatalf("unexpected VALUES join SQL: %s", sql)
+	}
+	if len(args) != 4 || args[0] != "a" || args[1] != 2.5 || args[2] != "b" || args[3] != 1.25 {
+		t.Fatalf("unexpected VALUES join args: %#v", args)
+	}
+
+	type inner struct{ ID string }
+	type wrapped struct{ inner }
+	if id, ok := extractResultID(wrapped{inner: inner{ID: "tc-42"}}); !ok || id != "tc-42" {
+		t.Fatalf("extractResultID(wrapped) = (%q, %v), want (tc-42, true)", id, ok)
+	}
+	if id, ok := extractResultID(&wrapped{inner: inner{ID: "tc-99"}}); !ok || id != "tc-99" {
+		t.Fatalf("extractResultID(*wrapped) = (%q, %v), want (tc-99, true)", id, ok)
+	}
+}

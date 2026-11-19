@@ -27,10 +27,10 @@ func TestDescribeEmitsAllDescriptors(t *testing.T) {
 		descriptors[d.String()] = true
 	}
 
-	// 14 distinct descriptors are exposed. If this count changes, update
+	// 17 distinct descriptors are exposed. If this count changes, update
 	// the Describe() implementation and this test together — they must
 	// stay in sync per prometheus.Collector contract.
-	const expected = 14
+	const expected = 17
 	if got := len(descriptors); got != expected {
 		t.Fatalf("Describe emitted %d unique descriptors, expected %d", got, expected)
 	}
