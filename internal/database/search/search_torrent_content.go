@@ -67,6 +67,9 @@ func (s search) torrentContent(ctx context.Context, serial bool, options ...quer
 	if s.adultPolicy != nil && s.adultPolicy.ExcludesAdult() {
 		options = append(options, query.WithFacetExcludedValues(TorrentContentTypeFacetKey, "xxx"))
 	}
+	bm25Enabled := ResolveBM25Mode() != BM25ModeOff &&
+		HasParadeDBBM25(ctx, s.q.TorrentContent.WithContext(ctx).UnderlyingDB())
+	options = append(options, query.WithBM25Search(bm25Enabled))
 	execute := query.GenericQuery[TorrentContentResultItem]
 	if serial {
 		execute = query.GenericQuerySerial[TorrentContentResultItem]

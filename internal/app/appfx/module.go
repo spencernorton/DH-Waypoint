@@ -19,6 +19,7 @@ import (
 	"github.com/spencernorton/DH-Waypoint/internal/app/cmd/refreshseedscmd"
 	"github.com/spencernorton/DH-Waypoint/internal/app/cmd/releasefieldsrepaircmd"
 	"github.com/spencernorton/DH-Waypoint/internal/app/cmd/reprocesscmd"
+	"github.com/spencernorton/DH-Waypoint/internal/app/cmd/searchcmd"
 	"github.com/spencernorton/DH-Waypoint/internal/app/cmd/setupcmd"
 	"github.com/spencernorton/DH-Waypoint/internal/app/cmd/torrentcmd"
 	"github.com/spencernorton/DH-Waypoint/internal/app/cmd/workercmd"
@@ -141,6 +142,7 @@ func New() fx.Option {
 			refreshseedscmd.New,
 			reprocesscmd.New,
 			plugincmd.New,
+			searchcmd.New,
 			processcmd.New,
 			setupcmd.New,
 			torrentcmd.New,

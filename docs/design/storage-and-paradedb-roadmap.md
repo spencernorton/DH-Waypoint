@@ -25,9 +25,12 @@ The staged migration path consolidates per-torrent file metadata into a single c
 - Dual-read in `internal/processors/source.go`, `internal/database/search/hydrate_torrent_files.go`, and GraphQL/REST file resolvers (`COALESCE` from `files_compact`, falling back to `torrent_files` during online background backfill).
 - Backfill `files_compact` in bounded keyset batches (`10,000` infohashes per transaction) with zero lock contention, then drop `torrent_files` once `100%` of `multi` rows carry `files_compact`.
 
-## Opt-In ParadeDB `pg_search` BM25 Integration
+## Opt-In ParadeDB `pg_search` BM25 Integration (Shipped)
 
-`DH-Waypoint` remains 100% MIT-licensed in Go and communicates with ParadeDB solely through standard SQL queries when detected by `search.DetectDBCapabilities`:
+`DH-Waypoint` remains 100% MIT-licensed in Go and communicates with ParadeDB solely through standard SQL queries when detected by `search.DetectDBCapabilities`. Operator guide: [docs/paradedb-bm25.md](../paradedb-bm25.md).
 
 - Stock `postgres:16` / `postgres:18` containers require only `pg_trgm` and `btree_gin` (unchanged).
-- Operators who swap the PostgreSQL image to `paradedb/paradedb:latest-pg18` and create `torrent_contents_bm25_idx` unlock native Block-Max WAND BM25 top-K scoring (`paradedb.score(id)`) with transactional MVCC visibility and zero dual-write sync lag.
+- Migration `00080` adds only the `IMMUTABLE` helpers `torrent_contents_tsv_text(tsvector)` and `torrent_contents_ep_tokens(jsonb)` with zero storage on stock installs.
+- Operators who swap the PostgreSQL image to the pinned `paradedb/paradedb:0.26.6-pg18` and run `dh-waypoint search bm25 enable` unlock native Block-Max WAND BM25 top-K scoring (`pdb.score(torrent_contents.id)`) with transactional MVCC visibility and zero dual-write sync lag. The `enable` step creates the `pg_search` extension, adds `STORED` generated columns `search_text` and `ep_text`, and builds `torrent_contents_bm25_idx`.
+- Eligible queries (pure AND of single-word lexemes) run `search_text &&& ?` ordered by `pdb.score(torrent_contents.id)`; all other shapes (phrases, OR, NOT, wildcards, bare-season tokens) keep the existing `tsv @@ tsquery` fallback. `SEARCH_BM25_MODE=auto|on|off` (default `auto`) controls this routing.
+- Lifecycle and plan-shape checks: `dh-waypoint search bm25 enable`, `status`, `verify`, and `disable`. `disable` drops the index and generated columns; the extension and helper functions remain harmless.

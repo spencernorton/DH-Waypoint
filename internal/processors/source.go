@@ -35,7 +35,7 @@ var sourceSQL = `SELECT jsonb_build_object(
  'reprocess',(SELECT request_id FROM processor_reprocess_requests r WHERE r.info_hash=t.info_hash AND r.state IN('ready','queued','settled','core_only') ORDER BY created_at DESC,request_id DESC LIMIT 1),
  'hint',(SELECT to_jsonb(h)-'created_at'-'updated_at' FROM torrent_hints h WHERE h.info_hash=t.info_hash),
  'contents',COALESCE((SELECT jsonb_agg(x ORDER BY x->>'id') FROM
-  (SELECT to_jsonb(c)-'created_at'-'updated_at'-'seeders'-'leechers'-'published_at'-'tsv' x
+  (SELECT to_jsonb(c)-'created_at'-'updated_at'-'seeders'-'leechers'-'published_at'-'tsv'-'search_text'-'ep_text' x
    FROM torrent_contents c WHERE c.info_hash=t.info_hash ORDER BY id LIMIT 2) c),'[]'),
  'tags',COALESCE((SELECT jsonb_agg(name ORDER BY name) FROM torrent_tags WHERE info_hash=t.info_hash),'[]'),
  'canonical',(SELECT to_jsonb(c)-'created_at'-'updated_at' FROM torrent_canonical_labels c WHERE c.info_hash=t.info_hash),

@@ -1,0 +1,50 @@
+# DH-Waypoint opt-in ParadeDB BM25 overlay.
+# Use ONLY together with the public compose file and env file:
+# docker compose -f examples/docker-compose.public.yml -f examples/docker-compose.paradedb.yml --env-file examples/.env.public up -d
+# ParadeDB is AGPL-3.0 software run as a separate database process while
+# DH-Waypoint Go code stays MIT and talks plain SQL.
+# A fresh volume or pg_dump/pg_restore is required (PostgreSQL 16 Alpine/musl
+# data directories cannot be reused by PostgreSQL 18 glibc; major-version and
+# libc/collation incompatibility).
+# Rollback: stop stack, remove overlay, restore stock volume/dump.
+
+services:
+
+  postgres:
+    image: paradedb/paradedb:0.26.6-pg18
+    volumes:
+      - dh-waypoint-paradedb:/var/lib/postgresql/data
+    # Preserves the public file tuning flags, plus the ParadeDB preloads.
+    # pg_cron must be included because the image init script creates the
+    # pg_cron extension and fresh initdb fails with pg_search alone.
+    command:
+      - postgres
+      - -c
+      - shared_buffers=512MB
+      - -c
+      - effective_cache_size=1GB
+      - -c
+      - work_mem=16MB
+      - -c
+      - maintenance_work_mem=128MB
+      - -c
+      - max_connections=100
+      - -c
+      - autovacuum_vacuum_scale_factor=0.05
+      - -c
+      - autovacuum_analyze_scale_factor=0.02
+      - -c
+      - autovacuum_naptime=30s
+      - -c
+      - shared_preload_libraries=pg_search,pg_cron
+
+  dh-waypoint:
+    environment:
+      # --- Search BM25 (opt-in, ParadeDB) ---
+      # auto (default) and on: use BM25 for eligible queries when pg_search,
+      # the generated column, and a valid BM25 index are detected, otherwise
+      # stock tsquery. off: always stock tsquery.
+      SEARCH_BM25_MODE: "${SEARCH_BM25_MODE:-auto}"
+
+volumes:
+  dh-waypoint-paradedb:

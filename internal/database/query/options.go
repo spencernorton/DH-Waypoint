@@ -85,6 +85,23 @@ func SearchString(str string) Option {
 	}
 }
 
+// WithBM25Search allows eligible torrent_contents text searches to execute
+// through the opt-in ParadeDB BM25 index (search_text &&& terms scored by
+// pdb.score) instead of tsv @@ tsquery. Eligibility is resolved lazily from
+// the raw query string; grouped searches and other tables are unaffected.
+// The caller is responsible for capability detection (pg_search, valid index,
+// generated column, and the SEARCH_BM25_MODE setting).
+func WithBM25Search(enabled bool) Option {
+	return func(ctx OptionBuilder) (OptionBuilder, error) {
+		b, ok := ctx.(optionBuilder)
+		if !ok {
+			return ctx, nil
+		}
+		b.bm25Enabled = enabled
+		return b, nil
+	}
+}
+
 func Select(columns ...clause.Expr) Option {
 	return func(ctx OptionBuilder) (OptionBuilder, error) {
 		return ctx.Select(columns...), nil
