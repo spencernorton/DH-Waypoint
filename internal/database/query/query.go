@@ -564,6 +564,8 @@ type optionBuilder struct {
 	//revive:disable-next-line:nested-structs
 	requiredJoins     maps.InsertMap[string, struct{}]
 	tsquery           string
+	rawQueryString    string
+	bm25Enabled       bool
 	scopes            []Scope
 	selections        []clause.Expr
 	groupBy           []clause.Column
@@ -663,7 +665,21 @@ func (b optionBuilder) RequireJoin(names ...string) OptionBuilder {
 
 func (b optionBuilder) QueryString(str string) OptionBuilder {
 	b.tsquery = fts.AppQueryToTsquery(str)
+	b.rawQueryString = str
 	return b
+}
+
+// bm25Terms resolves the ParadeDB BM25 conjunction for this query, or
+// reports ineligible. Resolution is lazy because table, grouping, and the
+// BM25 opt-in may be set by options applied after SearchString. Only
+// ungrouped torrent_contents searches can use BM25: grouped mode has its own
+// derived-table text path, and pdb.score must never be emitted against an
+// outer alias.
+func (b optionBuilder) bm25Terms() ([]string, bool) {
+	if !b.bm25Enabled || b.tableName != "torrent_contents" || b.grouping != nil || b.tsquery == "" {
+		return nil, false
+	}
+	return fts.AppQueryToBM25Terms(b.rawQueryString)
 }
 
 func (b optionBuilder) Scope(scopes ...Scope) OptionBuilder {
@@ -833,7 +849,13 @@ func (b optionBuilder) applySelect(db *gorm.DB, withOrderSelect bool) error {
 				rankFragment := "0"
 				args := make([]interface{}, 0)
 
-				if b.tsquery != "" {
+				if _, bm25 := b.bm25Terms(); bm25 {
+					// pdb.score is evaluated by the ParadeDB scan that also
+					// applies the &&& predicate in applyPre. Count and exists
+					// queries call applySelect without order selections, so
+					// they never emit this fragment without the predicate.
+					rankFragment = "pdb.score(" + b.tableName + ".id)"
+				} else if b.tsquery != "" {
 					rankFragment = "ts_rank_cd(" + b.tableName + ".tsv, ?::tsquery)"
 					args = append(args, b.tsquery)
 				}
@@ -863,15 +885,21 @@ func (b optionBuilder) applyPre(sq SubQuery, withOrderJoins bool) error {
 	}
 
 	if b.tsquery != "" {
-		sq.UnderlyingDB().Where(b.tableName+".tsv @@ ?::tsquery", b.tsquery)
-		if b.tableName == "torrent_contents" && b.grouping == nil {
-			for _, ob := range b.orderBy {
-				if ob.Column.Name == QueryStringRankField {
-					sq.UnderlyingDB().Where(
-						"torrent_contents.id IN (SELECT tc_cap.id FROM torrent_contents tc_cap WHERE tc_cap.tsv @@ ?::tsquery ORDER BY tc_cap.published_at DESC LIMIT 1000)",
-						b.tsquery,
-					)
-					break
+		if terms, bm25 := b.bm25Terms(); bm25 {
+			// Block-Max WAND prunes globally to top-K, so the newest-1000
+			// tc_cap needed to bound ts_rank_cd heap scoring is skipped.
+			sq.UnderlyingDB().Where(b.tableName+".search_text &&& ?", strings.Join(terms, " "))
+		} else {
+			sq.UnderlyingDB().Where(b.tableName+".tsv @@ ?::tsquery", b.tsquery)
+			if b.tableName == "torrent_contents" && b.grouping == nil {
+				for _, ob := range b.orderBy {
+					if ob.Column.Name == QueryStringRankField {
+						sq.UnderlyingDB().Where(
+							"torrent_contents.id IN (SELECT tc_cap.id FROM torrent_contents tc_cap WHERE tc_cap.tsv @@ ?::tsquery ORDER BY tc_cap.published_at DESC LIMIT 1000)",
+							b.tsquery,
+						)
+						break
+					}
 				}
 			}
 		}
@@ -1048,6 +1076,12 @@ func (b optionBuilder) shouldTryCteStrategy() bool {
 	if b.grouping != nil {
 		// Grouped mode has its own single execution strategy (doItemsGrouped) and
 		// must never race the CTE strategy, which builds an ungrouped query.
+		return false
+	}
+
+	if _, bm25 := b.bm25Terms(); bm25 {
+		// The materialized CTE has no ORDER BY/LIMIT for ParadeDB to push
+		// into its top-K scan; racing it would defeat Block-Max WAND pruning.
 		return false
 	}
 
