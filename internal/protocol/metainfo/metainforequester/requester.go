@@ -109,31 +109,35 @@ func (r requester) Request(ctx context.Context, infoHash protocol.ID, addr netip
 		return Response{}, connErr
 	}
 
-	// DialContext stops observing cancellation once dialing succeeds. Close
-	// the active socket as well so cancellation interrupts handshake and
-	// metadata reads/writes immediately, before the absolute I/O deadline.
-	stopClose := context.AfterFunc(timeoutCtx, func() { _ = conn.Close() })
-	defer stopClose()
+	return FetchFromStream(timeoutCtx, conn, conn, infoHash, r.clientID)
+}
 
-	defer func() {
-		_ = conn.Close()
-	}()
+// FetchFromStream runs the BitTorrent handshake, BEP 10 extension handshake,
+// BEP 9 metadata exchange, and info-hash verification over an already-dialed
+// stream (TCP, uTP, or MSE/PE-wrapped). Context cancellation closes closer so
+// active reads/writes unblock immediately.
+func FetchFromStream(ctx context.Context, closer io.Closer, rw io.ReadWriter, infoHash protocol.ID, clientID protocol.ID) (Response, error) {
+	if closer != nil {
+		stopClose := context.AfterFunc(ctx, func() { _ = closer.Close() })
+		defer stopClose()
+		defer func() { _ = closer.Close() }()
+	}
 
-	hsInfo, btHandshakeErr := btHandshake(conn, infoHash, r.clientID)
+	hsInfo, btHandshakeErr := btHandshake(rw, infoHash, clientID)
 	if btHandshakeErr != nil {
 		return Response{}, btHandshakeErr
 	}
 
-	metadataSize, utMetadata, exHandshakeErr := exHandshake(conn)
+	metadataSize, utMetadata, exHandshakeErr := exHandshake(rw)
 	if exHandshakeErr != nil {
 		return Response{}, exHandshakeErr
 	}
 
-	if requestAllPiecesErr := requestAllPieces(conn, metadataSize, utMetadata); requestAllPiecesErr != nil {
+	if requestAllPiecesErr := requestAllPieces(rw, metadataSize, utMetadata); requestAllPiecesErr != nil {
 		return Response{}, requestAllPiecesErr
 	}
 
-	pieces, readAllPiecesErr := readAllPieces(conn, metadataSize)
+	pieces, readAllPiecesErr := readAllPieces(rw, metadataSize)
 	if readAllPiecesErr != nil {
 		return Response{}, readAllPiecesErr
 	}
@@ -273,8 +277,12 @@ const (
 )
 
 func exHandshake(rw io.ReadWriter) (metadataSize uint, utMetadata uint8, err error) {
-	if _, writeErr := rw.Write([]byte("\x00\x00\x00\x1a\x14\x00d1:md11:ut_metadatai1eee")); writeErr != nil {
+	const handshakePayload = "\x00\x00\x00\x1a\x14\x00d1:md11:ut_metadatai1eee"
+	if n, writeErr := rw.Write([]byte(handshakePayload)); writeErr != nil {
 		err = writeErr
+		return
+	} else if n != len(handshakePayload) {
+		err = io.ErrShortWrite
 		return
 	}
 
@@ -300,7 +308,7 @@ func exHandshake(rw io.ReadWriter) (metadataSize uint, utMetadata uint8, err err
 		return
 	}
 
-	if 0 >= rRootDict.M.UTMetadata || rRootDict.M.UTMetadata >= 255 {
+	if 0 >= rRootDict.M.UTMetadata || rRootDict.M.UTMetadata > 255 {
 		err = errors.New("ut_metadata is not an uint8")
 		return
 	}

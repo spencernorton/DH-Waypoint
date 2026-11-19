@@ -190,7 +190,6 @@ func TestReadAllPiecesRejectsInconsistentMessages(t *testing.T) {
 			payload:   []byte("unexpected"),
 			errString: "reject contains trailing payload",
 		},
-
 	}
 
 	for _, tt := range tests {
@@ -388,3 +387,45 @@ func TestClassifyRequesterErrorBuckets(t *testing.T) {
 	require.Equal(t, "protocol_error", classifyRequesterError(fmt.Errorf("ut_metadata header is missing msg_type")))
 }
 
+type shortWriteRW struct {
+	*bytes.Reader
+}
+
+func (s *shortWriteRW) Write(p []byte) (int, error) {
+	if len(p) > 4 {
+		return 4, nil
+	}
+	return len(p), nil
+}
+
+func TestExHandshakeDynamicUTMetadataIDs(t *testing.T) {
+	for _, id := range []int{1, 2, 7, 127, 254, 255} {
+		t.Run(fmt.Sprintf("valid_id_%d", id), func(t *testing.T) {
+			dict := fmt.Sprintf("d1:md11:ut_metadatai%dee13:metadata_sizei128ee", id)
+			body := append([]byte{byte(peer_protocol.Extended), 0}, []byte(dict)...)
+			rw := &readWriter{Reader: bytes.NewReader(frame(body))}
+
+			size, utID, err := exHandshake(rw)
+			require.NoError(t, err)
+			require.Equal(t, uint(128), size)
+			require.Equal(t, uint8(id), utID)
+		})
+	}
+
+	for _, id := range []int{-1, 0, 256, 512} {
+		t.Run(fmt.Sprintf("invalid_id_%d", id), func(t *testing.T) {
+			dict := fmt.Sprintf("d1:md11:ut_metadatai%dee13:metadata_sizei128ee", id)
+			body := append([]byte{byte(peer_protocol.Extended), 0}, []byte(dict)...)
+			rw := &readWriter{Reader: bytes.NewReader(frame(body))}
+
+			_, _, err := exHandshake(rw)
+			require.ErrorContains(t, err, "ut_metadata is not an uint8")
+		})
+	}
+
+	t.Run("short_write_returns_err_short_write", func(t *testing.T) {
+		rw := &shortWriteRW{Reader: bytes.NewReader(nil)}
+		_, _, err := exHandshake(rw)
+		require.ErrorIs(t, err, io.ErrShortWrite)
+	})
+}

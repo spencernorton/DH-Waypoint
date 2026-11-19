@@ -140,3 +140,53 @@ func TestRequesterDeadlineStillBoundsStalledPeer(t *testing.T) {
 	require.Error(t, err)
 	require.Less(t, time.Since(start), time.Second)
 }
+
+func TestRequesterFetchesMetadataWithMaxDynamicExtensionID255(t *testing.T) {
+	info := metainfo.Info{Name: "synthetic-max-ext-id.txt", Length: 1, PieceLength: metadataPieceSize, Pieces: make([]byte, 20)}
+	metadata, err := bencode.Marshal(info)
+	require.NoError(t, err)
+	hash := protocol.ID(sha1.Sum(metadata))
+	peerID := protocol.ID{0x55}
+
+	addr, served := localPeer(t, "tcp4", "127.0.0.1:0", func(conn net.Conn) error {
+		hs := make([]byte, 68)
+		if _, err := io.ReadFull(conn, hs); err != nil {
+			return err
+		}
+		copy(hs[48:], peerID[:])
+		if _, err := conn.Write(hs); err != nil {
+			return err
+		}
+		if _, err := readMessage(conn); err != nil {
+			return err
+		}
+		root, err := bencode.Marshal(rootDict{M: mDict{UTMetadata: 255}, MetadataSize: len(metadata)})
+		if err != nil {
+			return err
+		}
+		hdr := append(uintToBigEndian4(uint(len(root)+2)), 20, 0)
+		if _, err := conn.Write(append(hdr, root...)); err != nil {
+			return err
+		}
+		request, err := readMessage(conn)
+		if err != nil {
+			return err
+		}
+		if len(request) < 2 || request[0] != 20 || request[1] != 255 {
+			return fmt.Errorf("expected ut_metadata request on extension ID 255, got %v", request[:min(2, len(request))])
+		}
+		// Interleave a forward-compatible unknown BEP 9 msg_type before delivering piece 0.
+		if _, err := conn.Write(utMetadataFrame("d8:msg_typei42ee", nil)); err != nil {
+			return err
+		}
+		_, err = conn.Write(dataFrame(0, len(metadata), metadata))
+		return err
+	})
+
+	r := requester{clientID: protocol.ID{0x23}, timeout: 2 * time.Second, dialer: &net.Dialer{}}
+	response, err := r.Request(context.Background(), hash, addr)
+	require.NoError(t, err)
+	require.NoError(t, <-served)
+	require.Equal(t, info.Name, response.Info.Name)
+	require.Equal(t, peerID, response.PeerID)
+}
