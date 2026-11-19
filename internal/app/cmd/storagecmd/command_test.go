@@ -49,7 +49,7 @@ func TestCompactFilesStatusFastAndStderrProgressPostgres(t *testing.T) {
 	ctx := context.Background()
 	admin, err := pgx.Connect(ctx, dsn)
 	require.NoError(t, err)
-	_, err = admin.Exec(ctx, `SELECT pg_advisory_lock(830571);CREATE EXTENSION IF NOT EXISTS pg_trgm WITH SCHEMA public;CREATE EXTENSION IF NOT EXISTS btree_gin WITH SCHEMA public;SELECT pg_advisory_unlock(830571)`)
+	_, err = admin.Exec(ctx, `SELECT pg_advisory_xact_lock(830571);CREATE EXTENSION IF NOT EXISTS pg_trgm WITH SCHEMA public;CREATE EXTENSION IF NOT EXISTS btree_gin WITH SCHEMA public`)
 	require.NoError(t, err)
 	schema := fmt.Sprintf("storagecmd_%d", time.Now().UnixNano())
 	_, err = admin.Exec(ctx, `CREATE SCHEMA `+pgx.Identifier{schema}.Sanitize())

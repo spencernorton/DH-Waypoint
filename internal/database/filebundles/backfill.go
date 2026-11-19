@@ -16,15 +16,16 @@ const backfillCursorKey = "storage_file_bundles_backfill"
 
 // BackfillProgress reports live progress during a Backfill run.
 type BackfillProgress struct {
-	Batches        int     `json:"batches"`
-	MigratedHashes int64   `json:"migrated_hashes"`
-	PrunedRows     int64   `json:"pruned_rows"`
-	VerifiedHashes int64   `json:"verified_hashes"`
-	ElapsedSeconds float64 `json:"elapsed_seconds"`
-	HashesPerSec   float64 `json:"hashes_per_sec"`
-	LastHash       string  `json:"last_hash,omitempty"`
-	Done           bool    `json:"done"`
-	Interrupted    bool    `json:"interrupted,omitempty"`
+	Batches          int     `json:"batches"`
+	MigratedHashes   int64   `json:"migrated_hashes"`
+	PrunedRows       int64   `json:"pruned_rows"`
+	VerifiedHashes   int64   `json:"verified_hashes"`
+	SupersededHashes int64   `json:"superseded_hashes,omitempty"`
+	ElapsedSeconds   float64 `json:"elapsed_seconds"`
+	HashesPerSec     float64 `json:"hashes_per_sec"`
+	LastHash         string  `json:"last_hash,omitempty"`
+	Done             bool    `json:"done"`
+	Interrupted      bool    `json:"interrupted,omitempty"`
 }
 
 // BackfillOptions bounds one backfill or parity-verification run.
@@ -48,6 +49,7 @@ type BackfillReport struct {
 	MigratedHashes   int64    `json:"migrated_hashes"`
 	PrunedRows       int64    `json:"pruned_rows"`
 	VerifiedHashes   int64    `json:"verified_hashes"`
+	SupersededHashes int64    `json:"superseded_hashes,omitempty"`
 	MismatchedHashes []string `json:"mismatched_hashes,omitempty"`
 	Done             bool     `json:"done"`
 	Interrupted      bool     `json:"interrupted,omitempty"`
@@ -57,6 +59,7 @@ type BackfillReport struct {
 // ParityReport summarizes one VerifyParity run.
 type ParityReport struct {
 	CheckedHashes    int64    `json:"checked_hashes"`
+	SupersededHashes int64    `json:"superseded_hashes,omitempty"`
 	MismatchedHashes []string `json:"mismatched_hashes,omitempty"`
 	Interrupted      bool     `json:"interrupted,omitempty"`
 }
@@ -231,6 +234,70 @@ func parityMismatches(ctx context.Context, db Querier, hashes [][]byte) ([]strin
 	return mismatched, nil
 }
 
+// splitSupersededMismatches separates parity mismatches caused by a newer,
+// structurally valid torrent_file_bundles row (for example a live compact
+// re-ingest that stripped legacy BEP 47 .pad/ entries after the legacy
+// torrent_files rows were written) from unexplained mismatches.
+//
+// A bundle is considered superseded only when it already shadows the legacy
+// rows with strictly newer updated_at than every legacy row's timestamps and
+// has non-empty equal-length parallel arrays. Corrupted same-transaction
+// dual-write bundles or empty/malformed bundles remain in genuineMismatched.
+func splitSupersededMismatches(ctx context.Context, db Querier, mismatchedHex []string) (superseded int64, genuine []string, err error) {
+	if len(mismatchedHex) == 0 {
+		return 0, nil, nil
+	}
+	rawHashes := make([][]byte, 0, len(mismatchedHex))
+	for _, h := range mismatchedHex {
+		b, decErr := hex.DecodeString(h)
+		if decErr != nil {
+			return 0, nil, fmt.Errorf("filebundles: decode mismatched hash %q: %w", h, decErr)
+		}
+		rawHashes = append(rawHashes, b)
+	}
+	rows, err := db.Query(ctx, `
+SELECT b.info_hash
+FROM torrent_file_bundles b
+JOIN (
+  SELECT info_hash, max(GREATEST(created_at, updated_at)) AS max_legacy_ts
+  FROM torrent_files
+  WHERE info_hash = ANY($1)
+  GROUP BY info_hash
+) l ON l.info_hash = b.info_hash
+WHERE b.info_hash = ANY($1)
+  AND b.updated_at > l.max_legacy_ts + interval '1 second'
+  AND cardinality(b.paths) > 0
+  AND cardinality(b.indexes) = cardinality(b.paths)
+  AND cardinality(b.sizes) = cardinality(b.paths)
+  AND cardinality(b.extensions) = cardinality(b.paths)`, rawHashes)
+	if err != nil {
+		return 0, nil, fmt.Errorf("filebundles: classify superseded bundles: %w", err)
+	}
+	supersededSet := make(map[string]struct{}, len(mismatchedHex))
+	for rows.Next() {
+		var h []byte
+		if scanErr := rows.Scan(&h); scanErr != nil {
+			rows.Close()
+			return 0, nil, fmt.Errorf("filebundles: scan superseded bundle hash: %w", scanErr)
+		}
+		supersededSet[hex.EncodeToString(h)] = struct{}{}
+	}
+	if rowsErr := rows.Err(); rowsErr != nil {
+		rows.Close()
+		return 0, nil, fmt.Errorf("filebundles: classify superseded bundles: %w", rowsErr)
+	}
+	rows.Close()
+
+	for _, h := range mismatchedHex {
+		if _, ok := supersededSet[h]; ok {
+			superseded++
+		} else {
+			genuine = append(genuine, h)
+		}
+	}
+	return superseded, genuine, nil
+}
+
 // VerifyParity checks every bundled hash that still has legacy rows.
 func VerifyParity(ctx context.Context, pool *pgxpool.Pool, opts BackfillOptions) (ParityReport, error) {
 	opts = normalizeOptions(opts)
@@ -268,8 +335,13 @@ func VerifyParity(ctx context.Context, pool *pgxpool.Pool, opts BackfillOptions)
 		if err != nil {
 			return report, err
 		}
+		superseded, genuine, err := splitSupersededMismatches(ctx, pool, mismatched)
+		if err != nil {
+			return report, err
+		}
 		report.CheckedHashes += int64(len(batch))
-		for _, h := range mismatched {
+		report.SupersededHashes += superseded
+		for _, h := range genuine {
 			if len(report.MismatchedHashes) < 100 {
 				report.MismatchedHashes = append(report.MismatchedHashes, h)
 			}
@@ -359,6 +431,7 @@ func Backfill(ctx context.Context, pool *pgxpool.Pool, opts BackfillOptions) (Ba
 			return report, err
 		}
 		report.VerifiedHashes = parity.CheckedHashes
+		report.SupersededHashes = parity.SupersededHashes
 		report.MismatchedHashes = parity.MismatchedHashes
 		report.Interrupted = parity.Interrupted
 		return report, nil
@@ -397,15 +470,16 @@ func Backfill(ctx context.Context, pool *pgxpool.Pool, opts BackfillOptions) (Ba
 			rate = float64(report.VerifiedHashes) / elapsed
 		}
 		opts.Progress(BackfillProgress{
-			Batches:        report.Batches,
-			MigratedHashes: report.MigratedHashes,
-			PrunedRows:     report.PrunedRows,
-			VerifiedHashes: report.VerifiedHashes,
-			ElapsedSeconds: elapsed,
-			HashesPerSec:   rate,
-			LastHash:       report.LastHash,
-			Done:           report.Done,
-			Interrupted:    report.Interrupted,
+			Batches:          report.Batches,
+			MigratedHashes:   report.MigratedHashes,
+			PrunedRows:       report.PrunedRows,
+			VerifiedHashes:   report.VerifiedHashes,
+			SupersededHashes: report.SupersededHashes,
+			ElapsedSeconds:   elapsed,
+			HashesPerSec:     rate,
+			LastHash:         report.LastHash,
+			Done:             report.Done,
+			Interrupted:      report.Interrupted,
 		})
 	}
 
@@ -422,7 +496,7 @@ func Backfill(ctx context.Context, pool *pgxpool.Pool, opts BackfillOptions) (Ba
 		if err != nil {
 			return report, fmt.Errorf("filebundles: begin backfill batch: %w", err)
 		}
-		batch, migrated, pruned, verified, done, batchErr := backfillBatch(ctx, tx, last, opts)
+		batch, migrated, pruned, verified, superseded, done, batchErr := backfillBatch(ctx, tx, last, opts)
 		if batchErr != nil {
 			_ = tx.Rollback(ctx)
 			return report, batchErr
@@ -442,6 +516,7 @@ func Backfill(ctx context.Context, pool *pgxpool.Pool, opts BackfillOptions) (Ba
 		report.MigratedHashes += migrated
 		report.PrunedRows += pruned
 		report.VerifiedHashes += verified
+		report.SupersededHashes += superseded
 		report.Done = done
 		if done {
 			emitProgress(true)
@@ -463,57 +538,103 @@ func Backfill(ctx context.Context, pool *pgxpool.Pool, opts BackfillOptions) (Ba
 	return report, nil
 }
 
-func backfillBatch(ctx context.Context, tx pgx.Tx, last []byte, opts BackfillOptions) (batch [][]byte, migrated, pruned, verified int64, done bool, err error) {
+func backfillBatch(ctx context.Context, tx pgx.Tx, last []byte, opts BackfillOptions) (batch [][]byte, migrated, pruned, verified, superseded int64, done bool, err error) {
 	if _, err := tx.Exec(ctx, `SELECT set_config('dh_waypoint.suppress_publication_trigger','on',true)`); err != nil {
-		return nil, 0, 0, 0, false, fmt.Errorf("filebundles: suppress publication trigger: %w", err)
+		return nil, 0, 0, 0, 0, false, fmt.Errorf("filebundles: suppress publication trigger: %w", err)
 	}
 	rows, err := tx.Query(ctx,
 		`SELECT t.info_hash FROM torrents t WHERE t.info_hash>$1 AND EXISTS(SELECT 1 FROM torrent_files f WHERE f.info_hash=t.info_hash) ORDER BY t.info_hash LIMIT $2`,
 		last, opts.BatchSize)
 	if err != nil {
-		return nil, 0, 0, 0, false, fmt.Errorf("filebundles: select backfill hashes: %w", err)
+		return nil, 0, 0, 0, 0, false, fmt.Errorf("filebundles: select backfill hashes: %w", err)
 	}
 	for rows.Next() {
 		var h []byte
 		if err := rows.Scan(&h); err != nil {
 			rows.Close()
-			return nil, 0, 0, 0, false, fmt.Errorf("filebundles: scan backfill hash: %w", err)
+			return nil, 0, 0, 0, 0, false, fmt.Errorf("filebundles: scan backfill hash: %w", err)
 		}
 		batch = append(batch, h)
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()
-		return nil, 0, 0, 0, false, fmt.Errorf("filebundles: select backfill hashes: %w", err)
+		return nil, 0, 0, 0, 0, false, fmt.Errorf("filebundles: select backfill hashes: %w", err)
 	}
 	rows.Close()
 	if len(batch) == 0 {
-		return batch, 0, 0, 0, true, nil
+		return batch, 0, 0, 0, 0, true, nil
 	}
 	done = len(batch) < opts.BatchSize
 
-	tag, err := tx.Exec(ctx,
-		`INSERT INTO torrent_file_bundles(info_hash,indexes,paths,sizes,extensions) SELECT d.info_hash, array_agg(d."index" ORDER BY d."index",d.path), array_agg(d.path ORDER BY d."index",d.path), array_agg(d.size ORDER BY d."index",d.path), array_agg(d.extension ORDER BY d."index",d.path) FROM (SELECT DISTINCT ON (info_hash,path) info_hash,"index",path,size,extension FROM torrent_files WHERE info_hash=ANY($1) ORDER BY info_hash,path,"index") d GROUP BY d.info_hash ON CONFLICT(info_hash) DO NOTHING`,
+	insRows, err := tx.Query(ctx,
+		`INSERT INTO torrent_file_bundles(info_hash,indexes,paths,sizes,extensions) SELECT d.info_hash, array_agg(d."index" ORDER BY d."index",d.path), array_agg(d.path ORDER BY d."index",d.path), array_agg(d.size ORDER BY d."index",d.path), array_agg(d.extension ORDER BY d."index",d.path) FROM (SELECT DISTINCT ON (info_hash,path) info_hash,"index",path,size,extension FROM torrent_files WHERE info_hash=ANY($1) ORDER BY info_hash,path,"index") d GROUP BY d.info_hash ON CONFLICT(info_hash) DO NOTHING RETURNING info_hash`,
 		batch)
 	if err != nil {
-		return batch, 0, 0, 0, false, fmt.Errorf("filebundles: insert bundles: %w", err)
+		return batch, 0, 0, 0, 0, false, fmt.Errorf("filebundles: insert bundles: %w", err)
 	}
-	migrated = tag.RowsAffected()
+	insertedSet := make(map[string]struct{}, len(batch))
+	var inserted [][]byte
+	for insRows.Next() {
+		var h []byte
+		if scanErr := insRows.Scan(&h); scanErr != nil {
+			insRows.Close()
+			return batch, 0, 0, 0, 0, false, fmt.Errorf("filebundles: scan inserted bundle hash: %w", scanErr)
+		}
+		inserted = append(inserted, h)
+		insertedSet[string(h)] = struct{}{}
+	}
+	if insErr := insRows.Err(); insErr != nil {
+		insRows.Close()
+		return batch, 0, 0, 0, 0, false, fmt.Errorf("filebundles: insert bundles: %w", insErr)
+	}
+	insRows.Close()
+	migrated = int64(len(inserted))
 
-	mismatched, err := parityMismatches(ctx, tx, batch)
-	if err != nil {
-		return batch, 0, 0, 0, false, err
+	// Newly migrated bundles must always match legacy rows strictly.
+	if len(inserted) > 0 {
+		mismatchedNew, mErr := parityMismatches(ctx, tx, inserted)
+		if mErr != nil {
+			return batch, 0, 0, 0, 0, false, mErr
+		}
+		if len(mismatchedNew) > 0 {
+			return batch, 0, 0, 0, 0, false, fmt.Errorf("filebundles: bundle parity mismatch for newly migrated hashes %v", mismatchedNew)
+		}
 	}
-	if len(mismatched) > 0 {
-		return batch, 0, 0, 0, false, fmt.Errorf("filebundles: bundle parity mismatch for hashes %v", mismatched)
+
+	// Pre-existing bundles may have been written by a newer live compact ingest
+	// (for example stripping legacy BEP 47 .pad/ entries). Allow those valid
+	// superseded bundles to proceed and prune shadowed legacy rows, while still
+	// failing loudly on corrupted or malformed bundles.
+	var existing [][]byte
+	for _, h := range batch {
+		if _, isNew := insertedSet[string(h)]; !isNew {
+			existing = append(existing, h)
+		}
 	}
-	verified = int64(len(batch))
+	if len(existing) > 0 {
+		mismatchedExisting, mErr := parityMismatches(ctx, tx, existing)
+		if mErr != nil {
+			return batch, 0, 0, 0, 0, false, mErr
+		}
+		if len(mismatchedExisting) > 0 {
+			var genuine []string
+			superseded, genuine, err = splitSupersededMismatches(ctx, tx, mismatchedExisting)
+			if err != nil {
+				return batch, 0, 0, 0, 0, false, err
+			}
+			if len(genuine) > 0 {
+				return batch, 0, 0, 0, 0, false, fmt.Errorf("filebundles: bundle parity mismatch for hashes %v", genuine)
+			}
+		}
+	}
+	verified = int64(len(batch)) - superseded
 
 	if opts.PruneLegacy {
 		tag, err := tx.Exec(ctx, `DELETE FROM torrent_files WHERE info_hash=ANY($1)`, batch)
 		if err != nil {
-			return batch, 0, 0, 0, false, fmt.Errorf("filebundles: prune legacy rows: %w", err)
+			return batch, 0, 0, 0, 0, false, fmt.Errorf("filebundles: prune legacy rows: %w", err)
 		}
 		pruned = tag.RowsAffected()
 	}
-	return batch, migrated, pruned, verified, done, nil
+	return batch, migrated, pruned, verified, superseded, done, nil
 }
