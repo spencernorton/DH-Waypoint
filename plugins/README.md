@@ -19,5 +19,5 @@ model or Armiger version behind a file-managed plugin, DH-Waypoint detects the
 new service identity on the next 30-second sync tick and re-registers it
 automatically.
 
-Writing your own: [plugin files](../docs/processors/plugin-files.md) and the
+Writing your own: [Plugin & Adapter SDK](../docs/plugins-sdk.md), [plugin files](../docs/processors/plugin-files.md), and the
 [processor protocol](../docs/processors/v1.md).

@@ -27,6 +27,41 @@ paths:
         - name: offset
           in: query
           schema: { type: integer, default: 0 }
+        - name: resolution
+          in: query
+          schema: { type: string }
+          description: Video resolution filter (e.g., 2160p, 1080p, 720p, or V2160p)
+        - name: video_source
+          in: query
+          schema: { type: string, enum: [CAM, TELESYNC, TELECINE, WORKPRINT, DVD, TV, WEBDL, WEBRip, BluRay] }
+        - name: video_codec
+          in: query
+          schema: { type: string, enum: [H264, x264, x265, XviD, DivX, MPEG2, MPEG4, HEVC, AV1] }
+        - name: hdr
+          in: query
+          schema: { type: string, enum: [HDR, HDR10, HDR10_PLUS, DOLBY_VISION] }
+        - name: min_seeders
+          in: query
+          schema: { type: integer, minimum: 0 }
+        - name: season
+          in: query
+          schema: { type: integer, minimum: 0, maximum: 1000 }
+        - name: episode
+          in: query
+          schema: { type: integer, minimum: 0, maximum: 10000 }
+          description: Requires season
+        - name: imdb
+          in: query
+          schema: { type: string, pattern: "^tt[0-9]{1,12}$" }
+        - name: tmdb
+          in: query
+          schema: { type: string, pattern: "^[1-9][0-9]{0,11}$" }
+        - name: order_by
+          in: query
+          schema: { type: string, enum: [published_at, seeders, leechers, size, files_count, relevance], default: published_at }
+        - name: order_dir
+          in: query
+          schema: { type: string, enum: [asc, desc], default: desc }
       responses:
         "200":
           description: Search page

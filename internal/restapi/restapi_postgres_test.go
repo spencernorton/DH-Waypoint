@@ -303,3 +303,55 @@ func TestV2SearchSubstringGenericPlanUsesTrigramIndex(t *testing.T) {
 	visit(plans[0]["Plan"].(map[string]any))
 	require.True(t, usesTrigram, "generic substring plan must use torrents_name_trgm_v2_idx: %s", raw)
 }
+
+func TestRESTSearchRichFiltersAndEpisodeLookup(t *testing.T) {
+	engine, pool := restEngine(t)
+	ctx := context.Background()
+
+	_, err := pool.Exec(ctx, `INSERT INTO content(type, source, id, title, release_year, tsv, created_at, updated_at)
+		VALUES ('tv_show', 'tmdb', '4242', 'Synthetic Chronicles', 2025, to_tsvector('simple', 'Synthetic Chronicles'), clock_timestamp(), clock_timestamp())`)
+	require.NoError(t, err)
+
+	h1 := protocol.InfoHash{0xa1}
+	h2 := protocol.InfoHash{0xa2}
+	h3 := protocol.InfoHash{0xa3}
+	for _, row := range []struct {
+		h       protocol.InfoHash
+		name    string
+		res     string
+		src     string
+		codec   string
+		seeders int
+		eps     string
+		attrs   string
+	}{
+		{h1, "Synthetic.Chronicles.S01E02.2160p.WEB-DL.HDR10.x265", "V2160p", "WEBDL", "x265", 25, `{"1":{"2":{}}}`, `{"version":1,"parser":"release-attributes-v1","sourceNameSha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","hdrFormats":["HDR10"]}`},
+		{h2, "Synthetic.Chronicles.S01E02.1080p.BluRay.x264", "V1080p", "BluRay", "x264", 80, `{"1":{"2":{}}}`, `{"version":1,"parser":"release-attributes-v1","sourceNameSha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`},
+		{h3, "Synthetic.Chronicles.S02E01.2160p.WEB-DL.x265", "V2160p", "WEBDL", "x265", 2, `{"2":{"1":{}}}`, `{"version":1,"parser":"release-attributes-v1","sourceNameSha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`},
+	} {
+		_, err = pool.Exec(ctx, `INSERT INTO torrents(info_hash, name, size, private, files_status, created_at, updated_at)
+			VALUES($1,$2,2000,false,'single',clock_timestamp(),clock_timestamp())`, row.h.Bytes(), row.name)
+		require.NoError(t, err)
+		_, err = pool.Exec(ctx, `INSERT INTO torrent_contents(info_hash, content_type, content_source, content_id, episodes, video_resolution, video_source, video_codec, release_attributes, seeders, size, published_at, created_at, updated_at)
+			VALUES($1,'tv_show','tmdb','4242',$2::jsonb,$3,$4,$5,$6::jsonb,$7,2000,clock_timestamp(),clock_timestamp(),clock_timestamp())`,
+			row.h.Bytes(), row.eps, row.res, row.src, row.codec, row.attrs, row.seeders)
+		require.NoError(t, err)
+	}
+
+	queryHashes := func(path string) []string {
+		rec := httptest.NewRecorder()
+		engine.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+		var body searchResponse
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+		out := make([]string, 0, len(body.Items))
+		for _, it := range body.Items {
+			out = append(out, it.InfoHash)
+		}
+		return out
+	}
+
+	require.Equal(t, []string{h1.String()}, queryHashes("/api/v1/search?type=tv_show&tmdb=4242&season=1&episode=2&resolution=2160p&hdr=HDR10"))
+	require.Equal(t, []string{h2.String(), h1.String()}, queryHashes("/api/v1/search?type=tv_show&tmdb=4242&season=1&episode=2&min_seeders=10&order_by=seeders&order_dir=desc"))
+	require.Equal(t, []string{h1.String()}, queryHashes("/api/v1/search?video_source=WEBDL&video_codec=x265&min_seeders=10"))
+}

@@ -117,3 +117,43 @@ func TestOpenAPIDocsCopyMatchesEmbedded(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, openAPIV2Spec, v2)
 }
+
+func TestRESTSearchFilterValidation(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	api := New(lazy.New(func() (search.ServingSearch, error) {
+		return fakeSearch{}, nil
+	}), nil)
+	engine := gin.New()
+	require.NoError(t, api.Apply(engine))
+
+	for _, bad := range []string{
+		"/api/v1/search?resolution=999p",
+		"/api/v1/search?video_source=VHS",
+		"/api/v1/search?video_codec=RealVideo",
+		"/api/v1/search?hdr=NOPE",
+		"/api/v1/search?min_seeders=-1",
+		"/api/v1/search?episode=3",
+		"/api/v1/search?season=-1",
+		"/api/v1/search?season=1&episode=-5",
+		"/api/v1/search?imdb=12345",
+		"/api/v1/search?tmdb=abc",
+		"/api/v1/search?order_by=bogus",
+		"/api/v1/search?order_dir=sideways",
+		"/api/v1/search?order_by=relevance",
+	} {
+		rec := httptest.NewRecorder()
+		engine.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, bad, nil))
+		require.Equal(t, http.StatusBadRequest, rec.Code, "expected 400 for %s", bad)
+	}
+
+	for _, good := range []string{
+		"/api/v1/search?resolution=2160p&video_source=WEBDL&video_codec=x265&hdr=HDR10&min_seeders=5",
+		"/api/v1/search?type=tv_show&tmdb=12345&season=1&episode=2&order_by=seeders&order_dir=desc",
+		"/api/v1/search?q=matrix&order_by=relevance",
+		"/api/v1/search?imdb=tt0133093",
+	} {
+		rec := httptest.NewRecorder()
+		engine.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, good, nil))
+		require.Equal(t, http.StatusOK, rec.Code, "expected 200 for %s: %s", good, rec.Body.String())
+	}
+}

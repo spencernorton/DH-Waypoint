@@ -173,6 +173,39 @@ services:
       ARMIGER_VERSION: ${ARMIGER_VERSION:-3.8.1}
       ARMIGER_MIN_CONFIDENCE: ${ARMIGER_MIN_CONFIDENCE:-0.6}
 
+  stremio:
+    profiles: [stremio]
+    build:
+      context: .
+      dockerfile: adapters/stremio/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      dh-waypoint:
+        condition: service_healthy
+    environment:
+      STREMIO_LISTEN: 0.0.0.0:7000
+      DH_WAYPOINT_TORZNAB_URL: http://dh-waypoint:3333
+      DH_WAYPOINT_TORZNAB_KEY: ${TORZNAB_API_KEY:-}
+      STREMIO_ADDON_NAME: ${STREMIO_ADDON_NAME:-DH-Waypoint}
+      STREMIO_MAX_STREAMS: "${STREMIO_MAX_STREAMS:-25}"
+    ports:
+      - "${STREMIO_BIND:-127.0.0.1}:${STREMIO_PORT:-7000}:7000"
+
+  prowlarr-sync:
+    profiles: [prowlarr-sync]
+    build:
+      context: .
+      dockerfile: adapters/prowlarr-sync/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      dh-waypoint:
+        condition: service_healthy
+    environment:
+      DH_WAYPOINT_URL: http://dh-waypoint:3333
+      PROWLARR_TORZNAB_FEED_URL: ${PROWLARR_TORZNAB_FEED_URL:-}
+      PROWLARR_API_KEY: ${PROWLARR_API_KEY:-}
+      PROWLARR_IMPORT_SOURCE: ${PROWLARR_IMPORT_SOURCE:-prowlarr-sync}
+
 volumes:
   dh-waypoint-config:
   dh-waypoint-data:

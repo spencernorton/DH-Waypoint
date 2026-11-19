@@ -11,6 +11,7 @@ package restapi
 import (
 	_ "embed"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -153,6 +154,27 @@ func paging(c *gin.Context) (limit, offset uint, errMsg string) {
 	return limit, offset, ""
 }
 
+var (
+	imdbIDPattern = regexp.MustCompile(`^tt[0-9]{1,12}$`)
+	tmdbIDPattern = regexp.MustCompile(`^[1-9][0-9]{0,11}$`)
+	validHDR      = map[string]bool{
+		"HDR":          true,
+		"HDR10":        true,
+		"HDR10_PLUS":   true,
+		"DOLBY_VISION": true,
+	}
+)
+
+func parseResolutionParam(raw string) (model.VideoResolution, error) {
+	if r, err := model.ParseVideoResolution(raw); err == nil {
+		return r, nil
+	}
+	if !strings.HasPrefix(raw, "V") && !strings.HasPrefix(raw, "v") {
+		return model.ParseVideoResolution("V" + raw)
+	}
+	return "", model.ErrInvalidVideoResolution
+}
+
 func (a *API) runSearch(c *gin.Context, extra ...query.Option) (search.TorrentContentResult, bool) {
 	s, err := a.search.Get()
 	if err != nil {
@@ -170,20 +192,177 @@ func (a *API) runSearch(c *gin.Context, extra ...query.Option) (search.TorrentCo
 		TotalCount:  model.NewNullBool(true),
 		HasNextPage: model.NewNullBool(true),
 	}
-	if q := strings.TrimSpace(c.Query("q")); q != "" {
-		params.QueryString = model.NewNullString(q)
+	qStr := strings.TrimSpace(c.Query("q"))
+	if qStr != "" {
+		params.QueryString = model.NewNullString(qStr)
 	}
 	options := []query.Option{search.TorrentContentDefaultOption(), params.Option(), query.Where(search.LegacyTorrentIdentityCriteria("torrent_contents"))}
+	var contentTypeFilter *model.ContentType
 	if typeParam := strings.TrimSpace(c.Query("type")); typeParam != "" {
 		ct, err := model.ParseContentType(typeParam)
 		if err != nil {
 			c.JSON(400, gin.H{"error": "unknown content type"})
 			return search.TorrentContentResult{}, false
 		}
+		contentTypeFilter = &ct
 		options = append(options, query.Where(search.TorrentContentTypeCriteria(ct)))
 	}
+	if resParam := strings.TrimSpace(c.Query("resolution")); resParam != "" {
+		res, err := parseResolutionParam(resParam)
+		if err != nil {
+			c.JSON(400, gin.H{"error": "unknown video resolution"})
+			return search.TorrentContentResult{}, false
+		}
+		options = append(options, query.Where(query.DBCriteria{
+			SQL:  "torrent_contents.video_resolution = ?",
+			Args: []any{res.String()},
+		}))
+	}
+	if srcParam := strings.TrimSpace(c.Query("video_source")); srcParam != "" {
+		vs, err := model.ParseVideoSource(srcParam)
+		if err != nil {
+			c.JSON(400, gin.H{"error": "unknown video source"})
+			return search.TorrentContentResult{}, false
+		}
+		options = append(options, query.Where(query.DBCriteria{
+			SQL:  "torrent_contents.video_source = ?",
+			Args: []any{vs.String()},
+		}))
+	}
+	if codecParam := strings.TrimSpace(c.Query("video_codec")); codecParam != "" {
+		vc, err := model.ParseVideoCodec(codecParam)
+		if err != nil {
+			c.JSON(400, gin.H{"error": "unknown video codec"})
+			return search.TorrentContentResult{}, false
+		}
+		options = append(options, query.Where(query.DBCriteria{
+			SQL:  "torrent_contents.video_codec = ?",
+			Args: []any{vc.String()},
+		}))
+	}
+	if hdrParam := strings.ToUpper(strings.TrimSpace(c.Query("hdr"))); hdrParam != "" {
+		if !validHDR[hdrParam] {
+			c.JSON(400, gin.H{"error": "unknown hdr format"})
+			return search.TorrentContentResult{}, false
+		}
+		options = append(options, query.Where(search.TorrentContentReleaseAttributeCriteria("hdrFormats", hdrParam)))
+	}
+	if minSeedersParam := strings.TrimSpace(c.Query("min_seeders")); minSeedersParam != "" {
+		n, err := strconv.ParseUint(minSeedersParam, 10, 32)
+		if err != nil {
+			c.JSON(400, gin.H{"error": "min_seeders must be a non-negative integer"})
+			return search.TorrentContentResult{}, false
+		}
+		options = append(options, query.Where(query.DBCriteria{
+			SQL:  "torrent_contents.seeders >= ?",
+			Args: []any{uint(n)},
+		}))
+	}
+	ctx := c.Request.Context()
+	seasonRaw := strings.TrimSpace(c.Query("season"))
+	episodeRaw := strings.TrimSpace(c.Query("episode"))
+	if episodeRaw != "" && seasonRaw == "" {
+		c.JSON(400, gin.H{"error": "episode requires season"})
+		return search.TorrentContentResult{}, false
+	}
+	if seasonRaw != "" {
+		seasonNum, err := strconv.Atoi(seasonRaw)
+		if err != nil || seasonNum < 0 || seasonNum > 1000 {
+			c.JSON(400, gin.H{"error": "season must be an integer between 0 and 1000"})
+			return search.TorrentContentResult{}, false
+		}
+		eps := model.Episodes{}
+		if episodeRaw != "" {
+			epNum, err := strconv.Atoi(episodeRaw)
+			if err != nil || epNum < 0 || epNum > 10000 {
+				c.JSON(400, gin.H{"error": "episode must be an integer between 0 and 10000"})
+				return search.TorrentContentResult{}, false
+			}
+			eps = eps.AddEpisode(seasonNum, epNum)
+		} else {
+			eps = eps.AddSeason(seasonNum)
+		}
+		options = append(options, query.Where(search.TorrentContentEpisodesCriteria(eps)))
+		ctx = search.WithEpisodesHint(ctx, eps)
+	}
+	var idRefs []model.ContentRef
+	if imdbParam := strings.TrimSpace(c.Query("imdb")); imdbParam != "" {
+		if !imdbIDPattern.MatchString(imdbParam) {
+			c.JSON(400, gin.H{"error": "invalid imdb id"})
+			return search.TorrentContentResult{}, false
+		}
+		if contentTypeFilter != nil {
+			idRefs = append(idRefs, model.ContentRef{Type: *contentTypeFilter, Source: model.SourceImdb, ID: imdbParam})
+		} else {
+			idRefs = append(idRefs,
+				model.ContentRef{Type: model.ContentTypeMovie, Source: model.SourceImdb, ID: imdbParam},
+				model.ContentRef{Type: model.ContentTypeTvShow, Source: model.SourceImdb, ID: imdbParam},
+			)
+		}
+	}
+	if tmdbParam := strings.TrimSpace(c.Query("tmdb")); tmdbParam != "" {
+		if !tmdbIDPattern.MatchString(tmdbParam) {
+			c.JSON(400, gin.H{"error": "invalid tmdb id"})
+			return search.TorrentContentResult{}, false
+		}
+		if contentTypeFilter != nil {
+			idRefs = append(idRefs, model.ContentRef{Type: *contentTypeFilter, Source: model.SourceTmdb, ID: tmdbParam})
+		} else {
+			idRefs = append(idRefs,
+				model.ContentRef{Type: model.ContentTypeMovie, Source: model.SourceTmdb, ID: tmdbParam},
+				model.ContentRef{Type: model.ContentTypeTvShow, Source: model.SourceTmdb, ID: tmdbParam},
+			)
+		}
+	}
+	orderByRaw := strings.TrimSpace(c.Query("order_by"))
+	orderDirRaw := strings.ToLower(strings.TrimSpace(c.Query("order_dir")))
+	if orderByRaw != "" || orderDirRaw != "" {
+		dir := search.OrderDirectionDescending
+		switch orderDirRaw {
+		case "", "desc":
+			dir = search.OrderDirectionDescending
+		case "asc":
+			dir = search.OrderDirectionAscending
+		default:
+			c.JSON(400, gin.H{"error": "order_dir must be asc or desc"})
+			return search.TorrentContentResult{}, false
+		}
+		var order search.TorrentContentOrderBy
+		switch orderByRaw {
+		case "", "published_at":
+			order = search.TorrentContentOrderByPublishedAt
+		case "seeders":
+			order = search.TorrentContentOrderBySeeders
+		case "leechers":
+			order = search.TorrentContentOrderByLeechers
+		case "size":
+			order = search.TorrentContentOrderBySize
+		case "files_count":
+			order = search.TorrentContentOrderByFilesCount
+		case "relevance":
+			if qStr == "" {
+				c.JSON(400, gin.H{"error": "order_by=relevance requires q"})
+				return search.TorrentContentResult{}, false
+			}
+			order = search.TorrentContentOrderByRelevance
+		default:
+			c.JSON(400, gin.H{"error": "unknown order_by"})
+			return search.TorrentContentResult{}, false
+		}
+		options = append(options, query.OrderBy(order.Clauses(dir)...))
+	}
 	options = append(options, extra...)
-	result, err := s.TorrentContent(c.Request.Context(), options...)
+	var result search.TorrentContentResult
+	if len(idRefs) > 0 {
+		if idSearch, ok := s.(search.IdentifierTorrentContentSearch); ok {
+			result, err = idSearch.TorrentContentByIdentifiers(ctx, idRefs, options...)
+		} else {
+			options = append(options, query.Where(search.TorrentContentIdentifiersCriteria(idRefs...)))
+			result, err = s.TorrentContent(ctx, options...)
+		}
+	} else {
+		result, err = s.TorrentContent(ctx, options...)
+	}
 	if err != nil {
 		a.fail(c, err)
 		return search.TorrentContentResult{}, false
