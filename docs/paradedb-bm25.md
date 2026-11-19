@@ -123,32 +123,96 @@ stock `tsquery` path and investigate before relying on BM25 ranking.
 ## Migrating from stock `postgres:16-alpine`
 
 The data directory cannot be reused: musl to glibc plus major version means
-collation and on-disk incompatibility. Migrate by dump and restore:
+collation and on-disk incompatibility, and PostgreSQL 18 containers require
+mounting the data volume at `/var/lib/postgresql` rather than
+`/var/lib/postgresql/data`. Migrate by logical custom-format dump and parallel
+restore so every B-tree, GIN, and trigram index is rebuilt cleanly under PG 18
+glibc collations.
+
+**Recommended pre-step (schema 81+):** run `dh-waypoint storage compact-files --prune-legacy`
+followed by `VACUUM FULL torrent_files; ANALYZE;` on PG 16 before cutover. In
+rehearsals this shrank file storage by 86% and total database size by 40–47%,
+cutting dump size and restore time nearly in half with zero publication
+revision drift.
+
+### Automated helper (`scripts/migrate-to-paradedb.sh`)
+
+`scripts/migrate-to-paradedb.sh` automates pre-flight checks, custom-format
+`pg_dump` (`-Fc -Z 1`), parallel `pg_restore`, `ANALYZE`, exact row-count plus
+publication-revision / payload-approval parity verification across all core
+tables, optional `dh-waypoint search bm25 enable` + `verify --verbose`, and an
+optional machine-readable JSON timing report:
 
 ```bash
-# 1. Dump from the running PG16 container (synthetic path shown).
-docker compose exec postgres pg_dump -U bitmagnet -Fc bitmagnet > backup.dump
+# 1. Pre-flight check only (verifies versions, pg_search preload, target emptiness).
+scripts/migrate-to-paradedb.sh \
+  --source-dsn "postgres://bitmagnet:<pass>@127.0.0.1:5432/bitmagnet?sslmode=disable" \
+  --target-dsn "postgres://bitmagnet:<pass>@127.0.0.1:5433/bitmagnet?sslmode=disable" \
+  --pg-container dh-waypoint-paradedb \
+  --dry-run
 
-# 2. Stop the stock stack, then start ParadeDB on its fresh volume.
+# 2. Execute cutover (run after stopping writers to the source PG16 database).
+scripts/migrate-to-paradedb.sh \
+  --source-dsn "postgres://bitmagnet:<pass>@pg16-host:5432/bitmagnet?sslmode=disable" \
+  --target-dsn "postgres://bitmagnet:<pass>@127.0.0.1:5432/bitmagnet?sslmode=disable" \
+  --bm25-dsn "postgres://bitmagnet:<pass>@127.0.0.1:5433/bitmagnet?sslmode=disable" \
+  --pg-container dh-waypoint-paradedb \
+  --jobs 4 \
+  --compress 1 \
+  --dh-waypoint-bin /usr/local/bin/dh-waypoint \
+  --report-json /tmp/paradedb-migration-report.json
+```
+
+Pass `--skip-bm25` to end the offline maintenance window immediately after
+parity verification, then run `dh-waypoint search bm25 enable` and
+`dh-waypoint search bm25 verify --verbose` separately.
+
+### Manual Docker Compose flow
+
+```bash
+# 1. Dump from the running PG16 container.
+docker compose exec postgres pg_dump -U bitmagnet -Fc -Z 1 --no-owner --no-privileges bitmagnet > backup.dump
+
+# 2. Stop the stock stack, then start ParadeDB on its fresh /var/lib/postgresql volume.
 docker compose -f examples/docker-compose.public.yml --env-file examples/.env.public down
 docker compose -f examples/docker-compose.public.yml \
   -f examples/docker-compose.paradedb.yml \
   --env-file examples/.env.public up -d postgres
 
-# 3. Restore into the fresh PG18 volume (reindex after restore is handled by restore).
-cat backup.dump | docker compose exec -T postgres pg_restore -U bitmagnet -d bitmagnet --no-owner
+# 3. Parallel restore into the fresh PG18 volume (indexes are rebuilt cleanly).
+docker compose cp backup.dump postgres:/tmp/backup.dump
+docker compose exec postgres pg_restore -U bitmagnet -d bitmagnet -j 4 --no-owner --no-privileges --exit-on-error /tmp/backup.dump
+docker compose exec postgres rm -f /tmp/backup.dump
+docker compose exec postgres psql -U bitmagnet -d bitmagnet -c "ANALYZE;"
 
-# 4. Start the app (migrations run automatically on connect), then enable.
+# 4. Start the app (migrations run automatically on connect), then enable and verify.
 docker compose -f examples/docker-compose.public.yml \
   -f examples/docker-compose.paradedb.yml \
   --env-file examples/.env.public up -d
 docker compose exec dh-waypoint dh-waypoint search bm25 enable
-docker compose exec dh-waypoint dh-waypoint search bm25 verify
+docker compose exec dh-waypoint dh-waypoint search bm25 verify --verbose
 ```
 
 For SQL-format dumps, restore with `psql` instead of `pg_restore`. The stock
 `dh-waypoint-postgres` volume is never touched by the overlay, so it remains
 your fallback copy.
+
+### Measured upgrade rehearsals (PG 16.15 Alpine -> ParadeDB 0.26.6 / PG 18.6)
+
+Rehearsed end-to-end with `scripts/migrate-to-paradedb.sh --jobs 4 --compress 1`
+on NVMe storage (`shared_buffers=2GB`, `maintenance_work_mem=1GB`) at two
+compacted schema-81 catalog sizes:
+
+- **129,019 torrents / 115,989 `torrent_contents` / 1,566,191 legacy files (81,812 compacted bundles):**
+  - Pre-cutover compaction + `VACUUM FULL torrent_files`: 11s, file storage `528 MB -> 73 MB` (-86.2%), total DB `1,134 MB -> 681 MB` (-39.9%), 0 publication-revision bumps.
+  - Logical dump: `3.80s` (`175.6 MiB`); parallel restore (`-j 4`): `6.01s`; `ANALYZE`: `1.90s`; 12-table + revision/approval parity: `3.20s` (100% match).
+  - `bm25 enable`: `8.93s` (`52.2 MiB` BM25 index, 0 invalid indexes); `bm25 verify --verbose`: `0.07s` (4/4 `TopKScanExecState`).
+  - Final PG 18 DB with BM25: `771.6 MiB` (still 32.0% smaller than uncompacted PG 16); peak container RAM ~`1.2 GiB` each.
+- **343,514 torrents / 308,360 `torrent_contents` / 4,187,920 legacy files (218,024 compacted bundles):**
+  - Pre-cutover compaction + `VACUUM FULL torrent_files`: 36s, file storage `1,413 MiB -> 196 MiB` (-86.1%), total DB `2,581 MiB -> 1,365 MiB` (-47.1%), 0 publication-revision bumps.
+  - Logical dump: `7.37s` (`336.8 MiB`); parallel restore (`-j 4`): `11.30s`; `ANALYZE`: `2.59s`; 12-table + revision/approval parity (`sum(revision)` and 406 approved reviews): `3.54s` (100% match).
+  - `bm25 enable`: `20.70s` (`119.1 MiB` BM25 index, ~14,900 docs/sec, 0 invalid indexes); `bm25 verify --verbose`: `0.07s` (4/4 `TopKScanExecState`).
+  - Final PG 18 DB with BM25: `1,538 MiB` (40.4% smaller than uncompacted PG 16); total data cutover window without BM25 build: `24.8s` (`45.6s` including BM25 build).
 
 ## Costs and rollback
 
