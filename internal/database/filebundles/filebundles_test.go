@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/spencernorton/DH-Waypoint/internal/model"
+	"github.com/spencernorton/DH-Waypoint/internal/protocol"
 )
 
 func TestDeduplicateFiles(t *testing.T) {
@@ -90,5 +91,38 @@ func TestWriteModeFromEnv(t *testing.T) {
 	t.Setenv("STORAGE_FILE_BUNDLES_WRITE", "bogus")
 	if _, err := WriteModeFromEnv(); err == nil {
 		t.Error("bogus env succeeded, want error")
+	}
+}
+
+func TestBuildBulkBundleUpsert(t *testing.T) {
+	h1 := protocol.InfoHash{0x02}
+	h2 := protocol.InfoHash{0x01}
+	byHash := map[protocol.InfoHash][]model.TorrentFile{
+		h1: {
+			{InfoHash: h1, Index: 1, Path: "README", Size: 5},
+			{InfoHash: h1, Index: 0, Path: "movie.mkv", Size: 100},
+		},
+		h2: {
+			{InfoHash: h2, Index: 0, Path: "subs.srt", Size: 10},
+		},
+	}
+	prepared := prepareBundles(byHash)
+	if len(prepared) != 2 {
+		t.Fatalf("len(prepared) = %d, want 2", len(prepared))
+	}
+	if prepared[0].hash != h2 || prepared[1].hash != h1 {
+		t.Fatalf("prepared not deterministically sorted by info_hash")
+	}
+	sqlStr, args := buildBulkBundleUpsert(prepared)
+	wantSQL := "INSERT INTO torrent_file_bundles(info_hash,indexes,paths,sizes,extensions) VALUES($1,$2,$3,$4,$5),($6,$7,$8,$9,$10) ON CONFLICT(info_hash) DO NOTHING"
+	if sqlStr != wantSQL {
+		t.Fatalf("sql = %q, want %q", sqlStr, wantSQL)
+	}
+	if len(args) != 10 {
+		t.Fatalf("len(args) = %d, want 10", len(args))
+	}
+	exts1, ok := args[9].([]*string)
+	if !ok || len(exts1) != 2 || exts1[0] == nil || *exts1[0] != "mkv" || exts1[1] != nil {
+		t.Fatalf("extensions for h1 = %#v, want [\"mkv\", nil]", args[9])
 	}
 }

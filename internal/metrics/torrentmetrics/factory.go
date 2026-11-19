@@ -23,7 +23,7 @@ func New(p Params) Result {
 			if err != nil {
 				return nil, err
 			}
-			return client{db}, nil
+			return client{db: db}, nil
 		}),
 	}
 }

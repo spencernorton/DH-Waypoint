@@ -124,19 +124,68 @@ func bundleArrays(files []model.TorrentFile) (indexes []int32, paths []string, s
 	return indexes, paths, sizes, extensions
 }
 
-const upsertBundleSQL = `INSERT INTO torrent_file_bundles(info_hash,indexes,paths,sizes,extensions) VALUES($1,$2,$3,$4,$5) ON CONFLICT(info_hash) DO NOTHING`
+// bundleInsertChunkSize caps rows per multi-row INSERT so parameter count
+// (5 * bundleInsertChunkSize = 1250) stays well below PostgreSQL's 65535 limit
+// while cutting round-trips by up to 250x for batch imports.
+const bundleInsertChunkSize = 250
 
-// UpsertBundles writes one bundle row per non-empty hash, without
-// overwriting existing bundles.
-func UpsertBundles(ctx context.Context, db Querier, filesByHash map[protocol.InfoHash][]model.TorrentFile) error {
-	for _, hash := range sortedHashes(filesByHash) {
+type preparedBundle struct {
+	hash       protocol.InfoHash
+	indexes    []int32
+	paths      []string
+	sizes      []int64
+	extensions []*string
+}
+
+func prepareBundles(filesByHash map[protocol.InfoHash][]model.TorrentFile) []preparedBundle {
+	hashes := sortedHashes(filesByHash)
+	prepared := make([]preparedBundle, 0, len(hashes))
+	for _, hash := range hashes {
 		files := DeduplicateFiles(filesByHash[hash])
 		if len(files) == 0 {
 			continue
 		}
 		indexes, paths, sizes, extensions := bundleArrays(files)
-		if _, err := db.Exec(ctx, upsertBundleSQL, hash.Bytes(), indexes, paths, sizes, extensions); err != nil {
-			return fmt.Errorf("filebundles: upsert bundle %s: %w", hash, err)
+		prepared = append(prepared, preparedBundle{
+			hash:       hash,
+			indexes:    indexes,
+			paths:      paths,
+			sizes:      sizes,
+			extensions: extensions,
+		})
+	}
+	return prepared
+}
+
+func buildBulkBundleUpsert(chunk []preparedBundle) (string, []any) {
+	var sb strings.Builder
+	sb.WriteString("INSERT INTO torrent_file_bundles(info_hash,indexes,paths,sizes,extensions) VALUES")
+	args := make([]any, 0, len(chunk)*5)
+	for i, b := range chunk {
+		if i > 0 {
+			sb.WriteByte(',')
+		}
+		base := i*5 + 1
+		fmt.Fprintf(&sb, "($%d,$%d,$%d,$%d,$%d)", base, base+1, base+2, base+3, base+4)
+		args = append(args, b.hash.Bytes(), b.indexes, b.paths, b.sizes, b.extensions)
+	}
+	sb.WriteString(" ON CONFLICT(info_hash) DO NOTHING")
+	return sb.String(), args
+}
+
+// UpsertBundles writes one bundle row per non-empty hash in multi-row chunks,
+// without overwriting existing bundles.
+func UpsertBundles(ctx context.Context, db Querier, filesByHash map[protocol.InfoHash][]model.TorrentFile) error {
+	prepared := prepareBundles(filesByHash)
+	for start := 0; start < len(prepared); start += bundleInsertChunkSize {
+		end := start + bundleInsertChunkSize
+		if end > len(prepared) {
+			end = len(prepared)
+		}
+		chunk := prepared[start:end]
+		querySQL, args := buildBulkBundleUpsert(chunk)
+		if _, err := db.Exec(ctx, querySQL, args...); err != nil {
+			return fmt.Errorf("filebundles: upsert %d bundles (%s..%s): %w", len(chunk), chunk[0].hash, chunk[len(chunk)-1].hash, err)
 		}
 	}
 	return nil
@@ -164,6 +213,10 @@ func PersistTorrentFiles(ctx context.Context, tx *gorm.DB, mode WriteMode, files
 			}
 			byHash[f.InfoHash] = append(byHash[f.InfoHash], *f)
 		}
+		prepared := prepareBundles(byHash)
+		if len(prepared) == 0 {
+			return nil
+		}
 		// GORM expands slice arguments in raw SQL, so array binds go through
 		// the statement's database/sql connection directly. The statement pool
 		// is the live transaction; db.ConnPool stays the root pool.
@@ -177,15 +230,15 @@ func PersistTorrentFiles(ctx context.Context, tx *gorm.DB, mode WriteMode, files
 		if !ok {
 			return fmt.Errorf("filebundles: gorm connection pool cannot bind arrays")
 		}
-		for _, hash := range sortedHashes(byHash) {
-			deduped := DeduplicateFiles(byHash[hash])
-			if len(deduped) == 0 {
-				continue
+		for start := 0; start < len(prepared); start += bundleInsertChunkSize {
+			end := start + bundleInsertChunkSize
+			if end > len(prepared) {
+				end = len(prepared)
 			}
-			indexes, paths, sizes, extensions := bundleArrays(deduped)
-			if _, err := execer.ExecContext(ctx, `INSERT INTO torrent_file_bundles(info_hash,indexes,paths,sizes,extensions) VALUES($1,$2,$3,$4,$5) ON CONFLICT (info_hash) DO NOTHING`,
-				hash.Bytes(), indexes, paths, sizes, extensions); err != nil {
-				return fmt.Errorf("filebundles: upsert bundle %s: %w", hash, err)
+			chunk := prepared[start:end]
+			querySQL, args := buildBulkBundleUpsert(chunk)
+			if _, err := execer.ExecContext(ctx, querySQL, args...); err != nil {
+				return fmt.Errorf("filebundles: upsert %d bundles (%s..%s): %w", len(chunk), chunk[0].hash, chunk[len(chunk)-1].hash, err)
 			}
 		}
 	}
