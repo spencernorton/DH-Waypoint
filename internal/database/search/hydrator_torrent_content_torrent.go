@@ -11,7 +11,8 @@ import (
 )
 
 type torrentContentTorrentHydratorConfig struct {
-	files bool
+	files       bool
+	sourcesOnly bool
 }
 
 type HydrateTorrentContentTorrentOption func(config *torrentContentTorrentHydratorConfig)
@@ -19,6 +20,14 @@ type HydrateTorrentContentTorrentOption func(config *torrentContentTorrentHydrat
 func HydrateTorrentContentTorrentWithFiles() HydrateTorrentContentTorrentOption {
 	return func(config *torrentContentTorrentHydratorConfig) {
 		config.files = true
+	}
+}
+
+// HydrateTorrentContentTorrentSourcesOnly skips preloading TorrentSource, Hint,
+// and Tags relations for consumers such as Torznab that only inspect Sources.
+func HydrateTorrentContentTorrentSourcesOnly() HydrateTorrentContentTorrentOption {
+	return func(config *torrentContentTorrentHydratorConfig) {
+		config.sourcesOnly = true
 	}
 }
 
@@ -52,9 +61,13 @@ func (h torrentContentTorrentHydrator) GetSubs(
 			query.Preload(func(q *dao.Query) []field.RelationField {
 				preload := []field.RelationField{
 					q.Torrent.Sources.RelationField,
-					q.Torrent.Sources.TorrentSource.RelationField,
-					q.Torrent.Hint.RelationField,
-					q.Torrent.Tags.RelationField,
+				}
+				if !h.sourcesOnly {
+					preload = append(preload,
+						q.Torrent.Sources.TorrentSource.RelationField,
+						q.Torrent.Hint.RelationField,
+						q.Torrent.Tags.RelationField,
+					)
 				}
 				if h.files {
 					preload = append(preload, q.Torrent.Files.RelationField)

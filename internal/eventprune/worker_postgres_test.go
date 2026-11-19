@@ -174,3 +174,24 @@ SELECT DISTINCT ON (info_hash) info_hash,verdict,mechanism FROM torrent_verdict_
 	require.Equal(t, before, strings(t, pool, state), "derived state is never touched")
 	require.Equal(t, before, strings(t, pool, rebuilt), "state can still be rebuilt from the events")
 }
+
+func TestProcessorApplicationResultsCompactedKeepIdempotency(t *testing.T) {
+	pool := fixture(t)
+	ctx := context.Background()
+	now := time.Now()
+	hash := func(n byte) []byte { return append(make([]byte, 19), n) }
+	for i, age := range []time.Duration{120 * day, 95 * day, 20 * day} {
+		_, err := pool.Exec(ctx, `INSERT INTO processor_applications(info_hash,job_id,input_revision,applied_revision,pipeline_revision,results,applied_at)
+VALUES($1,repeat($2,64),repeat('b',64),repeat('c',64),repeat('d',64),'[{"result":{"outcome":"completed"}}]'::jsonb,$3)`,
+			hash(byte(i+1)), fmt.Sprint(i+1), now.Add(-age))
+		require.NoError(t, err)
+	}
+	w := newPruner(2)
+	w.runCycle(ctx, pool, now)
+	require.Equal(t, []string{
+		"1 [] cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+		"2 [] cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+		`3 [{"result": {"outcome": "completed"}}] cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc`,
+	}, strings(t, pool, `SELECT get_byte(info_hash,19)::text||' '||results::text||' '||applied_revision FROM processor_applications ORDER BY info_hash`))
+}
+

@@ -53,3 +53,25 @@ func TestIgnoreFiltersWithoutRecoveryWhileBlockStaysHeld(t *testing.T) {
 		t.Fatal("ignoring a hash let a held removal into the buffer")
 	}
 }
+
+func TestFilterSkipsDatabaseFlushWhenBufferAndIgnoredAreEmpty(t *testing.T) {
+	hash := protocol.InfoHash{9}
+	stale := time.Now().Add(-2 * time.Hour)
+	m := &manager{
+		buffer:        map[protocol.InfoHash]struct{}{},
+		filter:        bloom.NewDefaultStableBloomFilter(),
+		maxBufferSize: 1000,
+		maxFlushWait:  time.Minute,
+		lastFlushedAt: stale,
+	}
+	// pool is nil: calling m.flush would panic, proving periodic empty Filter()
+	// ticks advance lastFlushedAt in memory without rewriting pg_largeobject.
+	kept, err := m.Filter(context.Background(), []protocol.InfoHash{hash})
+	if err != nil || len(kept) != 1 || kept[0] != hash {
+		t.Fatalf("Filter = %v, %v; want [%v], nil", kept, err, hash)
+	}
+	if !m.lastFlushedAt.After(stale) {
+		t.Fatal("expected lastFlushedAt to advance on empty periodic tick")
+	}
+}
+

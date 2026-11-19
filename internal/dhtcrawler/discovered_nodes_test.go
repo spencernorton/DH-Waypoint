@@ -62,3 +62,19 @@ func TestDiscoveredNodesMustBePublic(t *testing.T) {
 		t.Fatal("the public node was not passed on")
 	}
 }
+
+func TestRecentAddrFilterDedupesInFlightAndExpires(t *testing.T) {
+	f := newRecentAddrFilter(4, 10*time.Second)
+	t0 := time.Date(2026, 11, 18, 12, 0, 0, 0, time.UTC)
+	a1 := netip.AddrFrom4([4]byte{203, 0, 113, 10})
+	a2 := netip.AddrFrom4([4]byte{203, 0, 113, 11})
+
+	require.True(t, f.allow(a1, t0))
+	require.False(t, f.allow(a1, t0.Add(5*time.Second)))
+	require.True(t, f.allow(a1, t0.Add(11*time.Second)))
+	require.True(t, f.allow(a2, t0.Add(11*time.Second)))
+
+	cfg := NewDefaultConfig()
+	require.Zero(t, cfg.MaxDiscoveredNodesPerSecond)
+}
+

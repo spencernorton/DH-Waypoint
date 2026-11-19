@@ -141,3 +141,75 @@ func TestImportFailureAfterProgressHasNoCompletionMarker(t *testing.T) {
 	require.Len(t, i.active.items, 1000)
 	require.True(t, i.active.closed)
 }
+
+type selectiveActiveImport struct {
+	testActiveImport
+	rejectName string
+}
+
+func (s *selectiveActiveImport) Import(items ...importer.Item) error {
+	for _, it := range items {
+		if it.Name == s.rejectName {
+			return errors.New("synthetic rejected item")
+		}
+	}
+	return s.testActiveImport.Import(items...)
+}
+
+func TestImportOnErrorSkipIsolatesLineErrorsWhileFailingStreamErrors(t *testing.T) {
+	body := strings.Join([]string{
+		`{"Name":"good-one"}`,
+		`{bad-json`,
+		`{"Name":"reject-me"}`,
+		`{"Name":"good-two"}`,
+	}, "\n")
+
+	for _, useHeader := range []bool{false, true} {
+		name := "query_param"
+		if useHeader {
+			name = "header"
+		}
+		t.Run(name, func(t *testing.T) {
+			sel := &selectiveActiveImport{rejectName: "reject-me"}
+			i := &testImporter{active: &sel.testActiveImport}
+			g := gin.New()
+			b := builder{importer: lazy.New(func() (importer.Importer, error) {
+				return selectiveImporter{sel}, nil
+			}), logger: zap.NewNop().Sugar()}
+			require.NoError(t, b.Apply(g))
+
+			target := "/import?on_error=skip"
+			if useHeader {
+				target = "/import"
+			}
+			req := httptest.NewRequest(http.MethodPost, target, strings.NewReader(body))
+			if useHeader {
+				req.Header.Set(ImportOnErrorHeader, "skip")
+			}
+			_ = i
+			r := httptest.NewRecorder()
+			g.ServeHTTP(r, req)
+			require.Equal(t, http.StatusOK, r.Code)
+			require.Contains(t, r.Body.String(), "2 items imported (2 skipped)\nimport complete\n")
+			require.Len(t, sel.items, 2)
+			require.True(t, sel.closed)
+		})
+	}
+
+	t.Run("oversized line still fails closed under skip", func(t *testing.T) {
+		i := &testImporter{active: &testActiveImport{}}
+		r := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/import?on_error=skip", strings.NewReader(`{"Name":"`+strings.Repeat("x", 1<<20)+`"}`))
+		importEngine(t, i).ServeHTTP(r, req)
+		require.Equal(t, http.StatusRequestEntityTooLarge, r.Code)
+	})
+}
+
+type selectiveImporter struct {
+	active *selectiveActiveImport
+}
+
+func (s selectiveImporter) New(_ context.Context, _ importer.Info) importer.ActiveImport {
+	return s.active
+}
+

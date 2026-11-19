@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+## 5.11.0 — 2026-11-18
+
+### Added
+
+- **Payload verifier `piece-bound-media-format-v2` and dual-digest rollover.** `PayloadProof` supports deterministic hash-seeded stratified media file sampling across multi-file releases (`<= 256` media files, `<= 32` sampled files within a `16 MiB` piece budget), raises the single-file boundary budget to `32 MiB` for `16 MiB`-piece releases, extends proof validity from 7 days to 30 days (re-verifying at 29 days), and adds `SERVING_PREVIOUS_PAYLOAD_VERIFIER_ARTIFACT_DIGEST` so upgrades between verifier artifacts retain existing proofs without serving drops.
+- **Operator governance surfaces and processor resilience.** Added read-only feedback inspection (`GET /api/processors/v1/feedback`), audited exclusion retraction (`POST /api/processors/v1/exclusions/:hash/retract` backed by `processor_exclusion_events`), `PolicyMaxRetryWindow` (`2h` default) so required `apply` policy steps retry transient outages instead of permanently failing, `15m` TTL expiry on `strict-v1` fallback cache entries, and decoupled `processor-core-policy-v1` from the binary commit SHA so patch rollouts do not invalidate completed receipts.
+- **Database capability auto-detection, composite episode GIN index, and queue index optimization.** Migrations `00078` and `00079` add partial queue picker index `queue_jobs_pick_idx`, composite TV identity+episode GIN index `torrent_contents_episode_keys_idx` (`torrent_contents_episode_keys`), `torrent_contents_hash_len_stats`, `fillfactor = 90` on `torrents_torrent_sources`, and drop four unread secondary indexes on `torrents_torrent_sources` so scrape updates stay HOT on heap pages. `DetectDBCapabilities` automatically activates `torrent_contents_episode_keys_idx` on TV season/episode identifier lookups and supports opt-in ParadeDB `pg_search` BM25 scoring (`HasParadeDBBM25`) while keeping stock PostgreSQL 16/18 fully supported.
+- **Fault-isolated bulk NDJSON `/import` and imported metadata helper.** `POST /import` accepts `?on_error=skip` (or `X-Import-On-Error: skip`) to skip malformed JSON or rejected item lines while still failing closed on stream read errors and oversized lines (`> 1 MiB`). Added `scripts/fetch_imported_metadata.py` for bounded metadata hydration of hash-only imported rows.
+- **Plugin conformance verification and standalone reference sidecars.** Added `dh-waypoint plugin verify <endpoint>` to validate manifest, readiness status, and a synthetic `/v1/process` or `/v2/process` round-trip before enabling a processor. Added pure-stdlib standalone sidecars `adapters/stremio` (Stremio Addon v1 over Torznab) and `adapters/prowlarr-sync` (Torznab/Prowlarr RSS to `/import?on_error=skip`).
+- **DHT & BEP-9 observability and rate controls.** Added `dh_waypoint_meta_info_requester_errors_by_reason_total{reason}` low-cardinality failure telemetry, bounded `30s` in-flight address deduplication in `runDiscoveredNodes`, and optional `DHT_CRAWLER_MAX_DISCOVERED_NODES_PER_SECOND` outbound probe rate limiting for NAT-constrained routers.
+
+### Fixed
+
+- **Eliminated empty `pg_largeobject` rewrites in `blocking.Manager`.** Periodic `Filter()` checks with an empty buffer/ignore set and cold-start loads of an existing bloom filter no longer open and rewrite the multi-megabyte large object in PostgreSQL.
+- **BEP 9 forward compatibility and BEP 47 v1 padding handling.** `metainforequester` now ignores unrecognized `ut_metadata` `msg_type > 2` frames without requiring a piece index (bounded to 32 ignored frames per exchange), and `model.TorrentFromMetadata` / `tracker.Store` skip BEP 47 padding files (`.pad/...` and `attr=p`) when computing multi-file status and file lists.
+- **Bare-season symmetry (`S5` / `S05`), Torznab lean hydration, and query tail bounds.** TV title parsing normalizes bare single-digit seasons symmetrically with zero-padded seasons, Torznab search skips six unused relation preload queries per request (`TorrentContentTorznabOption`), `ts_rank_cd` relevance scoring is bounded to top-1,000 FTS candidates, unlinked ID fallback runs under a `40ms` `SAVEPOINT` sub-deadline with `max_parallel_workers_per_gather = 0`, Torznab enforces `MaxOffset` (`10,000`), `RequestTimeout` (`30s`), rate-limited auth warnings, and 2-page post-filter top-up, `config show` redacts secret paths and URL credentials as `[redacted]`, and always-on `pprof` mutex/block contention profiling is disabled unless `PPROF_CONTENTION_PROFILING=true`.
+- **Bounded `processor_applications` payload compaction and `qb_state_observation` pruning fence.** `eventprune` compacts `processor_applications.results` to `'[]'` past `EVENTPRUNE_APPLICATION_RESULTS_RETENTION` (`90d` default) while preserving revision columns for queue idempotency, and `processor_publication_source_changed()` ignores superseded `qb_state_observation` deletes so pruning does not trigger re-publication storms.
+
 ## 5.10.2 — 2026-11-18
 
 ### Fixed

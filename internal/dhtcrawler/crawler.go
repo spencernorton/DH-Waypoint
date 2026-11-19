@@ -37,6 +37,7 @@ type crawler struct {
 	getOldestNodesInterval       time.Duration
 	oldPeerThreshold             time.Duration
 	discoveredNodes              concurrency.BatchingChannel[ktable.Node]
+	maxDiscoveredNodesPerSecond  uint
 	nodesForPing                 concurrency.BufferedConcurrentChannel[ktable.Node]
 	nodesForFindNode             concurrency.BufferedConcurrentChannel[ktable.Node]
 	nodesForSampleInfoHashes     concurrency.BufferedConcurrentChannel[ktable.Node]

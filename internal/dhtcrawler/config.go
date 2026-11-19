@@ -65,6 +65,10 @@ type Config struct {
 	// A/B-style schedule (e.g. 400 → 200 → 400 → 100 in 60-90 min
 	// windows) to find the knee.
 	MetainfoConcurrency uint
+	// MaxDiscoveredNodesPerSecond optionally caps outbound node-discovery probes
+	// (ping / find_node / sample_infohashes) admitted from discoveredNodes so
+	// consumer NAT routers do not saturate conntrack tables. Zero = unlimited.
+	MaxDiscoveredNodesPerSecond uint
 }
 
 func NewDefaultConfig() Config {

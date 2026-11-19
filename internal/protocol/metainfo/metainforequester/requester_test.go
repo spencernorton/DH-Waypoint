@@ -190,11 +190,7 @@ func TestReadAllPiecesRejectsInconsistentMessages(t *testing.T) {
 			payload:   []byte("unexpected"),
 			errString: "reject contains trailing payload",
 		},
-		{
-			name:      "unknown message type",
-			header:    messageHeader(99, 0),
-			errString: "unknown ut_metadata msg_type 99",
-		},
+
 	}
 
 	for _, tt := range tests {
@@ -365,3 +361,30 @@ func hasLargeDeclaredFrame(wire []byte) bool {
 
 	return false
 }
+
+func TestReadAllPiecesIgnoresUnknownBEP9MessageTypesWithCap(t *testing.T) {
+	metadata := patternedBytes(29)
+	wire := bytes.Join([][]byte{
+		utMetadataFrame("d8:msg_typei99ee", []byte("forward-compatible extension payload")),
+		utMetadataFrame(messageHeader(7, 42), nil),
+		dataFrame(0, len(metadata), metadata),
+	}, nil)
+	got, err := readAllPieces(bytes.NewReader(wire), uint(len(metadata)))
+	require.NoError(t, err)
+	assert.Equal(t, metadata, got)
+
+	var flood bytes.Buffer
+	for range maxIgnoredUtMetadataMessages + 1 {
+		flood.Write(utMetadataFrame("d8:msg_typei99ee", nil))
+	}
+	_, err = readAllPieces(&flood, uint(len(metadata)))
+	require.ErrorContains(t, err, "too many unknown ut_metadata messages")
+}
+
+func TestClassifyRequesterErrorBuckets(t *testing.T) {
+	require.Equal(t, "eof", classifyRequesterError(io.EOF))
+	require.Equal(t, "piece_rejected", classifyRequesterError(fmt.Errorf("remote peer rejected metadata piece 0")))
+	require.Equal(t, "no_extension_support", classifyRequesterError(fmt.Errorf("peer does not support the extension protocol")))
+	require.Equal(t, "protocol_error", classifyRequesterError(fmt.Errorf("ut_metadata header is missing msg_type")))
+}
+

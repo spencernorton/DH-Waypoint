@@ -267,6 +267,9 @@ const (
 	// maxMessageSize is the largest message this requester reads into memory:
 	// one metadata piece plus its extension header.
 	maxMessageSize = metadataPieceSize + 1024
+	// maxIgnoredUtMetadataMessages caps forward-compatible unknown BEP 9 msg_type
+	// frames accepted per metadata exchange so peers cannot stall a slot forever.
+	maxIgnoredUtMetadataMessages = 32
 )
 
 func exHandshake(rw io.ReadWriter) (metadataSize uint, utMetadata uint8, err error) {
@@ -356,6 +359,7 @@ func readAllPieces(r io.Reader, metadataSize uint) ([]byte, error) {
 	seen := make([]bool, nPieces)
 
 	receivedPieces := 0
+	ignoredMessages := 0
 	for receivedPieces < nPieces {
 		rUmMessage, err := readUmMessage(r)
 		if err != nil {
@@ -382,18 +386,20 @@ func readAllPieces(r io.Reader, metadataSize uint) ([]byte, error) {
 		}
 
 		piece := rExtDict.Piece
-		if piece < 0 || piece >= nPieces {
-			return nil, fmt.Errorf("ut_metadata piece index %d out of range [0,%d)", piece, nPieces)
-		}
-
 		metadataPiece := rMessageBuf.Bytes()
 		switch rExtDict.MsgType {
 		case 0: // request from the remote peer; this requester has no metadata to serve.
+			if piece < 0 || piece >= nPieces {
+				return nil, fmt.Errorf("ut_metadata piece index %d out of range [0,%d)", piece, nPieces)
+			}
 			if len(metadataPiece) != 0 {
 				return nil, errors.New("ut_metadata request contains trailing payload")
 			}
 			continue
 		case 1: // data
+			if piece < 0 || piece >= nPieces {
+				return nil, fmt.Errorf("ut_metadata piece index %d out of range [0,%d)", piece, nPieces)
+			}
 			if rExtDict.TotalSize != int(metadataSize) {
 				return nil, fmt.Errorf(
 					"ut_metadata total_size %d does not match handshake size %d",
@@ -428,13 +434,22 @@ func readAllPieces(r io.Reader, metadataSize uint) ([]byte, error) {
 			seen[piece] = true
 			receivedPieces++
 		case 2: // reject
+			if piece < 0 || piece >= nPieces {
+				return nil, fmt.Errorf("ut_metadata piece index %d out of range [0,%d)", piece, nPieces)
+			}
 			if len(metadataPiece) != 0 {
 				return nil, errors.New("ut_metadata reject contains trailing payload")
 			}
 
 			return nil, fmt.Errorf("remote peer rejected metadata piece %d", piece)
 		default:
-			return nil, fmt.Errorf("unknown ut_metadata msg_type %d", rExtDict.MsgType)
+			// BEP 9 specifies that unrecognized message types MUST be ignored
+			// for forward compatibility, without requiring a piece index.
+			ignoredMessages++
+			if ignoredMessages > maxIgnoredUtMetadataMessages {
+				return nil, errors.New("too many unknown ut_metadata messages")
+			}
+			continue
 		}
 	}
 

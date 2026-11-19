@@ -123,7 +123,7 @@ func check() error {
 			}
 		}
 	}
-	for _, adapter := range []string{"./adapters/llm/cmd/dh-waypoint-llm", "./adapters/armiger/cmd/dh-waypoint-armiger"} {
+	for _, adapter := range []string{"./adapters/llm/cmd/dh-waypoint-llm", "./adapters/armiger/cmd/dh-waypoint-armiger", "./adapters/stremio/cmd/dh-waypoint-stremio", "./adapters/prowlarr-sync/cmd/dh-waypoint-prowlarr-sync"} {
 		deps, err = dependencies(adapter)
 		if err != nil {
 			return err
