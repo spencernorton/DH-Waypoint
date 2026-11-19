@@ -29,8 +29,9 @@ type Result struct {
 	Requester           Requester
 	RequestDuration     prometheus.Collector   `group:"prometheus_collectors"`
 	RequestSuccessTotal prometheus.Collector   `group:"prometheus_collectors"`
-	RequestErrorTotal   prometheus.Collector   `group:"prometheus_collectors"`
-	RequestConcurrency  prometheus.Collector   `group:"prometheus_collectors"`
+	RequestErrorTotal     prometheus.Collector   `group:"prometheus_collectors"`
+	RequestErrorsByReason prometheus.Collector   `group:"prometheus_collectors"`
+	RequestConcurrency    prometheus.Collector   `group:"prometheus_collectors"`
 	PeerRepCollectors   []prometheus.Collector `group:"prometheus_collectors,flatten"`
 }
 
@@ -93,8 +94,9 @@ func New(p Params) Result {
 		Requester:           chained,
 		RequestDuration:     collector.requestDuration,
 		RequestSuccessTotal: collector.requestSuccessTotal,
-		RequestErrorTotal:   collector.requestErrorTotal,
-		RequestConcurrency:  collector.requestConcurrency,
+		RequestErrorTotal:     collector.requestErrorTotal,
+		RequestErrorsByReason: collector.requestErrorsByReason,
+		RequestConcurrency:    collector.requestConcurrency,
 		PeerRepCollectors:   peerRepMet.collectors(),
 	}
 }

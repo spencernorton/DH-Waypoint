@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -40,7 +41,10 @@ func New(p Params) Result {
 	}
 }
 
-const ImportIDHeader = "X-Import-Id"
+const (
+	ImportIDHeader      = "X-Import-Id"
+	ImportOnErrorHeader = "X-Import-On-Error"
+)
 
 const maxImportLineBytes = 1 << 20
 
@@ -69,11 +73,19 @@ func (b builder) Apply(e *gin.Engine) error {
 	return nil
 }
 
+func skipItemErrors(ctx *gin.Context) bool {
+	if strings.EqualFold(strings.TrimSpace(ctx.Query("on_error")), "skip") {
+		return true
+	}
+	return strings.EqualFold(strings.TrimSpace(ctx.GetHeader(ImportOnErrorHeader)), "skip")
+}
+
 func (b builder) handle(ctx *gin.Context, i importer.Importer) {
 	importID := ctx.Request.Header.Get(ImportIDHeader)
 	if importID == "" {
 		importID = strconv.FormatUint(uint64(time.Now().Unix()), 10)
 	}
+	skipErrors := skipItemErrors(ctx)
 
 	ai := i.New(ctx.Request.Context(), importer.Info{
 		ID: importID,
@@ -87,10 +99,15 @@ func (b builder) handle(ctx *gin.Context, i importer.Importer) {
 	}()
 
 	count := 0
+	skipped := 0
 	writeCount := func() {
+		if skipped > 0 {
+			_, _ = fmt.Fprintf(ctx.Writer, "%d items imported (%d skipped)\n", count, skipped)
+			return
+		}
 		_, _ = fmt.Fprintf(ctx.Writer, "%d items imported\n", count)
 	}
-	streamErr := readImportItems(ctx.Request.Context(), ctx.Request.Body, func(item importer.Item) error {
+	streamErr := readImportItemsWithPolicy(ctx.Request.Context(), ctx.Request.Body, skipErrors, &skipped, func(item importer.Item) error {
 		if err := ai.Import(item); err != nil {
 			return err
 		}
@@ -130,10 +147,16 @@ func (b builder) handle(ctx *gin.Context, i importer.Importer) {
 	_, _ = ctx.Writer.WriteString("import complete\n")
 }
 
-// readImportItems bounds each NDJSON item while allowing the overall stream to
-// contain arbitrarily many bounded lines. Only LF delimits records; Unicode
-// line separators inside JSON strings are retained.
 func readImportItems(ctx context.Context, r io.Reader, add func(importer.Item) error) error {
+	skipped := 0
+	return readImportItemsWithPolicy(ctx, r, false, &skipped, add)
+}
+
+// readImportItemsWithPolicy bounds each NDJSON item while allowing the overall
+// stream to contain arbitrarily many bounded lines. When skipItemErrs is true,
+// malformed JSON lines and per-item rejections increment *skipped while stream
+// read failures and oversized lines still fail closed.
+func readImportItemsWithPolicy(ctx context.Context, r io.Reader, skipItemErrs bool, skipped *int, add func(importer.Item) error) error {
 	s := bufio.NewScanner(r)
 	// Leave room for the CRLF delimiter at the maximum valid line size.
 	s.Buffer(make([]byte, 64<<10), maxImportLineBytes+2)
@@ -156,9 +179,17 @@ func readImportItems(ctx context.Context, r io.Reader, add func(importer.Item) e
 		var item importer.Item
 		//nolint:musttag
 		if err := json.Unmarshal(line, &item); err != nil {
+			if skipItemErrs {
+				*skipped++
+				continue
+			}
 			return fmt.Errorf("decode import item: %w", err)
 		}
 		if err := add(item); err != nil {
+			if skipItemErrs {
+				*skipped++
+				continue
+			}
 			return fmt.Errorf("import item: %w", err)
 		}
 	}

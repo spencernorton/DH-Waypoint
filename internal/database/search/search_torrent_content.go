@@ -32,7 +32,16 @@ type IdentifierTorrentContentSearch interface {
 func (s search) TorrentContentByIdentifiers(ctx context.Context, refs []model.ContentRef, options ...query.Option) (result TorrentContentResult, err error) {
 	refs = dedupeContentRefs(refs)
 	options = append(append([]query.Option(nil), options...), query.Where(torrentContentResolvedIdentifiersCriteria(ctx, refs)))
-	if len(refs) == 0 || len(refs) == 1 && refs[0].Source == model.SourceTmdb {
+	if len(refs) == 0 {
+		return s.TorrentContent(ctx, options...)
+	}
+	if len(refs) == 1 && refs[0].Source == model.SourceTmdb {
+		if eps, ok := EpisodesHintFromContext(ctx); ok && len(eps) > 0 {
+			db := s.q.TorrentContent.WithContext(ctx).UnderlyingDB()
+			if _, hasEpIdx := DetectDBCapabilities(ctx, db); hasEpIdx {
+				options = append(options, query.Where(TorrentContentEpisodeKeysCriteria(refs, eps)))
+			}
+		}
 		return s.TorrentContent(ctx, options...)
 	}
 	// The lookup and page share one read snapshot under the caller's context.
@@ -132,6 +141,25 @@ func TorrentContentDefaultHydrate() query.Option {
 	return query.Options(
 		HydrateTorrentContentTorrent(),
 		HydrateTorrentContentContent(),
+	)
+}
+
+// TorrentContentTorznabOption is the lean default option for Torznab searches,
+// hydrating only Torrent.Sources and Content.Attributes to skip six unused
+// relation preload queries per request while emitting identical Torznab XML.
+func TorrentContentTorznabOption() query.Option {
+	return query.Options(
+		query.DefaultOption(),
+		TorrentContentTorznabHydrate(),
+		TorrentContentCoreJoins(),
+		query.OrderBy(TorrentContentOrderByPublishedAt.Clauses(OrderDirectionDescending)...),
+	)
+}
+
+func TorrentContentTorznabHydrate() query.Option {
+	return query.Options(
+		HydrateTorrentContentTorrent(HydrateTorrentContentTorrentSourcesOnly()),
+		HydrateTorrentContentContentAttributesOnly(),
 	)
 }
 

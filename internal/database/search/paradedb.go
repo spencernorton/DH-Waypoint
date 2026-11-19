@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -15,6 +16,27 @@ import (
 )
 
 const DefaultUnlinkedFallbackTimeout = 40 * time.Millisecond
+
+type episodesHintContextKey struct{}
+
+// WithEpisodesHint attaches requested TV season/episode filters to ctx so
+// identifier-resolved queries can automatically apply the composite
+// torrent_contents_episode_keys_idx GIN predicate when present.
+func WithEpisodesHint(ctx context.Context, episodes model.Episodes) context.Context {
+	if len(episodes) == 0 {
+		return ctx
+	}
+	return context.WithValue(ctx, episodesHintContextKey{}, episodes)
+}
+
+// EpisodesHintFromContext extracts any TV season/episode hint attached by WithEpisodesHint.
+func EpisodesHintFromContext(ctx context.Context) (model.Episodes, bool) {
+	if ctx == nil {
+		return nil, false
+	}
+	eps, ok := ctx.Value(episodesHintContextKey{}).(model.Episodes)
+	return eps, ok && len(eps) > 0
+}
 
 var (
 	unlinkedTimeoutCounter = dualemit.NewCounter(prometheus.CounterOpts{
@@ -30,6 +52,12 @@ var (
 type dbCapabilities struct {
 	paradeDBBM25   bool
 	episodeKeysIdx bool
+}
+
+// ResetDBCapabilitiesCache clears cached extension/index detection so tests
+// creating indexes dynamically on an existing connection can re-probe cleanly.
+func ResetDBCapabilitiesCache() {
+	capabilityCache.Clear()
 }
 
 // ResolveUnlinkedFallbackTimeout reads SEARCH_UNLINKED_FALLBACK_TIMEOUT or
@@ -52,7 +80,7 @@ func ResolveUnlinkedFallbackTimeout() time.Duration {
 // deployments automatically unlock BM25 scoring when torrent_contents_bm25_idx
 // is present.
 func DetectDBCapabilities(ctx context.Context, db *gorm.DB) (paradeBM25 bool, episodeKeysIdx bool) {
-	if db == nil {
+	if db == nil || db.DryRun {
 		return false, false
 	}
 	sqlDB, err := db.DB()
@@ -80,37 +108,53 @@ func HasParadeDBBM25(ctx context.Context, db *gorm.DB) bool {
 	return bm25
 }
 
+func textArrayExpr(values []string) (string, []interface{}) {
+	placeholders := make([]string, len(values))
+	args := make([]interface{}, len(values))
+	for i, v := range values {
+		placeholders[i] = "?"
+		args[i] = v
+	}
+	return "ARRAY[" + strings.Join(placeholders, ", ") + "]::text[]", args
+}
+
 // TorrentContentEpisodeKeysCriteria builds a GIN array-overlap/containment
 // predicate matching torrent_contents_episode_keys_idx for resolved canonical
-// TV keys and requested season/episode numbers.
+// TV keys and requested season/episode numbers. Scalar ARRAY[?]::text[]
+// placeholders avoid GORM slice-to-tuple expansion, and explicit NOT NULL
+// guards ensure partial-index subsumption on PostgreSQL 16+.
 func TorrentContentEpisodeKeysCriteria(keys []model.ContentRef, episodes model.Episodes) query.Criteria {
 	if len(keys) == 0 || len(episodes) == 0 {
 		return query.And()
 	}
+	const partialGuard = "torrent_contents.content_id IS NOT NULL AND torrent_contents.episodes IS NOT NULL AND "
+	const fnCall = "torrent_contents_episode_keys(torrent_contents.content_type, torrent_contents.content_source, torrent_contents.content_id, torrent_contents.episodes)"
 	var perSeason []query.Criteria
 	for _, entry := range episodes.SeasonEntries() {
 		if len(entry.Episodes) == 0 {
-			arr := make([]string, 0, len(keys))
+			vals := make([]string, 0, len(keys))
 			for _, k := range keys {
-				arr = append(arr, fmt.Sprintf("%s:%s:%s:s:%d", k.Type, k.Source, k.ID, entry.Season))
+				vals = append(vals, fmt.Sprintf("%s:%s:%s:s:%d", k.Type, k.Source, k.ID, entry.Season))
 			}
+			arrSQL, args := textArrayExpr(vals)
 			perSeason = append(perSeason, query.DBCriteria{
-				SQL:  "torrent_contents_episode_keys(torrent_contents.content_type, torrent_contents.content_source, torrent_contents.content_id, torrent_contents.episodes) && ?::text[]",
-				Args: []interface{}{arr},
+				SQL:  partialGuard + fnCall + " && " + arrSQL,
+				Args: args,
 			})
 			continue
 		}
 		var orPerKey []query.Criteria
 		for _, k := range keys {
 			wholeKey := fmt.Sprintf("%s:%s:%s:s_all:%d", k.Type, k.Source, k.ID, entry.Season)
-			epArr := make([]string, 0, len(entry.Episodes))
+			epVals := make([]string, 0, len(entry.Episodes))
 			for _, ep := range entry.Episodes {
-				epArr = append(epArr, fmt.Sprintf("%s:%s:%s:e:%d:%d", k.Type, k.Source, k.ID, entry.Season, ep))
+				epVals = append(epVals, fmt.Sprintf("%s:%s:%s:e:%d:%d", k.Type, k.Source, k.ID, entry.Season, ep))
 			}
+			wholeSQL, wholeArgs := textArrayExpr([]string{wholeKey})
+			epSQL, epArgs := textArrayExpr(epVals)
 			orPerKey = append(orPerKey, query.DBCriteria{
-				SQL: "(torrent_contents_episode_keys(torrent_contents.content_type, torrent_contents.content_source, torrent_contents.content_id, torrent_contents.episodes) @> ?::text[] " +
-					"OR torrent_contents_episode_keys(torrent_contents.content_type, torrent_contents.content_source, torrent_contents.content_id, torrent_contents.episodes) @> ?::text[])",
-				Args: []interface{}{[]string{wholeKey}, epArr},
+				SQL:  partialGuard + "(" + fnCall + " @> " + wholeSQL + " OR " + fnCall + " @> " + epSQL + ")",
+				Args: append(wholeArgs, epArgs...),
 			})
 		}
 		perSeason = append(perSeason, query.Or(orPerKey...))

@@ -59,8 +59,14 @@ func (m *manager) Filter(ctx context.Context, hashes []protocol.InfoHash) ([]pro
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
 
-	if m.filter == nil || m.shouldFlush() {
+	if m.filter == nil {
 		if flushErr := m.flush(ctx); flushErr != nil {
+			return nil, flushErr
+		}
+	} else if m.shouldFlush() {
+		if len(m.buffer) == 0 && len(m.ignored) == 0 {
+			m.lastFlushedAt = time.Now()
+		} else if flushErr := m.flush(ctx); flushErr != nil {
 			return nil, flushErr
 		}
 	}
@@ -216,6 +222,8 @@ func (m *manager) flush(ctx context.Context) error {
 		return fmt.Errorf("failed to get bloom filter object ID: %w", err)
 	}
 
+	dirty := len(hashes) > 0 || len(m.ignored) > 0
+	createdLO := false
 	if oid == 0 {
 		// Create a new Large Object.
 		// We pass 0, so the DB can pick an available oid for us.
@@ -223,6 +231,7 @@ func (m *manager) flush(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("failed to create large object: %w", err)
 		}
+		createdLO = true
 	}
 
 	for _, hash := range hashes {
@@ -232,30 +241,37 @@ func (m *manager) flush(ctx context.Context) error {
 		bf.Add(hash.Bytes())
 	}
 
-	obj, err := lobs.Open(ctx, oid, pgx.LargeObjectModeWrite)
-	if err != nil {
-		return fmt.Errorf("failed to open large object for writing: %w", err)
-	}
-
-	_, err = bf.WriteTo(obj)
-	if err != nil {
-		return fmt.Errorf("failed to write to large object: %w", err)
-	}
-
 	now := time.Now()
-	if !found {
-		_, err = tx.Exec(ctx,
-			"INSERT INTO bloom_filters (key, oid, created_at, updated_at) VALUES ($1, $2, $3, $4)",
-			blockedTorrentsBloomFilterKey, oid, now, now)
+	// Skip rewriting the multi-megabyte pg_largeobject on cold startup or
+	// periodic checks when an existing bloom filter was loaded with zero new hashes.
+	if createdLO || dirty {
+		obj, err := lobs.Open(ctx, oid, pgx.LargeObjectModeWrite)
 		if err != nil {
-			return fmt.Errorf("failed to save new bloom filter record: %w", err)
+			return fmt.Errorf("failed to open large object for writing: %w", err)
 		}
-	} else if !nullOid.Valid {
-		_, err = tx.Exec(ctx,
-			"UPDATE bloom_filters SET oid = $1, updated_at = $2 WHERE key = $3",
-			oid, now, blockedTorrentsBloomFilterKey)
-		if err != nil {
-			return fmt.Errorf("failed to update bloom filter record: %w", err)
+		_, writeErr := bf.WriteTo(obj)
+		closeErr := obj.Close()
+		if writeErr != nil {
+			return fmt.Errorf("failed to write to large object: %w", writeErr)
+		}
+		if closeErr != nil {
+			return fmt.Errorf("failed to close large object: %w", closeErr)
+		}
+
+		if !found {
+			_, err = tx.Exec(ctx,
+				"INSERT INTO bloom_filters (key, oid, created_at, updated_at) VALUES ($1, $2, $3, $4)",
+				blockedTorrentsBloomFilterKey, oid, now, now)
+			if err != nil {
+				return fmt.Errorf("failed to save new bloom filter record: %w", err)
+			}
+		} else if !nullOid.Valid || dirty {
+			_, err = tx.Exec(ctx,
+				"UPDATE bloom_filters SET oid = $1, updated_at = $2 WHERE key = $3",
+				oid, now, blockedTorrentsBloomFilterKey)
+			if err != nil {
+				return fmt.Errorf("failed to update bloom filter record: %w", err)
+			}
 		}
 	}
 

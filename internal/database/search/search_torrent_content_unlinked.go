@@ -70,6 +70,11 @@ func (s search) TorrentContentByIdentifiersWithUnlinked(
 		var linkedCriteria query.Criteria
 		if exactKeys && len(keys) > 0 {
 			linkedCriteria = torrentContentKeysCriteria(keys)
+			if eps, ok := EpisodesHintFromContext(ctx); ok && len(eps) > 0 {
+				if _, hasEpIdx := DetectDBCapabilities(ctx, tx); hasEpIdx {
+					linkedCriteria = query.And(linkedCriteria, TorrentContentEpisodeKeysCriteria(keys, eps))
+				}
+			}
 		} else {
 			linkedCriteria = TorrentContentIdentifiersCriteria(refs...)
 		}

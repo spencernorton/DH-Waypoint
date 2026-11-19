@@ -178,6 +178,12 @@ func torrentContentResolvedIdentifiersCriteria(requestCtx context.Context, refs 
 				ID:     row.ContentID,
 			})
 		}
-		return torrentContentKeysCriteria(keys), nil
+		base := torrentContentKeysCriteria(keys)
+		if eps, ok := EpisodesHintFromContext(requestCtx); ok && len(eps) > 0 {
+			if _, hasEpIdx := DetectDBCapabilities(lookupCtx, db); hasEpIdx {
+				return query.And(base, TorrentContentEpisodeKeysCriteria(keys, eps)), nil
+			}
+		}
+		return base, nil
 	})
 }

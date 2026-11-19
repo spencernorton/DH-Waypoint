@@ -1,6 +1,7 @@
-// Package eventprune bounds three history tables that otherwise grow for the
-// life of the database: processor feedback events, repeated qBittorrent state
-// observations and superseded verdict events.
+// Package eventprune bounds history tables that otherwise grow for the life of
+// the database: processor feedback events, repeated qBittorrent state
+// observations, superseded verdict events, and historical processor application
+// result payloads.
 package eventprune
 
 import (
@@ -24,15 +25,20 @@ type Config struct {
 	// VerdictEventRetention is how long a torrent_verdict_events row is kept
 	// once a newer event exists for the same torrent.
 	VerdictEventRetention time.Duration
+	// ApplicationResultsRetention is how long full JSON receipts in
+	// processor_applications.results are kept before compacting results to '[]'
+	// while preserving revision columns for queue idempotency.
+	ApplicationResultsRetention time.Duration
 }
 
 func NewDefaultConfig() Config {
 	return Config{
-		Interval:              time.Hour,
-		BatchSize:             5000,
-		FeedbackRetention:     30 * 24 * time.Hour,
-		QBStateRetention:      90 * 24 * time.Hour,
-		VerdictEventRetention: 180 * 24 * time.Hour,
+		Interval:                    time.Hour,
+		BatchSize:                   5000,
+		FeedbackRetention:           30 * 24 * time.Hour,
+		QBStateRetention:            90 * 24 * time.Hour,
+		VerdictEventRetention:       180 * 24 * time.Hour,
+		ApplicationResultsRetention: 90 * 24 * time.Hour,
 	}
 }
 
@@ -45,7 +51,7 @@ const (
 )
 
 func (c Config) enabled() bool {
-	return c.FeedbackRetention > 0 || c.QBStateRetention > 0 || c.VerdictEventRetention > 0
+	return c.FeedbackRetention > 0 || c.QBStateRetention > 0 || c.VerdictEventRetention > 0 || c.ApplicationResultsRetention > 0
 }
 
 func (c Config) Validate() error {
@@ -55,8 +61,10 @@ func (c Config) Validate() error {
 	if c.FeedbackRetention != 0 && c.FeedbackRetention < minFeedbackRetention {
 		return errors.New("eventprune: feedback_retention must be 0 (off) or at least 24h")
 	}
-	if (c.QBStateRetention != 0 && c.QBStateRetention < minHistoryRetention) || (c.VerdictEventRetention != 0 && c.VerdictEventRetention < minHistoryRetention) {
-		return errors.New("eventprune: qb_state_retention and verdict_event_retention must be 0 (off) or at least 720h")
+	if (c.QBStateRetention != 0 && c.QBStateRetention < minHistoryRetention) ||
+		(c.VerdictEventRetention != 0 && c.VerdictEventRetention < minHistoryRetention) ||
+		(c.ApplicationResultsRetention != 0 && c.ApplicationResultsRetention < minHistoryRetention) {
+		return errors.New("eventprune: qb_state_retention, verdict_event_retention and application_results_retention must be 0 (off) or at least 720h")
 	}
 	return nil
 }

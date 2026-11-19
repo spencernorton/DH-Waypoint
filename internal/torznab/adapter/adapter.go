@@ -181,7 +181,16 @@ type Adapter struct {
 }
 
 func (a Adapter) Search(ctx context.Context, req torznab.SearchRequest) (torznab.SearchResult, error) {
-	options := []query.Option{search.TorrentContentDefaultOption(), query.WithTotalCount(false), query.Where(search.LegacyTorrentIdentityCriteria("torrent_contents"))}
+	if req.Type == torznab.FunctionTV && !req.AirDate.IsValid() && req.Season.Valid {
+		eps := make(model.Episodes)
+		if req.Episode.Valid {
+			eps = eps.AddEpisode(req.Season.Int, req.Episode.Int)
+		} else {
+			eps = eps.AddSeason(req.Season.Int)
+		}
+		ctx = search.WithEpisodesHint(ctx, eps)
+	}
+	options := []query.Option{search.TorrentContentTorznabOption(), query.WithTotalCount(false), query.Where(search.LegacyTorrentIdentityCriteria("torrent_contents"))}
 
 	identifiers := requestIdentifierRefs(req)
 	unlinkedSearch, supportsUnlinked := a.search.(search.IdentifierWithUnlinkedTorrentContentSearch)
@@ -209,7 +218,7 @@ func (a Adapter) Search(ctx context.Context, req torznab.SearchRequest) (torznab
 			if rErr != nil {
 				return search.TorrentContentResult{}, 0, rErr
 			}
-			pageOptions = append([]query.Option{search.TorrentContentDefaultOption(), query.WithTotalCount(false), query.Where(search.LegacyTorrentIdentityCriteria("torrent_contents"))}, rebuilt...)
+			pageOptions = append([]query.Option{search.TorrentContentTorznabOption(), query.WithTotalCount(false), query.Where(search.LegacyTorrentIdentityCriteria("torrent_contents"))}, rebuilt...)
 		}
 		var rawRes search.TorrentContentResult
 		var sErr error

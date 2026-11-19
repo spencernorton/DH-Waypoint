@@ -9,6 +9,12 @@ import (
 	"github.com/spencernorton/DH-Waypoint/internal/protocol"
 	"github.com/spencernorton/DH-Waypoint/internal/protocol/dht/ktable"
 	"go.uber.org/fx"
+	"golang.org/x/time/rate"
+)
+
+const (
+	discoveredAddrDedupeMax = 8192
+	discoveredAddrDedupeTTL = 30 * time.Second
 )
 
 type DiscoveredNodesParams struct {
@@ -31,32 +37,77 @@ func NewDiscoveredNodes(params DiscoveredNodesParams) DiscoveredNodesResult {
 	}
 }
 
+type recentAddrFilter struct {
+	seen map[netip.Addr]time.Time
+	max  int
+	ttl  time.Duration
+}
+
+func newRecentAddrFilter(maxEntries int, ttl time.Duration) *recentAddrFilter {
+	return &recentAddrFilter{
+		seen: make(map[netip.Addr]time.Time, min(maxEntries, 1024)),
+		max:  maxEntries,
+		ttl:  ttl,
+	}
+}
+
+func (f *recentAddrFilter) allow(addr netip.Addr, now time.Time) bool {
+	if exp, ok := f.seen[addr]; ok && now.Before(exp) {
+		return false
+	}
+	if len(f.seen) >= f.max {
+		for k, exp := range f.seen {
+			if !now.Before(exp) {
+				delete(f.seen, k)
+			}
+		}
+		if len(f.seen) >= f.max {
+			clear(f.seen)
+		}
+	}
+	f.seen[addr] = now.Add(f.ttl)
+	return true
+}
+
 func (c *crawler) runDiscoveredNodes(ctx context.Context) {
+	recent := newRecentAddrFilter(discoveredAddrDedupeMax, discoveredAddrDedupeTTL)
+	var limiter *rate.Limiter
+	if c.maxDiscoveredNodesPerSecond > 0 {
+		rps := rate.Limit(c.maxDiscoveredNodesPerSecond)
+		burst := max(1, min(int(c.maxDiscoveredNodesPerSecond), 64))
+		limiter = rate.NewLimiter(rps, burst)
+	}
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case ps := <-c.discoveredNodes.Out():
-			addrs := make([]netip.Addr, 0, 1)
-
-			m := make(map[string]ktable.Node, 1)
+			now := time.Now()
+			addrs := make([]netip.Addr, 0, len(ps))
+			m := make(map[netip.Addr]ktable.Node, len(ps))
 			for _, p := range ps {
+				addr := p.Addr().Addr()
 				// Every discovered node passes here, including the sender of
 				// an incoming query. Only public addresses are queried.
-				if !protocol.IsPublicAddr(p.Addr().Addr()) {
+				if !protocol.IsPublicAddr(addr) {
 					continue
 				}
-
-				if _, ok := m[p.Addr().Addr().String()]; !ok {
-					m[p.Addr().Addr().String()] = p
-					addrs = append(addrs, p.Addr().Addr())
+				if _, ok := m[addr]; !ok {
+					m[addr] = p
+					addrs = append(addrs, addr)
 				}
 			}
-			// for any discovered node not already in the routing table,
-			// we will block until it can be sent to any one of the pipeline channels.
 			unknownAddrs := c.kTable.FilterKnownAddrs(addrs)
 			for _, addr := range unknownAddrs {
-				p := m[addr.String()]
+				if !recent.allow(addr, now) {
+					continue
+				}
+				if limiter != nil {
+					if err := limiter.Wait(ctx); err != nil {
+						return
+					}
+				}
+				p := m[addr]
 				select {
 				case <-ctx.Done():
 					return

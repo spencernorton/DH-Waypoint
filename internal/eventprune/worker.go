@@ -44,6 +44,8 @@ type pruner struct {
 
 	// verdictCursor is the last verdict event id the current pass examined.
 	verdictCursor int64
+	// applicationCursor is the last info_hash the current processor_applications pass examined.
+	applicationCursor []byte
 
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
@@ -103,6 +105,7 @@ func (w *pruner) runCycle(ctx context.Context, pool *pgxpool.Pool, now time.Time
 		{"processor_feedback_events", w.cfg.FeedbackRetention, w.pruneFeedback},
 		{"label_evidence", w.cfg.QBStateRetention, w.pruneQBState},
 		{"torrent_verdict_events", w.cfg.VerdictEventRetention, w.pruneVerdictEvents},
+		{"processor_applications", w.cfg.ApplicationResultsRetention, w.pruneApplicationResults},
 	} {
 		if step.keep <= 0 {
 			continue
@@ -196,3 +199,42 @@ SELECT (SELECT count(*) FROM gone),(SELECT count(*) FROM scan),(SELECT max(id) F
 	w.verdictCursor = *last
 	return deleted, true, nil
 }
+
+// pruneApplicationResults walks processor_applications in primary-key order and
+// compacts large historical results JSON arrays to '[]' once applied_at passes
+// the cutoff, preserving info_hash, applied_revision and pipeline_revision so
+// queue Scan idempotency never reprocesses unchanged torrents.
+func (w *pruner) pruneApplicationResults(ctx context.Context, pool *pgxpool.Pool, cutoff time.Time) (int64, bool, error) {
+	cursor := w.applicationCursor
+	if cursor == nil {
+		cursor = []byte{}
+	}
+	var compacted, scanned int64
+	var last []byte
+	err := pool.QueryRow(ctx, `WITH scan AS (
+  SELECT info_hash, applied_at, results <> '[]'::jsonb AS has_payload
+  FROM processor_applications
+  WHERE info_hash > $1::bytea
+  ORDER BY info_hash
+  LIMIT $2
+), updated AS (
+  UPDATE processor_applications a
+  SET results = '[]'::jsonb
+  FROM scan s
+  WHERE a.info_hash = s.info_hash
+    AND s.has_payload
+    AND s.applied_at < $3
+  RETURNING 1
+)
+SELECT (SELECT count(*) FROM updated), (SELECT count(*) FROM scan), (SELECT info_hash FROM scan ORDER BY info_hash DESC LIMIT 1)`, cursor, w.cfg.BatchSize, cutoff).Scan(&compacted, &scanned, &last)
+	if err != nil {
+		return 0, false, err
+	}
+	if len(last) == 0 || scanned < int64(w.cfg.BatchSize) {
+		w.applicationCursor = nil
+		return compacted, false, nil
+	}
+	w.applicationCursor = append([]byte(nil), last...)
+	return compacted, true, nil
+}
+
