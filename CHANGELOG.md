@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+## 5.12.0 — 2026-11-19
+
+### Added
+
+- **Compact per-torrent file bundles (`torrent_file_bundles`, migration `00081`).** Adds a 1-row-per-torrent compressed `torrent_file_bundles` sidecar table (`torrent_files_for_hash(bytea)` + `torrent_files_effective` dual-read view), configurable write mode `STORAGE_FILE_BUNDLES_WRITE=compact|dual|legacy` (default `compact`), full dual-read integration across search, processor source snapshots, serving policy, CSAM blocklist sweeps, and catalogue recovery, and `dh-waypoint storage compact-files` for online keyset backfill, parity verification, and optional legacy `torrent_files` pruning without bumping `processor_publication_sources` revisions.
+- **Opt-in ParadeDB `pg_search` BM25 search execution (migration `00080`).** Adds `SEARCH_BM25_MODE=auto|on|off` (default `auto`), native Block-Max WAND BM25 top-K scoring and Tantivy filter pushdown when `pg_search` and `torrent_contents_bm25_idx` are present while keeping stock PostgreSQL 16/18 `tsquery` deployments zero-dependency, CLI lifecycle commands (`dh-waypoint search bm25 enable|status|verify|disable`), `examples/docker-compose.paradedb.yml`, and `docs/paradedb-bm25.md`.
+- **Rich REST `/api/v1/search` filtering and sorting.** Adds validated `resolution`, `video_source`, `video_codec`, `hdr`, `min_seeders`, `season`, `episode`, `imdb`, `tmdb`, `order_by`, and `order_dir` query parameters to `GET /api/v1/search` (wiring external-ID and episode filters through `TorrentContentByIdentifiers` + `WithEpisodesHint`), updated identically in `internal/restapi/openapi.yaml` and `docs/reference/openapi.yaml`.
+- **Optional Compose sidecar profiles and Plugin SDK guide.** Adds opt-in `stremio` and `prowlarr-sync` profiles to `docker-compose.yml` for the pure-stdlib sidecar adapters, plus `docs/plugins-sdk.md` documenting the `processorapi/v1` contract, `dh-waypoint plugin verify`, file-managed `*.plugin.yml` registration, and sidecar adapter patterns.
+- **uTP and MSE/PE local transport qualification matrix.** Exports `metainforequester.FetchFromStream` without changing the TCP-only plaintext production defaults, and adds bounded local-peer interoperability fixtures in `tools/protocolinterop` exercising `github.com/anacrolix/go-utp` (`utp.PureGo`) and `github.com/anacrolix/torrent/mse` against TCP-only, MSE-required, uTP-only, uTP+MSE, refusing, malformed, and stalled/canceled peers under one shared deadline with zero payload transfer.
+
+### Fixed
+
+- **Capped exponential backoff on deferred payload reviews.** `internal/processors/payload_http.go` uses `processor_payload_work.attempts` to step unreachable/unavailable deferrals from `5m -> 15m -> 1h -> 4h -> 24h` and unreleased `claim_not_available` deferrals from `1h -> 6h -> 24h`, keeping local contention reasons (`proof_capacity`, `decoder_timeout`, `lease_expiring`, `decoder_unavailable`) at `5m` and resetting `attempts` to `1` on new `source_revision`, new `verifier_artifact`, or renewal after approval.
+- **BEP 10 `ut_metadata == 255` conformance and short-write check.** Fixes the off-by-one rejection of remote dynamic extension ID `255` (`> 255` instead of `>= 255`) in `metainforequester.exHandshake` and returns `io.ErrShortWrite` on partial extension handshake writes.
+
 ## 5.11.0 — 2026-11-18
 
 ### Added
