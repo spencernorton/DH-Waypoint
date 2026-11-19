@@ -31,7 +31,7 @@ func bundleTestDB(t *testing.T) (*pgxpool.Pool, *gorm.DB) {
 	ctx := context.Background()
 	admin, err := pgx.Connect(ctx, dsn)
 	require.NoError(t, err)
-	_, err = admin.Exec(ctx, `SELECT pg_advisory_lock(830571);CREATE EXTENSION IF NOT EXISTS pg_trgm WITH SCHEMA public;CREATE EXTENSION IF NOT EXISTS btree_gin WITH SCHEMA public;SELECT pg_advisory_unlock(830571)`)
+	_, err = admin.Exec(ctx, `SELECT pg_advisory_xact_lock(830571);CREATE EXTENSION IF NOT EXISTS pg_trgm WITH SCHEMA public;CREATE EXTENSION IF NOT EXISTS btree_gin WITH SCHEMA public`)
 	require.NoError(t, err)
 	schema := fmt.Sprintf("filebundles_%d", time.Now().UnixNano())
 	_, err = admin.Exec(ctx, `CREATE SCHEMA `+pgx.Identifier{schema}.Sanitize())
@@ -459,4 +459,129 @@ func TestStatusFastProgressAndGracefulStopPostgres(t *testing.T) {
 	loaded, err := filebundles.LoadFilesByInfoHashes(ctx, pool, hashes)
 	require.NoError(t, err)
 	require.Len(t, loaded, 10)
+}
+
+// A newer live compact bundle (for example after BEP 47 .pad/ stripping on
+// re-ingest) shadowing older pre-v5.12 legacy torrent_files rows is classified
+// as superseded rather than aborting compaction, while corrupted same-tx
+// dual-write bundles and empty/malformed bundles still fail loudly.
+func TestBackfillHandlesSupersededLiveBundlesAndRejectsCorruption(t *testing.T) {
+	pool, _ := bundleTestDB(t)
+	ctx := context.Background()
+
+	legacyOnly := protocol.InfoHash{0xE1, 0x01}
+	superseded := protocol.InfoHash{0xE1, 0x02}
+	for _, h := range []protocol.InfoHash{legacyOnly, superseded} {
+		seedTorrentRow(t, pool, h)
+	}
+
+	// Normal legacy-only torrent (backfilled strictly).
+	for _, f := range syntheticFiles(legacyOnly) {
+		_, err := pool.Exec(ctx,
+			`INSERT INTO torrent_files(info_hash,"index",path,size,created_at,updated_at) VALUES($1,$2,$3,$4,now()-interval '30 days',now()-interval '30 days')`,
+			legacyOnly.Bytes(), f.Index, f.Path, f.Size)
+		require.NoError(t, err)
+	}
+
+	// Superseded torrent: stale pre-v5.12 legacy rows containing BEP 47 .pad/
+	// entries alongside a newer live compact bundle containing only the real files.
+	staleFiles := []model.TorrentFile{
+		{InfoHash: superseded, Index: 0, Path: "Show/ep01.mkv", Size: 1000},
+		{InfoHash: superseded, Index: 1, Path: "Show/.pad/1024", Size: 1024},
+		{InfoHash: superseded, Index: 2, Path: "Show/ep02.mkv", Size: 2000},
+		{InfoHash: superseded, Index: 3, Path: "Show/.pad/2048", Size: 2048},
+	}
+	for _, f := range staleFiles {
+		_, err := pool.Exec(ctx,
+			`INSERT INTO torrent_files(info_hash,"index",path,size,created_at,updated_at) VALUES($1,$2,$3,$4,now()-interval '120 days',now()-interval '120 days')`,
+			superseded.Bytes(), f.Index, f.Path, f.Size)
+		require.NoError(t, err)
+	}
+	cleanBundle := []model.TorrentFile{
+		{InfoHash: superseded, Index: 0, Path: "Show/ep01.mkv", Size: 1000},
+		{InfoHash: superseded, Index: 2, Path: "Show/ep02.mkv", Size: 2000},
+	}
+	require.NoError(t, filebundles.UpsertBundles(ctx, pool, map[protocol.InfoHash][]model.TorrentFile{
+		superseded: cleanBundle,
+	}))
+
+	revBefore, pendingBefore, pendingSumBefore := publicationState(t, pool)
+
+	// VerifyParity (--verify-only) recognizes superseded without flagging a mismatch.
+	parity, err := filebundles.VerifyParity(ctx, pool, filebundles.BackfillOptions{BatchSize: 10, Pause: time.Millisecond})
+	require.NoError(t, err)
+	require.EqualValues(t, 1, parity.CheckedHashes)
+	require.EqualValues(t, 1, parity.SupersededHashes)
+	require.Empty(t, parity.MismatchedHashes)
+
+	// Backfill migrates legacyOnly strictly, accepts superseded, prunes all
+	// stale legacy rows cleanly, and moves zero publication revisions.
+	report, err := filebundles.Backfill(ctx, pool, filebundles.BackfillOptions{
+		BatchSize:   10,
+		Pause:       time.Millisecond,
+		PruneLegacy: true,
+	})
+	require.NoError(t, err)
+	require.True(t, report.Done)
+	require.EqualValues(t, 1, report.MigratedHashes)
+	require.EqualValues(t, 1, report.VerifiedHashes)
+	require.EqualValues(t, 1, report.SupersededHashes)
+	require.EqualValues(t, 7, report.PrunedRows)
+	require.Empty(t, report.MismatchedHashes)
+
+	revAfter, pendingAfter, pendingSumAfter := publicationState(t, pool)
+	require.Equal(t, revBefore, revAfter, "pruning superseded legacy rows must not bump publication revisions")
+	require.Equal(t, pendingBefore, pendingAfter)
+	require.Equal(t, pendingSumBefore, pendingSumAfter)
+
+	loaded, err := filebundles.LoadFilesByInfoHashes(ctx, pool, []protocol.InfoHash{legacyOnly, superseded})
+	require.NoError(t, err)
+	require.Equal(t, []string{"0|Show/ep01.mkv|1000|mkv", "2|Show/ep02.mkv|2000|mkv"}, fileKeys(loaded[superseded]))
+	require.Len(t, loaded[legacyOnly], 3)
+
+	// Corrupted same-tx dual-write bundle must still fail Backfill and roll back.
+	corrupted := protocol.InfoHash{0xE1, 0x03}
+	seedTorrentRow(t, pool, corrupted)
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	require.NoError(t, filebundles.PersistTorrentFilesPgx(ctx, tx, filebundles.ModeDual, syntheticFiles(corrupted)))
+	require.NoError(t, tx.Commit(ctx))
+	_, err = pool.Exec(ctx, `UPDATE torrent_file_bundles SET paths=ARRAY['Bundle/film.mkv','Bundle/subs.srt','TAMPERED'] WHERE info_hash=$1`, corrupted.Bytes())
+	require.NoError(t, err)
+
+	_, err = filebundles.Backfill(ctx, pool, filebundles.BackfillOptions{
+		BatchSize:   10,
+		Pause:       time.Millisecond,
+		PruneLegacy: true,
+		ResetCursor: true,
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), corrupted.String())
+
+	// Empty/malformed bundle with a newer timestamp must also fail Backfill
+	// rather than pruning legacy rows behind an empty bundle.
+	_, err = pool.Exec(ctx, `DELETE FROM torrent_files WHERE info_hash=$1`, corrupted.Bytes())
+	require.NoError(t, err)
+	emptyNew := protocol.InfoHash{0xE1, 0x04}
+	seedTorrentRow(t, pool, emptyNew)
+	_, err = pool.Exec(ctx,
+		`INSERT INTO torrent_files(info_hash,"index",path,size,created_at,updated_at) VALUES($1,0,'keep.mkv',500,now()-interval '10 days',now()-interval '10 days')`,
+		emptyNew.Bytes())
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx,
+		`INSERT INTO torrent_file_bundles(info_hash,indexes,paths,sizes,extensions,created_at,updated_at) VALUES($1,'{}','{}','{}','{}',now(),now())`,
+		emptyNew.Bytes())
+	require.NoError(t, err)
+
+	_, err = filebundles.Backfill(ctx, pool, filebundles.BackfillOptions{
+		BatchSize:   10,
+		Pause:       time.Millisecond,
+		PruneLegacy: true,
+		ResetCursor: true,
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), emptyNew.String())
+	var legacyStillPresent int
+	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM torrent_files WHERE info_hash=$1`, emptyNew.Bytes()).Scan(&legacyStillPresent))
+	require.Equal(t, 1, legacyStillPresent, "legacy row must not be pruned behind an empty bundle")
 }
