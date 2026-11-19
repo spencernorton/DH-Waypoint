@@ -30,7 +30,7 @@ var sourceSQL = `SELECT jsonb_build_object(
  'file_count',t.files_count,'extension',t.extension,
  'files',COALESCE((SELECT jsonb_agg(x ORDER BY x->>'path',x->>'index') FROM
   (SELECT jsonb_build_object('path',path,'size',size,'index',"index",'extension',extension) x
-   FROM torrent_files WHERE info_hash=t.info_hash ORDER BY "index",path LIMIT 257) f),'[]'),
+   FROM torrent_files_for_hash(t.info_hash) ORDER BY "index",path LIMIT 257) f),'[]'),
  'receipt',(SELECT to_jsonb(r)-'recorded_at' FROM processor_core_receipts r WHERE r.info_hash=t.info_hash),
  'reprocess',(SELECT request_id FROM processor_reprocess_requests r WHERE r.info_hash=t.info_hash AND r.state IN('ready','queued','settled','core_only') ORDER BY created_at DESC,request_id DESC LIMIT 1),
  'hint',(SELECT to_jsonb(h)-'created_at'-'updated_at' FROM torrent_hints h WHERE h.info_hash=t.info_hash),
@@ -127,6 +127,7 @@ func readSourceWait(ctx context.Context, tx pgx.Tx, hash []byte, lockTimeout str
 				}
 			}
 			for _, q := range []string{
+				`SELECT info_hash FROM torrent_file_bundles WHERE info_hash=$1 FOR SHARE`,
 				`SELECT info_hash FROM torrent_files WHERE info_hash=$1 ORDER BY "index",path FOR SHARE`,
 				`SELECT info_hash FROM torrent_hints WHERE info_hash=$1 FOR SHARE`,
 				`SELECT id FROM torrent_contents WHERE info_hash=$1 ORDER BY id FOR SHARE`,

@@ -90,6 +90,33 @@ CREATE TABLE torrent_files (
   created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (info_hash, path)
 );
+CREATE TABLE torrent_file_bundles (
+  info_hash bytea PRIMARY KEY REFERENCES torrents(info_hash) ON DELETE CASCADE,
+  indexes integer[] NOT NULL, paths text[] NOT NULL,
+  sizes bigint[] NOT NULL, extensions text[] NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE FUNCTION torrent_files_for_hash(target_hash bytea)
+RETURNS TABLE(info_hash bytea, "index" integer, path text, size bigint, extension text, created_at timestamptz, updated_at timestamptz)
+LANGUAGE sql STABLE AS $func$
+ SELECT b.info_hash, u.i, u.p, u.s, u.e, b.created_at, b.updated_at
+ FROM torrent_file_bundles b
+ CROSS JOIN LATERAL unnest(b.indexes, b.paths, b.sizes, b.extensions) AS u(i, p, s, e)
+ WHERE b.info_hash = target_hash
+ UNION ALL
+ SELECT f.info_hash, f."index", f.path, f.size, f.extension, f.created_at, f.updated_at
+ FROM torrent_files f
+ WHERE f.info_hash = target_hash
+  AND NOT EXISTS (SELECT 1 FROM torrent_file_bundles b2 WHERE b2.info_hash = target_hash)
+$func$;
+CREATE VIEW torrent_files_effective AS
+SELECT b.info_hash, u.i AS "index", u.p AS path, u.s AS size, u.e AS extension, b.created_at, b.updated_at
+FROM torrent_file_bundles b
+CROSS JOIN LATERAL unnest(b.indexes, b.paths, b.sizes, b.extensions) AS u(i, p, s, e)
+UNION ALL
+SELECT f.info_hash, f."index", f.path, f.size, f.extension, f.created_at, f.updated_at
+FROM torrent_files f
+WHERE NOT EXISTS (SELECT 1 FROM torrent_file_bundles b2 WHERE b2.info_hash = f.info_hash);
 CREATE TABLE torrent_sources (
   key text PRIMARY KEY, name text NOT NULL,
   created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now()

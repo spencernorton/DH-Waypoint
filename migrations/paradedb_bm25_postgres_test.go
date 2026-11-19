@@ -43,7 +43,7 @@ func TestParadeDBBM25SupportMigrationUpDownUp(t *testing.T) {
 	provider, err := goose.NewProvider(goose.DialectPostgres, db, FS)
 	require.NoError(t, err)
 
-	_, err = provider.Up(ctx)
+	_, err = provider.UpTo(ctx, 80)
 	require.NoError(t, err)
 
 	// Stock installs get zero storage bloat: the migration adds functions
@@ -146,7 +146,7 @@ VALUES ('synthetic','synthetic_kind','inst',$2,$1,'tv',now(),5)`, h, id)
 
 	// Down restores the 00078 trigger body (with its delete fence) and drops
 	// only the helper functions.
-	_, err = provider.Down(ctx)
+	_, err = provider.DownTo(ctx, 79)
 	require.NoError(t, err)
 	require.NoError(t, db.QueryRowContext(ctx, `SELECT prosrc FROM pg_proc WHERE pronamespace = current_schema()::regnamespace AND proname = 'processor_publication_source_changed'`).Scan(&prosrc))
 	require.NotContains(t, prosrc, "suppress_publication_trigger")
@@ -155,7 +155,7 @@ VALUES ('synthetic','synthetic_kind','inst',$2,$1,'tv',now(),5)`, h, id)
 	require.NoError(t, db.QueryRowContext(ctx, `SELECT to_regprocedure('torrent_contents_tsv_text(tsvector)') IS NOT NULL OR to_regprocedure('torrent_contents_ep_tokens(jsonb)') IS NOT NULL`).Scan(&fnExists))
 	require.False(t, fnExists)
 
-	_, err = provider.UpByOne(ctx)
+	_, err = provider.UpTo(ctx, 80)
 	require.NoError(t, err)
 	require.NoError(t, db.QueryRowContext(ctx, `SELECT torrent_contents_ep_tokens('{"1":{}}'::jsonb)`).Scan(&text))
 	require.Equal(t, "s1all", text)

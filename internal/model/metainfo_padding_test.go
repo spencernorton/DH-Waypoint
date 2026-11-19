@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/anacrolix/torrent/bencode"
+	mi "github.com/anacrolix/torrent/metainfo"
 	"github.com/spencernorton/DH-Waypoint/internal/model"
 	"github.com/spencernorton/DH-Waypoint/internal/protocol"
 	"github.com/spencernorton/DH-Waypoint/internal/protocol/metainfo"
@@ -41,4 +42,29 @@ func TestTorrentFromMetadataSkipsBEP47PaddingAndPreservesOriginalIndexes(t *test
 	require.Equal(t, "01-Track1.flac", projected.Files[0].Path)
 	require.Equal(t, uint(2), projected.Files[1].Index, "original metainfo file index is preserved across skipped padding")
 	require.Equal(t, "02-Track2.flac", projected.Files[1].Path)
+}
+
+// Duplicate paths keep the first occurrence (lowest metainfo index), matching
+// the legacy (info_hash, path) first-writer-wins storage key, and FilesCount
+// counts only what will actually be stored.
+func TestTorrentFromMetadataDeduplicatesDuplicatePaths(t *testing.T) {
+	h := protocol.InfoHash{0x42}
+	validated := metainfo.ValidatedInfo{
+		Info:       mi.Info{Name: "Synthetic.Duplicates"},
+		Identities: protocol.TorrentIdentities{V1: &h},
+		Files: []mi.FileInfo{
+			{Length: 100, Path: []string{"dup.mkv"}},
+			{Length: 200, Path: []string{"dup.mkv"}},
+			{Length: 300, Path: []string{"other.srt"}},
+		},
+	}
+	projected := model.TorrentFromMetadata(validated, "dht", false, 100)
+	require.Equal(t, model.FilesStatusMulti, projected.FilesStatus)
+	require.True(t, projected.FilesCount.Valid)
+	require.Equal(t, uint(2), projected.FilesCount.Uint)
+	require.Len(t, projected.Files, 2)
+	require.Equal(t, uint(0), projected.Files[0].Index)
+	require.Equal(t, uint(100), projected.Files[0].Size, "first duplicate wins")
+	require.Equal(t, "other.srt", projected.Files[1].Path)
+	require.Equal(t, uint(2), projected.Files[1].Index)
 }

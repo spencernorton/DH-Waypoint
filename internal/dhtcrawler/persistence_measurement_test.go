@@ -151,7 +151,7 @@ func TestMeasuredCrawlerPersistence(t *testing.T) {
 			require.Nil(t, alias)
 		}
 		var path string
-		require.NoError(t, pool.QueryRow(ctx, `SELECT path FROM torrent_files WHERE info_hash=$1`, h.Bytes()).Scan(&path))
+		require.NoError(t, pool.QueryRow(ctx, `SELECT path FROM torrent_files_effective WHERE info_hash=$1`, h.Bytes()).Scan(&path))
 		require.Equal(t, "dir/a.txt", path)
 		var pieces int
 		require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM torrent_pieces WHERE info_hash=$1`, h.Bytes()).Scan(&pieces))

@@ -9,6 +9,8 @@ var removalSeed = []struct{ table, sql string }{
  select $1::bytea,$2::text,4096,false,'multi',1,now(),now() where $3::text is not null`},
 	{"torrent_files", `insert into torrent_files(info_hash,"index",path,size,created_at,updated_at)
  select $1::bytea,0,$3::text,4096,now(),now() where $2::text is not null`},
+	{"torrent_file_bundles", `insert into torrent_file_bundles(info_hash,indexes,paths,sizes,extensions)
+ select $1::bytea,array[0],array[$3::text],array[4096]::bigint[],array['mkv'] where $2::text is not null`},
 	{"torrent_sources", `insert into torrent_sources(key,name,created_at,updated_at)
  select 'seed-'||encode(sha256($1::bytea),'hex'),'Seed source',now(),now() where $2::text is not null and $3::text is not null`},
 	{"torrents_torrent_sources", `insert into torrents_torrent_sources(source,info_hash,import_id,seeders,leechers,published_at,created_at,updated_at)

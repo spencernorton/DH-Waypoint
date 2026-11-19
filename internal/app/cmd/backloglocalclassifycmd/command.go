@@ -10,6 +10,7 @@ import (
 	"github.com/spencernorton/DH-Waypoint/internal/classifier"
 	"github.com/spencernorton/DH-Waypoint/internal/classifier/classification"
 	"github.com/spencernorton/DH-Waypoint/internal/database/dao"
+	"github.com/spencernorton/DH-Waypoint/internal/database/filebundles"
 	"github.com/spencernorton/DH-Waypoint/internal/lazy"
 	"github.com/spencernorton/DH-Waypoint/internal/model"
 	"github.com/spencernorton/DH-Waypoint/internal/namepolicy"
@@ -144,7 +145,6 @@ func (p Params) action(ctx *cli.Context) error {
 	for limit <= 0 || st.submitted < limit {
 		q := d.TorrentContent.WithContext(ctx.Context).Scopes(processor.NamePolicyScope(p.NamePolicy)).
 			Preload(d.TorrentContent.Torrent).
-			Preload(d.TorrentContent.Torrent.Files).
 			Preload(d.TorrentContent.Torrent.Hint).
 			Preload(d.TorrentContent.Torrent.Sources).
 			Where(
@@ -165,6 +165,15 @@ func (p Params) action(ctx *cli.Context) error {
 		}
 		if len(rows) == 0 {
 			break
+		}
+		{
+			ptrs := make([]*model.Torrent, len(rows))
+			for i := range rows {
+				ptrs[i] = &rows[i].Torrent
+			}
+			if err := filebundles.FillTorrentFilesGORM(ctx.Context, d.Torrent.WithContext(ctx.Context).UnderlyingDB(), ptrs); err != nil {
+				return err
+			}
 		}
 
 		st.pages++

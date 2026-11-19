@@ -60,7 +60,13 @@ OR EXISTS(SELECT 1 FROM junkpurge_quarantine WHERE info_hash=$1 AND expired_at I
 	if err = lockedAuthority(ctx, tx, task); err != nil {
 		return t, err
 	}
-	rows, err := tx.Query(ctx, `SELECT "index",path,size,extension FROM torrent_files WHERE info_hash=$1 ORDER BY "index",path FOR SHARE`, task.InfoHash)
+	if _, err = tx.Exec(ctx, `SELECT info_hash FROM torrent_file_bundles WHERE info_hash=$1 FOR SHARE`, task.InfoHash); err != nil {
+		return t, err
+	}
+	if _, err = tx.Exec(ctx, `SELECT info_hash FROM torrent_files WHERE info_hash=$1 FOR SHARE`, task.InfoHash); err != nil {
+		return t, err
+	}
+	rows, err := tx.Query(ctx, `SELECT "index",path,size,extension FROM torrent_files_for_hash($1) ORDER BY "index",path`, task.InfoHash)
 	if err != nil {
 		return t, err
 	}

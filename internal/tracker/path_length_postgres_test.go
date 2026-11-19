@@ -50,6 +50,6 @@ func TestPostgresUploadPathLengthBounds(t *testing.T) {
 	require.ErrorIs(t, upload(metainfo.MaxPathLen+1), ErrInvalidTorrentFile)
 
 	var torrents, files, stored int
-	require.NoError(t, pool.QueryRow(ctx, `SELECT (SELECT count(*) FROM torrents), count(*), max(octet_length(path)) FROM torrent_files`).Scan(&torrents, &files, &stored))
+	require.NoError(t, pool.QueryRow(ctx, `SELECT (SELECT count(*) FROM torrents), count(*), max(octet_length(path)) FROM torrent_files_effective`).Scan(&torrents, &files, &stored))
 	require.Equal(t, []int{1, 1, metainfo.MaxPathLen}, []int{torrents, files, stored})
 }

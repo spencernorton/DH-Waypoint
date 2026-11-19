@@ -51,6 +51,7 @@ func TorrentFromMetadata(metadata metainfo.ValidatedInfo, source string, savePie
 	}
 	realFiles := make([]indexedFile, 0, len(metadata.Files))
 	var realTotal uint
+	seenPaths := make(map[string]struct{}, len(metadata.Files))
 	for idx, f := range metadata.Files {
 		parts := f.BestPath()
 		if IsPaddingFile(f.Attr, parts) {
@@ -58,9 +59,16 @@ func TorrentFromMetadata(metadata metainfo.ValidatedInfo, source string, savePie
 		}
 		sz := uint(f.Length)
 		realTotal += sz
+		path := strings.Join(parts, "/")
+		// Legacy storage keys files by (info_hash, path) with first-writer-wins;
+		// drop later duplicates here so FilesCount matches what is stored.
+		if _, dup := seenPaths[path]; dup {
+			continue
+		}
+		seenPaths[path] = struct{}{}
 		realFiles = append(realFiles, indexedFile{
 			idx:  idx,
-			path: strings.Join(parts, "/"),
+			path: path,
 			size: sz,
 		})
 	}

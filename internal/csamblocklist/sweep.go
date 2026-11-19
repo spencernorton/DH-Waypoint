@@ -78,7 +78,7 @@ func gone(alias string) string {
 // planner scan the whole table for each batch.
 var sweepSources = []struct{ table, start, sql string }{
 	{"torrents", "", `select encode(t.info_hash,'hex'),t.info_hash,t.info_hash_v2,t.name,t.files_status::text,
- array(select f.path from torrent_files f where f.info_hash=t.info_hash),true
+ array(select f.path from torrent_files_for_hash(t.info_hash) f),true
  from torrents t where t.info_hash>decode($1,'hex') order by t.info_hash limit $2`},
 	// The legacy junk purge deleted the torrents row and kept a full copy.
 	{"junkpurge_quarantine", "", `select encode(q.info_hash,'hex'),q.info_hash,null::bytea,
@@ -93,7 +93,8 @@ var sweepSources = []struct{ table, start, sql string }{
 	// A refused restore leaves its snapshot behind.
 	{"catalogue_recovery_snapshots", "0", `select s.id::text,s.info_hash,null::bytea,
  coalesce(s.snapshot#>>'{torrents,0,name}',''),coalesce(s.snapshot#>>'{torrents,0,files_status}',''),
- array(select coalesce(e->>'path','') from jsonb_array_elements(case when jsonb_typeof(s.snapshot->'torrent_files')='array' then s.snapshot->'torrent_files' else '[]' end) e),` + gone("s") + `
+ array(select coalesce(e->>'path','') from jsonb_array_elements(case when jsonb_typeof(s.snapshot->'torrent_files')='array' then s.snapshot->'torrent_files' else '[]' end) e)
+  || array(select coalesce(p,'') from jsonb_array_elements(case when jsonb_typeof(s.snapshot->'torrent_file_bundles')='array' then s.snapshot->'torrent_file_bundles' else '[]' end) b cross join lateral jsonb_array_elements_text(case when jsonb_typeof(b->'paths')='array' then b->'paths' else '[]' end) p),` + gone("s") + `
  from catalogue_recovery_snapshots s where s.id>($1::text)::bigint order by s.id limit $2`},
 	// Earlier releases sampled the name of a torrent the classifier deleted
 	// into the evidence of its verdict. The reason is not tested: a fixed

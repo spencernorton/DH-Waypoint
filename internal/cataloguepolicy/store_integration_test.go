@@ -46,6 +46,12 @@ func policyTestPool(t *testing.T) *pgxpool.Pool {
 	})
 	_, err = pool.Exec(ctx, `create table torrents(info_hash bytea primary key,name text,updated_at timestamptz,private boolean,files_count integer);
 create table torrent_files(info_hash bytea,index int,path text,updated_at timestamptz);
+create table torrent_file_bundles(info_hash bytea primary key,indexes integer[] not null,paths text[] not null,sizes bigint[] not null,extensions text[] not null,created_at timestamptz not null default now(),updated_at timestamptz not null default now());
+create function torrent_files_for_hash(target_hash bytea) returns table(info_hash bytea,"index" integer,path text,size bigint,extension text,created_at timestamptz,updated_at timestamptz) language sql stable as $func$
+ select b.info_hash,u.i,u.p,u.s,u.e,b.created_at,b.updated_at from torrent_file_bundles b cross join lateral unnest(b.indexes,b.paths,b.sizes,b.extensions) u(i,p,s,e) where b.info_hash=target_hash
+ union all
+ select f.info_hash,f."index",f.path,0::bigint,null::text,f.updated_at,f.updated_at from torrent_files f where f.info_hash=target_hash and not exists(select 1 from torrent_file_bundles b2 where b2.info_hash=target_hash)
+$func$;
 create table torrent_contents(info_hash bytea,is_anime boolean);
 create table torrent_canonical_labels(info_hash bytea,category text);
 create table torrent_tags(info_hash bytea,name text);
