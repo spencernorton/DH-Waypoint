@@ -30,23 +30,36 @@ type Client interface {
 }
 
 type client struct {
-	db *gorm.DB
+	db  *gorm.DB
+	now func() time.Time
 }
 
 func (c client) Request(ctx context.Context, req Request) ([]Bucket, error) {
+	nowFn := c.now
+	if nowFn == nil {
+		nowFn = time.Now
+	}
+	win, err := metrics.ResolveWindow(req.BucketDuration, req.StartTime, req.EndTime, nowFn())
+	if err != nil {
+		return nil, err
+	}
+	if win.Empty {
+		return []Bucket{}, nil
+	}
+
 	params := []any{
 		req.BucketDuration,
 	}
 
 	var conditions []string
-	if !req.StartTime.IsZero() {
+	if !win.Start.IsZero() {
 		conditions = append(conditions, "updated_at >= ?")
-		params = append(params, req.StartTime)
+		params = append(params, win.Start)
 	}
 
-	if !req.EndTime.IsZero() {
+	if !win.End.IsZero() {
 		conditions = append(conditions, "updated_at <= ?")
-		params = append(params, req.EndTime)
+		params = append(params, win.End)
 	}
 
 	if req.Sources != nil {
@@ -67,19 +80,27 @@ func (c client) Request(ctx context.Context, req Request) ([]Bucket, error) {
 	if len(conditions) > 0 {
 		conditionClause = "WHERE (" + strings.Join(conditions, " AND ") + ")"
 	}
+	params = append(params, metrics.MaxBuckets)
 
 	var result []Bucket
 	if err := c.db.WithContext(ctx).Raw(`select
         source,
-        date_trunc(?, updated_at) as bucket,
-        updated_at > (created_at + interval '1 hour') as updated,
-        count(*) as count
-        from torrents_torrent_sources
-       `+
-		conditionClause+
-		`
-    group by source, bucket, updated
-    order by source, bucket, updated`,
+        bucket,
+        updated,
+        count
+        from (
+            select
+                source,
+                date_trunc(?, updated_at) as bucket,
+                updated_at > (created_at + interval '1 hour') as updated,
+                count(*) as count
+            from torrents_torrent_sources
+            `+conditionClause+`
+            group by source, bucket, updated
+            order by bucket desc, source asc, updated asc
+            limit ?
+        ) bounded
+        order by source, bucket, updated`,
 		params...,
 	).Scan(&result).Error; err != nil {
 		return nil, err

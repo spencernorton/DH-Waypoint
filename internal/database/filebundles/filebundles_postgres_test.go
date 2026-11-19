@@ -296,3 +296,167 @@ FROM torrents t CROSS JOIN generate_series(1,40) f`)
 		legacyBytes, bundleBytes, float64(legacyBytes)/float64(bundleBytes))
 	require.Less(t, bundleBytes*2, legacyBytes, "bundles must be at least 2x smaller on this synthetic batch")
 }
+
+// Bulk multi-row upserts span multiple chunks (>250 hashes) identically across
+// pgxpool (UpsertBundles) and GORM (PersistTorrentFiles) while preserving
+// write-once conflict semantics and NULL extensions.
+func TestBulkUpsertBundlesMultiChunkPostgres(t *testing.T) {
+	pool, gdb := bundleTestDB(t)
+	ctx := context.Background()
+
+	mkHash := func(prefix byte, n int) protocol.InfoHash {
+		var h protocol.InfoHash
+		h[0] = prefix
+		h[1] = byte(n >> 8)
+		h[2] = byte(n)
+		return h
+	}
+
+	// Seed 600 torrents for UpsertBundles (3 chunks: 250 + 250 + 100).
+	const pgxCount = 600
+	pgxHashes := make([]protocol.InfoHash, pgxCount)
+	byHash := make(map[protocol.InfoHash][]model.TorrentFile, pgxCount)
+	batch := &pgx.Batch{}
+	for i := range pgxCount {
+		h := mkHash(0xA1, i+1)
+		pgxHashes[i] = h
+		batch.Queue(`INSERT INTO torrents(info_hash,name,size,private,files_status,files_count,created_at,updated_at) VALUES($1,'Bulk.Pgx',1015,false,'multi',3,now(),now())`, h.Bytes())
+		byHash[h] = syntheticFiles(h)
+	}
+	br := pool.SendBatch(ctx, batch)
+	for range pgxCount {
+		_, err := br.Exec()
+		require.NoError(t, err)
+	}
+	require.NoError(t, br.Close())
+
+	// Pre-insert one bundle with distinct data to verify ON CONFLICT DO NOTHING
+	// inside a multi-row chunk preserves existing rows.
+	sentinel := pgxHashes[275]
+	require.NoError(t, filebundles.UpsertBundles(ctx, pool, map[protocol.InfoHash][]model.TorrentFile{
+		sentinel: {{InfoHash: sentinel, Index: 0, Path: "keep.mkv", Size: 777}},
+	}))
+
+	require.NoError(t, filebundles.UpsertBundles(ctx, pool, byHash))
+	loaded, err := filebundles.LoadFilesByInfoHashes(ctx, pool, pgxHashes)
+	require.NoError(t, err)
+	require.Len(t, loaded, pgxCount)
+	require.Equal(t, []string{"0|keep.mkv|777|mkv"}, fileKeys(loaded[sentinel]))
+	require.Equal(t, []string{"0|Bundle/film.mkv|1000|mkv", "1|Bundle/subs.srt|10|srt", "2|README|5|<null>"}, fileKeys(loaded[pgxHashes[0]]))
+	require.Equal(t, []string{"0|Bundle/film.mkv|1000|mkv", "1|Bundle/subs.srt|10|srt", "2|README|5|<null>"}, fileKeys(loaded[pgxHashes[pgxCount-1]]))
+
+	// Seed 300 torrents for GORM PersistTorrentFiles (2 chunks: 250 + 50).
+	const gormCount = 300
+	gormHashes := make([]protocol.InfoHash, gormCount)
+	var gormFiles []*model.TorrentFile
+	gBatch := &pgx.Batch{}
+	for i := range gormCount {
+		h := mkHash(0xB2, i+1)
+		gormHashes[i] = h
+		gBatch.Queue(`INSERT INTO torrents(info_hash,name,size,private,files_status,files_count,created_at,updated_at) VALUES($1,'Bulk.Gorm',1015,false,'multi',3,now(),now())`, h.Bytes())
+		for _, f := range syntheticFiles(h) {
+			fc := f
+			gormFiles = append(gormFiles, &fc)
+		}
+	}
+	gbr := pool.SendBatch(ctx, gBatch)
+	for range gormCount {
+		_, err := gbr.Exec()
+		require.NoError(t, err)
+	}
+	require.NoError(t, gbr.Close())
+
+	require.NoError(t, gdb.Transaction(func(tx *gorm.DB) error {
+		return filebundles.PersistTorrentFiles(ctx, tx, filebundles.ModeCompact, gormFiles)
+	}))
+	loadedGorm, err := filebundles.LoadFilesByInfoHashes(ctx, pool, gormHashes)
+	require.NoError(t, err)
+	require.Len(t, loadedGorm, gormCount)
+	require.Equal(t, []string{"0|Bundle/film.mkv|1000|mkv", "1|Bundle/subs.srt|10|srt", "2|README|5|<null>"}, fileKeys(loadedGorm[gormHashes[299]]))
+}
+
+// StatusFast reports O(1) pg_class estimates without table scans, Progress
+// streams batch updates, and closing Stop cleanly checkpoints after the active
+// batch commits so a resumed run finishes cleanly.
+func TestStatusFastProgressAndGracefulStopPostgres(t *testing.T) {
+	pool, _ := bundleTestDB(t)
+	ctx := context.Background()
+
+	var hashes []protocol.InfoHash
+	for i := byte(1); i <= 10; i++ {
+		h := protocol.InfoHash{0xC0, i}
+		hashes = append(hashes, h)
+		seedTorrentRow(t, pool, h)
+		for _, f := range syntheticFiles(h) {
+			_, err := pool.Exec(ctx, `INSERT INTO torrent_files(info_hash,"index",path,size,created_at,updated_at) VALUES($1,$2,$3,$4,now(),now())`, h.Bytes(), f.Index, f.Path, f.Size)
+			require.NoError(t, err)
+		}
+	}
+	_, err := pool.Exec(ctx, `ANALYZE torrent_files, torrent_file_bundles`)
+	require.NoError(t, err)
+
+	fastBefore, err := filebundles.StatusFast(ctx, pool)
+	require.NoError(t, err)
+	require.True(t, fastBefore.Estimated)
+	require.EqualValues(t, -1, fastBefore.UnmigratedHashes)
+	require.EqualValues(t, 30, fastBefore.LegacyRows)
+	require.Greater(t, fastBefore.LegacyBytes, int64(0))
+	require.EqualValues(t, 0, fastBefore.BundleRows)
+
+	stopCh := make(chan struct{})
+	var updates []filebundles.BackfillProgress
+	report1, err := filebundles.Backfill(ctx, pool, filebundles.BackfillOptions{
+		BatchSize:        2,
+		Pause:            time.Millisecond,
+		PruneLegacy:      true,
+		Stop:             stopCh,
+		ProgressInterval: 0,
+		Progress: func(p filebundles.BackfillProgress) {
+			updates = append(updates, p)
+			if p.Batches == 2 && !p.Interrupted {
+				close(stopCh)
+			}
+		},
+	})
+	require.NoError(t, err)
+	require.True(t, report1.Interrupted)
+	require.False(t, report1.Done)
+	require.Equal(t, 2, report1.Batches)
+	require.EqualValues(t, 4, report1.MigratedHashes)
+	require.EqualValues(t, 12, report1.PrunedRows)
+	require.NotEmpty(t, report1.LastHash)
+	require.GreaterOrEqual(t, len(updates), 2)
+	require.True(t, updates[len(updates)-1].Interrupted)
+
+	// Resume without resetting cursor: finishes remaining 6 hashes cleanly.
+	var resumeUpdates []filebundles.BackfillProgress
+	report2, err := filebundles.Backfill(ctx, pool, filebundles.BackfillOptions{
+		BatchSize:        2,
+		Pause:            time.Millisecond,
+		PruneLegacy:      true,
+		ProgressInterval: time.Hour, // final update still fires on completion
+		Progress: func(p filebundles.BackfillProgress) {
+			resumeUpdates = append(resumeUpdates, p)
+		},
+	})
+	require.NoError(t, err)
+	require.False(t, report2.Interrupted)
+	require.True(t, report2.Done)
+	require.EqualValues(t, 6, report2.MigratedHashes)
+	require.EqualValues(t, 18, report2.PrunedRows)
+	require.Len(t, resumeUpdates, 1)
+	require.True(t, resumeUpdates[0].Done)
+
+	_, err = pool.Exec(ctx, `ANALYZE torrent_files, torrent_file_bundles`)
+	require.NoError(t, err)
+	fastAfter, err := filebundles.StatusFast(ctx, pool)
+	require.NoError(t, err)
+	require.True(t, fastAfter.Estimated)
+	require.EqualValues(t, 0, fastAfter.LegacyRows)
+	require.EqualValues(t, 10, fastAfter.BundleRows)
+	require.NotEmpty(t, fastAfter.Cursor)
+
+	loaded, err := filebundles.LoadFilesByInfoHashes(ctx, pool, hashes)
+	require.NoError(t, err)
+	require.Len(t, loaded, 10)
+}

@@ -14,14 +14,32 @@ import (
 
 const backfillCursorKey = "storage_file_bundles_backfill"
 
+// BackfillProgress reports live progress during a Backfill run.
+type BackfillProgress struct {
+	Batches        int     `json:"batches"`
+	MigratedHashes int64   `json:"migrated_hashes"`
+	PrunedRows     int64   `json:"pruned_rows"`
+	VerifiedHashes int64   `json:"verified_hashes"`
+	ElapsedSeconds float64 `json:"elapsed_seconds"`
+	HashesPerSec   float64 `json:"hashes_per_sec"`
+	LastHash       string  `json:"last_hash,omitempty"`
+	Done           bool    `json:"done"`
+	Interrupted    bool    `json:"interrupted,omitempty"`
+}
+
 // BackfillOptions bounds one backfill or parity-verification run.
 type BackfillOptions struct {
-	BatchSize   int
-	Pause       time.Duration
-	MaxBatches  int
-	VerifyOnly  bool
-	PruneLegacy bool
-	ResetCursor bool
+	BatchSize        int
+	Pause            time.Duration
+	MaxBatches       int
+	VerifyOnly       bool
+	PruneLegacy      bool
+	ResetCursor      bool
+	Progress         func(BackfillProgress)
+	ProgressInterval time.Duration
+	// Stop requests a graceful checkpoint after the current batch transaction
+	// commits (typically wired to SIGINT/SIGTERM by the CLI).
+	Stop <-chan struct{}
 }
 
 // BackfillReport summarizes one Backfill run.
@@ -32,6 +50,7 @@ type BackfillReport struct {
 	VerifiedHashes   int64    `json:"verified_hashes"`
 	MismatchedHashes []string `json:"mismatched_hashes,omitempty"`
 	Done             bool     `json:"done"`
+	Interrupted      bool     `json:"interrupted,omitempty"`
 	LastHash         string   `json:"last_hash,omitempty"`
 }
 
@@ -39,9 +58,12 @@ type BackfillReport struct {
 type ParityReport struct {
 	CheckedHashes    int64    `json:"checked_hashes"`
 	MismatchedHashes []string `json:"mismatched_hashes,omitempty"`
+	Interrupted      bool     `json:"interrupted,omitempty"`
 }
 
-// StatusReport reports legacy/bundle row counts and on-disk sizes.
+// StatusReport reports legacy/bundle row counts and on-disk sizes. When
+// Estimated is true (from StatusFast), row counts come from pg_class.reltuples
+// and UnmigratedHashes is -1 because no table scan was performed.
 type StatusReport struct {
 	LegacyRows       int64  `json:"legacy_rows"`
 	LegacyBytes      int64  `json:"legacy_bytes"`
@@ -49,6 +71,19 @@ type StatusReport struct {
 	BundleBytes      int64  `json:"bundle_bytes"`
 	UnmigratedHashes int64  `json:"unmigrated_hashes"`
 	Cursor           string `json:"cursor"`
+	Estimated        bool   `json:"estimated,omitempty"`
+}
+
+func stopRequested(stop <-chan struct{}) bool {
+	if stop == nil {
+		return false
+	}
+	select {
+	case <-stop:
+		return true
+	default:
+		return false
+	}
 }
 
 type backfillCursor struct {
@@ -202,6 +237,10 @@ func VerifyParity(ctx context.Context, pool *pgxpool.Pool, opts BackfillOptions)
 	var report ParityReport
 	last := []byte{}
 	for {
+		if stopRequested(opts.Stop) {
+			report.Interrupted = true
+			break
+		}
 		rows, err := pool.Query(ctx,
 			`SELECT b.info_hash FROM torrent_file_bundles b WHERE EXISTS(SELECT 1 FROM torrent_files f WHERE f.info_hash=b.info_hash) AND b.info_hash>$1 ORDER BY b.info_hash LIMIT $2`,
 			last, opts.BatchSize)
@@ -241,6 +280,9 @@ func VerifyParity(ctx context.Context, pool *pgxpool.Pool, opts BackfillOptions)
 		}
 		if opts.Pause > 0 {
 			select {
+			case <-opts.Stop:
+				report.Interrupted = true
+				return report, nil
 			case <-ctx.Done():
 				return report, ctx.Err()
 			case <-time.After(opts.Pause):
@@ -279,6 +321,32 @@ func Status(ctx context.Context, pool *pgxpool.Pool) (StatusReport, error) {
 	return report, nil
 }
 
+// StatusFast returns an O(1) snapshot using pg_class.reltuples and
+// pg_total_relation_size without scanning torrent_files or torrents, suitable
+// for live production monitoring during long-running backfills.
+func StatusFast(ctx context.Context, pool *pgxpool.Pool) (StatusReport, error) {
+	report := StatusReport{
+		UnmigratedHashes: -1,
+		Estimated:        true,
+	}
+	const q = `SELECT
+  COALESCE((SELECT GREATEST(c.reltuples, 0)::bigint FROM pg_class c WHERE c.oid = to_regclass('torrent_files')), 0),
+  COALESCE(pg_total_relation_size(to_regclass('torrent_files')), 0)::bigint,
+  COALESCE((SELECT GREATEST(c.reltuples, 0)::bigint FROM pg_class c WHERE c.oid = to_regclass('torrent_file_bundles')), 0),
+  COALESCE(pg_total_relation_size(to_regclass('torrent_file_bundles')), 0)::bigint,
+  COALESCE((SELECT value FROM key_values WHERE key = $1), '')`
+	if err := pool.QueryRow(ctx, q, backfillCursorKey).Scan(
+		&report.LegacyRows,
+		&report.LegacyBytes,
+		&report.BundleRows,
+		&report.BundleBytes,
+		&report.Cursor,
+	); err != nil {
+		return report, fmt.Errorf("filebundles: fast status: %w", err)
+	}
+	return report, nil
+}
+
 // Backfill copies legacy torrent_files rows into torrent_file_bundles in
 // keyset batches, verifying parity inside each batch transaction before
 // optionally pruning the legacy rows.
@@ -292,6 +360,7 @@ func Backfill(ctx context.Context, pool *pgxpool.Pool, opts BackfillOptions) (Ba
 		}
 		report.VerifiedHashes = parity.CheckedHashes
 		report.MismatchedHashes = parity.MismatchedHashes
+		report.Interrupted = parity.Interrupted
 		return report, nil
 	}
 	if opts.ResetCursor {
@@ -311,8 +380,41 @@ func Backfill(ctx context.Context, pool *pgxpool.Pool, opts BackfillOptions) (Ba
 		}
 	}
 	report.LastHash = cur.LastHash
+	startedAt := time.Now()
+	lastProgressAt := startedAt
+	emitProgress := func(force bool) {
+		if opts.Progress == nil {
+			return
+		}
+		now := time.Now()
+		if !force && opts.ProgressInterval > 0 && now.Sub(lastProgressAt) < opts.ProgressInterval {
+			return
+		}
+		lastProgressAt = now
+		elapsed := now.Sub(startedAt).Seconds()
+		var rate float64
+		if elapsed > 0 {
+			rate = float64(report.VerifiedHashes) / elapsed
+		}
+		opts.Progress(BackfillProgress{
+			Batches:        report.Batches,
+			MigratedHashes: report.MigratedHashes,
+			PrunedRows:     report.PrunedRows,
+			VerifiedHashes: report.VerifiedHashes,
+			ElapsedSeconds: elapsed,
+			HashesPerSec:   rate,
+			LastHash:       report.LastHash,
+			Done:           report.Done,
+			Interrupted:    report.Interrupted,
+		})
+	}
 
 	for {
+		if stopRequested(opts.Stop) {
+			report.Interrupted = true
+			emitProgress(true)
+			break
+		}
 		if opts.MaxBatches > 0 && report.Batches >= opts.MaxBatches {
 			break
 		}
@@ -342,10 +444,16 @@ func Backfill(ctx context.Context, pool *pgxpool.Pool, opts BackfillOptions) (Ba
 		report.VerifiedHashes += verified
 		report.Done = done
 		if done {
+			emitProgress(true)
 			break
 		}
+		emitProgress(false)
 		if opts.Pause > 0 {
 			select {
+			case <-opts.Stop:
+				report.Interrupted = true
+				emitProgress(true)
+				return report, nil
 			case <-ctx.Done():
 				return report, ctx.Err()
 			case <-time.After(opts.Pause):
