@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+## 5.13.0 — 2026-11-19
+
+### Added
+
+- **ParadeDB BM25 serving-policy top-K candidate prefix, `ep_text` episode pushdown, and search/storage observability (#87).** Preserves ParadeDB `TopKScanExecState` when `serving.Policy` filters or joins are active via a `REPEATABLE READ` two-stage candidate prefix (`128 -> 512 -> 2048 -> 8192` expansion), pushes episode lexeme constraints into `ep_text` with a 4-check `dh-waypoint search bm25 verify` suite, and exports Prometheus gauges/counters (`dh_waypoint_search_queries_total`, `bm25_index_valid`, `bm25_index_size_bytes`, `file_bundles_backfill_done`).
+- **Bulk multi-row `torrent_file_bundles` upserts and `storage compact-files` operational controls (#88).** Batches multi-file bundle persistence into 250-row bulk `INSERT ... ON CONFLICT DO NOTHING` upserts across `pgx` and GORM paths, adds `O(1)` `pg_class.reltuples` reporting via `dh-waypoint storage compact-files --status --fast`, adds periodic stderr NDJSON progress reporting (`--progress-interval`), and checkpoints gracefully on `SIGINT`/`SIGTERM`.
+- **PostgreSQL 16 to ParadeDB PostgreSQL 18 migration helper and measured runbook (#89).** Adds `scripts/migrate-to-paradedb.sh` and measured parallel dump/restore + `bm25 enable/verify` upgrade guidance in `docs/paradedb-bm25.md`.
+
+### Fixed
+
+- **Superseded live compact bundles during online backfill and parity verification (#90).** Tracks `INSERT ... ON CONFLICT(info_hash) DO NOTHING RETURNING info_hash` in `filebundles.backfillBatch` so newly migrated rows always pass strict byte-for-byte parity checks, classifies pre-existing bundles with newer live compact writes (`updated_at > max(GREATEST(legacy.created_at, legacy.updated_at)) + interval '1 second'` and valid non-empty arrays, such as BEP 47 `.pad/`-stripped re-ingests) as `superseded_hashes` rather than failing with a false parity error, prunes shadowed legacy rows cleanly under `--prune-legacy` with zero publication revision bumps, and keeps loud failure on genuine corruption.
+- **Bounded GraphQL metrics bucket cardinality and `queuemetrics` filter precedence (#88).** Caps `torrentmetrics` and `queuemetrics` bucket cardinality (`MaxBuckets = 5000`), applies default/clamped `ResolveWindow` bounds, and fixes SQL `OR` precedence in `queuemetrics`.
+
 ## 5.12.0 — 2026-11-19
 
 ### Added
