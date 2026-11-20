@@ -27,8 +27,10 @@ func TorrentContentEpisodesCriteria(episodes model.Episodes) query.Criteria {
 	return query.GenCriteria(func(dbCtx query.DBContext) (query.Criteria, error) {
 		useBM25EpText := false
 		if dbCtx != nil && ResolveBM25Mode() != BM25ModeOff {
-			db := dbCtx.Query().TorrentContent.UnderlyingDB()
-			useBM25EpText = HasParadeDBBM25(context.Background(), db) && HasBM25EpisodeText(context.Background(), db)
+			if bm25Ctx, ok := dbCtx.(interface{ BM25Enabled() bool }); !ok || bm25Ctx.BM25Enabled() {
+				db := dbCtx.Query().TorrentContent.UnderlyingDB()
+				useBM25EpText = HasParadeDBBM25(context.Background(), db) && HasBM25EpisodeText(context.Background(), db)
+			}
 		}
 
 		and := make([]query.Criteria, 0, len(episodes))

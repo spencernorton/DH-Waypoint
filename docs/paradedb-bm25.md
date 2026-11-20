@@ -1,4 +1,41 @@
-# ParadeDB BM25 Search (Opt-In)
+# ParadeDB BM25 Search & Optional PG 16 → PG 18 Migration
+
+## Do I need to migrate my database?
+
+**No — migrating to ParadeDB (PostgreSQL 18) is 100% opt-in.**
+
+Existing deployments on `postgres:16-alpine` or stock `postgres:18` upgrade in
+place through standard Goose migrations with zero dump/restore required. With
+the default `SEARCH_BM25_MODE=auto`, DH-Waypoint detects stock PostgreSQL and
+keeps running on `tsv @@ tsquery` automatically.
+
+### Why migrate?
+
+Operators choose the optional ParadeDB PG 18 migration for three concrete gains:
+
+1. **Native BM25 Top-K relevance ranking (`TopKScanExecState`):** Block-Max WAND
+   pruning avoids scanning and heap-scoring every match on broad queries
+   (measured `47.5×` fewer buffer hits on full-text relevance queries; `~180 ms`
+   top-25 across `14.24M` rows).
+2. **TV episode pushdown (`ep_text`):** Season/episode filters evaluate inside
+   the Tantivy boolean query alongside full-text terms.
+3. **Full storage & bloat reclamation:** Pairing online `torrent_file_bundles`
+   compaction (`dh-waypoint storage compact-files --prune-legacy`) with the
+   logical PG 16 → PG 18 rewrite compacts legacy table and index bloat cleanly
+   — in a real `15.82M`-torrent production cutover, database size dropped from
+   **`100.0 GiB`** (compacted PG 16) to **`58.9 GiB`** (PG 18 pre-BM25) and
+   **`66.7 GiB`** *including* the `3.93 GiB` BM25 index (**`33.3%` smaller**).
+
+### Why a logical dump/restore is needed (not an in-place upgrade)
+
+PostgreSQL 16 Alpine (`musl` libc) data directories cannot be opened by
+`paradedb/paradedb:0.26.6-pg18` (PostgreSQL 18 on Debian `glibc`) due to both
+major-version on-disk format changes and `musl` → `glibc` text collation
+differences. PostgreSQL 18 images also store data under
+`/var/lib/postgresql/18/docker` (requiring the Docker volume to mount at
+`/var/lib/postgresql`, not `/var/lib/postgresql/data`). Logical dump/restore
+rebuilds every B-tree, GIN, and trigram index cleanly under PG 18 collations
+while leaving your original PG 16 volume untouched as an instant cold rollback.
 
 ## What it is
 
@@ -98,13 +135,23 @@ filters are pushed into the Tantivy query. Note the boundaries:
 
 - **Serving-policy and join Top-K prefix**: Ungrouped BM25 relevance searches
   carrying serving-policy guards (`ExcludeAdult`, required publication review,
-  payload evidence, exclusions) or at-most-one joins (`torrents`, `content`,
-  `metadata_sources`) automatically execute a two-stage `REPEATABLE READ`
-  candidate prefix: Step 1 pulls a bounded top-K `(id, pdb.score(id))` slice
-  directly from single-table `torrent_contents` using `TopKScanExecState`, and
-  Step 2 joins those IDs into the full policy-guarded query without repeating
-  `pdb.score()`. Boundary ties and short pages expand cleanly before falling
-  back to the full scan.
+  exclusions), non-BM25 predicates (`octet_length(info_hash) = 20`, codec/HDR
+  filters), or at-most-one joins (`torrents`, `content`, `metadata_sources`)
+  automatically execute a two-stage `REPEATABLE READ` candidate prefix: Step 1
+  pulls a bounded top-K `(id, pdb.score(id))` slice directly from single-table
+  `torrent_contents` using only BM25-indexed predicates so ParadeDB runs pure
+  `TopKScanExecState` with zero heap filters, and Step 2 joins those IDs into
+  the full policy-guarded query without repeating `pdb.score()`. If a selective
+  filter exhausts the `8,192`-row prefix or exceeds its `3s` prefix budget,
+  execution falls back to `tsquery` rather than ParadeDB's full-corpus scan.
+- **Payload-evidence gated catalogues**: When
+  `SERVING_REQUIRED_PAYLOAD_VERIFIER_ARTIFACT_DIGEST` is configured, only a
+  small verified subset of the catalogue is servable. Consumer text searches
+  automatically route through `tsquery` without the newest-1,000 `tc_cap` so
+  PostgreSQL drives directly from `processor_payload_reviews` (~200 ms warm,
+  100% recall across all approved releases) instead of scanning un-gated rows,
+  while internal/un-gated search and `dh-waypoint search bm25 verify` continue
+  using ParadeDB BM25 natively.
 - **Episode token pushdown**: Specific episode filters (`TorrentContentEpisodesCriteria`
   with explicit episode numbers) push `ep_text ||| 's<S>all s<S>e<E>'` (or the
   multi-episode conjunction) straight into the Tantivy boolean query while
@@ -135,16 +182,47 @@ rehearsals this shrank file storage by 86% and total database size by 40–47%,
 cutting dump size and restore time nearly in half with zero publication
 revision drift.
 
+### What the migration process looks like
+
+1. **Compact multi-file storage online (zero downtime, recommended before cutover):**
+   Run `dh-waypoint storage compact-files --prune-legacy` while DH-Waypoint is
+   still live on PG 16. On large catalogues this shrinks legacy `torrent_files`
+   by ~85% (for example `49 GiB → 7.0 GiB`), cutting dump and restore time
+   dramatically with zero publication-revision bumps.
+2. **Pre-flight verify:** Start the ParadeDB PG 18 container on a **fresh**
+   volume mounted at `/var/lib/postgresql` (never reuse your PG 16 volume) and
+   run `scripts/migrate-to-paradedb.sh --dry-run` to validate connectivity,
+   `pg_search` preloading, target emptiness, and whether extra cluster roles
+   exist.
+3. **Stop writers & run the logical dump/restore + parity check:** Pause
+   DH-Waypoint (and any external importers) briefly so source counts freeze,
+   then run `scripts/migrate-to-paradedb.sh`. For catalogues over ~1M torrents,
+   pass `--format directory --jobs 8` for multi-worker parallel `pg_dump` and
+   `pg_restore`. The helper runs `ANALYZE` and checks exact row counts across
+   all 13 core tables plus publication-revision and payload-approval invariants.
+   If external services connect with extra read-only or mirror PostgreSQL roles,
+   export and replay them with `pg_dumpall --roles-only` plus schema `GRANT`
+   statements (the script warns automatically when extra roles are present).
+4. **Enable & verify BM25:** Run `dh-waypoint search bm25 enable` (single-pass
+   `ALTER TABLE` for `search_text` + `ep_text` followed by `CREATE INDEX
+   CONCURRENTLY`) and `dh-waypoint search bm25 verify --verbose` (4/4
+   `TopKScanExecState`). You can pass `--skip-bm25` to reopen DH-Waypoint
+   immediately after data cutover and run `bm25 enable` separately.
+5. **Switch Compose to the ParadeDB overlay:** Start DH-Waypoint with
+   `-f examples/docker-compose.paradedb.yml`. Your original PG 16 volume stays
+   100% untouched on disk until soak verification completes, giving you an
+   instant cold rollback.
+
 ### Automated helper (`scripts/migrate-to-paradedb.sh`)
 
-`scripts/migrate-to-paradedb.sh` automates pre-flight checks, custom-format
-`pg_dump` (`-Fc -Z 1`), parallel `pg_restore`, `ANALYZE`, exact row-count plus
-publication-revision / payload-approval parity verification across all core
-tables, optional `dh-waypoint search bm25 enable` + `verify --verbose`, and an
-optional machine-readable JSON timing report:
+`scripts/migrate-to-paradedb.sh` automates pre-flight checks, logical `pg_dump`
+(`--format custom` single-file or `--format directory` parallel), parallel
+`pg_restore`, `ANALYZE`, exact 13-table row-count plus publication-revision /
+payload-approval parity verification, optional `dh-waypoint search bm25 enable`
++ `verify --verbose`, and an optional machine-readable JSON timing report:
 
 ```bash
-# 1. Pre-flight check only (verifies versions, pg_search preload, target emptiness).
+# 1. Pre-flight check only (verifies versions, pg_search preload, target emptiness, extra roles).
 scripts/migrate-to-paradedb.sh \
   --source-dsn "postgres://bitmagnet:<pass>@127.0.0.1:5432/bitmagnet?sslmode=disable" \
   --target-dsn "postgres://bitmagnet:<pass>@127.0.0.1:5433/bitmagnet?sslmode=disable" \
@@ -152,12 +230,14 @@ scripts/migrate-to-paradedb.sh \
   --dry-run
 
 # 2. Execute cutover (run after stopping writers to the source PG16 database).
+#    Use --format directory --jobs 8 for multi-million-row catalogues.
 scripts/migrate-to-paradedb.sh \
   --source-dsn "postgres://bitmagnet:<pass>@pg16-host:5432/bitmagnet?sslmode=disable" \
   --target-dsn "postgres://bitmagnet:<pass>@127.0.0.1:5432/bitmagnet?sslmode=disable" \
   --bm25-dsn "postgres://bitmagnet:<pass>@127.0.0.1:5433/bitmagnet?sslmode=disable" \
   --pg-container dh-waypoint-paradedb \
-  --jobs 4 \
+  --format directory \
+  --jobs 8 \
   --compress 1 \
   --dh-waypoint-bin /usr/local/bin/dh-waypoint \
   --report-json /tmp/paradedb-migration-report.json
@@ -197,11 +277,10 @@ For SQL-format dumps, restore with `psql` instead of `pg_restore`. The stock
 `dh-waypoint-postgres` volume is never touched by the overlay, so it remains
 your fallback copy.
 
-### Measured upgrade rehearsals (PG 16.15 Alpine -> ParadeDB 0.26.6 / PG 18.6)
+### How long it takes (measured PG 16 Alpine → ParadeDB 0.26.6 / PG 18.6)
 
-Rehearsed end-to-end with `scripts/migrate-to-paradedb.sh --jobs 4 --compress 1`
-on NVMe storage (`shared_buffers=2GB`, `maintenance_work_mem=1GB`) at two
-compacted schema-81 catalog sizes:
+Real end-to-end measurements on NVMe storage across small, medium, and full
+multi-million-row production schema-81 compacted catalogues:
 
 - **129,019 torrents / 115,989 `torrent_contents` / 1,566,191 legacy files (81,812 compacted bundles):**
   - Pre-cutover compaction + `VACUUM FULL torrent_files`: 11s, file storage `528 MB -> 73 MB` (-86.2%), total DB `1,134 MB -> 681 MB` (-39.9%), 0 publication-revision bumps.
@@ -213,6 +292,12 @@ compacted schema-81 catalog sizes:
   - Logical dump: `7.37s` (`336.8 MiB`); parallel restore (`-j 4`): `11.30s`; `ANALYZE`: `2.59s`; 12-table + revision/approval parity (`sum(revision)` and 406 approved reviews): `3.54s` (100% match).
   - `bm25 enable`: `20.70s` (`119.1 MiB` BM25 index, ~14,900 docs/sec, 0 invalid indexes); `bm25 verify --verbose`: `0.07s` (4/4 `TopKScanExecState`).
   - Final PG 18 DB with BM25: `1,538 MiB` (40.4% smaller than uncompacted PG 16); total data cutover window without BM25 build: `24.8s` (`45.6s` including BM25 build).
+- **15,824,988 torrents / 14,243,153 `torrent_contents` / 7,416,863 compacted bundles (`146M+` legacy files previously compacted online, 12-core NVMe, `--format directory --jobs 8 --compress 1`):**
+  - Compacted PG 16 source size: `100.00 GiB` (after online compaction shrank `torrent_files` from `49 GiB` to `7.04 GiB` in `torrent_file_bundles` with zero downtime).
+  - Parallel logical dump (`-Fd -j 8 -Z 1`): **`10.9 min`** (`656.3s`, `13.64 GiB` compressed); parallel restore (`-j 8`): **`32.3 min`** (`1,939.3s`); `ANALYZE`: **`0.8 min`** (`50.5s`); 13-table + 5-invariant exact parity: **`2.0 min`** (`119.2s`, 100% match).
+  - Offline data cutover window (without BM25 build): **`46.1 min`**. PG 18 size before BM25: **`58.90 GiB`** (`-41.1 GiB` smaller than compacted PG 16).
+  - Single-pass `ALTER TABLE` (`search_text` + `ep_text`): **`25.8 min`** (`1,547.8s`); concurrent BM25 index build (`CREATE INDEX CONCURRENTLY`): **`11.5 min`** (`689.5s`, `~20,657 docs/sec`, `3.93 GiB` index, 0 invalid indexes); `bm25 verify --verbose`: **`0.76s`** (4/4 `TopKScanExecState`).
+  - Final PG 18 DB **with BM25**: **`66.73 GiB`** (`-33.3 GiB` / **`33.3%` smaller** than compacted PG 16 without BM25); total end-to-end time including BM25 build: **`83.9 min`**.
 
 ## Costs and rollback
 

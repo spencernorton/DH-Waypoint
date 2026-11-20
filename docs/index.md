@@ -13,6 +13,7 @@ The public distribution is MIT-licensed and runs independently of a browser site
 - [Private torrents and tracker](private-tracker.md): create, upload, personalised downloads, built-in tracker
 - [Configuration](configuration.md): environment settings and safe opt-in
 - [Operations](OPERATIONS.md): health, capacity, backups and upgrades
+- [ParadeDB BM25 search & optional PG 16 → PG 18 migration](paradedb-bm25.md): opt-in BM25 Top-K ranking, why to migrate, process, rollback and measured timings
 - [Migrating to 4.0](migration-v4.md): separate backend and site releases
 
 ## Processing and integrations

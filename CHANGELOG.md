@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Fixed
+
+- **Prevent `serving.Policy` scopes and non-BM25 predicates from leaking into ParadeDB BM25 Step 1 candidate scans.** Replaces chained `.Session(&gorm.Session{NewDB: true}).WithContext(...)` with `freshDB` (`Session{NewDB: true, Initialized: true, Context: ctx}`) in `bm25_prefix.go` and `grouped_prefix.go` so deferred `serving.Policy` scopes never leak into Step 1 candidate queries, filters Step 1 predicates to BM25-indexed columns only (keeping `octet_length(info_hash) = 20` and non-indexed filters in Step 2 to avoid ParadeDB `heap_filter` degradation), bounds speculative prefix work (`3s`) with clean `tsquery` fallback on exhaustion, and unwraps caller context cancellation instead of masking it behind `sql.ErrTxDone`.
+- **Keep payload-evidence gated catalogues fast and exact under ParadeDB.** When `SERVING_REQUIRED_PAYLOAD_VERIFIER_ARTIFACT_DIGEST` is configured (`Policy.RequiresPayloadEvidence()`), consumer text and episode queries route through stock `tsquery` without the newest-1,000 `tc_cap` so PostgreSQL drives directly from `processor_payload_reviews` with 100% recall instead of scanning un-gated rows or truncating older approved releases.
+- **Avoid premature 10-second cancellation of `GET` requests under `QueryBudget(30s)`.** Aligns `ResponseController.SetReadDeadline` in `internal/httpserver/query_budget.go` with the request's `QueryBudget` deadline so `net/http`'s background disconnect probe does not cancel bodyless `GET` requests (`/api/v1/search`, `/api/v2/search`) 20 seconds early.
+- **Fix PostgreSQL 18 volume mount path and combine `bm25 enable` table rewrite.** Mounts `dh-waypoint-paradedb` at `/var/lib/postgresql` (instead of `/var/lib/postgresql/data`) and sets `paradedb.planner_warnings=Off` in `examples/docker-compose.paradedb.yml`, and combines the `search_text` and `ep_text` `ALTER TABLE` additions in `EnableParadeDBBM25` into a single table rewrite.
+
+### Changed
+
+- **Parallel directory-format dumps, extra-role warnings, and opt-in migration documentation.** Adds `--format custom|directory` parallel `pg_dump`, `processor_publication_reviews` parity checking, and extra non-default cluster role warnings to `scripts/migrate-to-paradedb.sh`, and clearly documents across `README.md`, `docs/index.md`, `docs/OPERATIONS.md`, and `docs/paradedb-bm25.md` that PG 16 → ParadeDB PG 18 migration is 100% opt-in, why operators migrate, the step-by-step cutover/rollback workflow, and measured runtimes up to 15.8M torrents.
+
 ## 5.13.0 — 2026-11-19
 
 ### Added

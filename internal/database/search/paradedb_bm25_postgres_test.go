@@ -564,6 +564,118 @@ FROM torrents t WHERE t.info_hash = $1`, quarantinedHash.Bytes())
 		}
 	})
 
+	t.Run("policy_with_legacy_identity_criterion_uses_clean_bm25_prefix", func(t *testing.T) {
+		before := countPrefix()
+		t.Setenv("SEARCH_BM25_MODE", "on")
+		res, qErr := freshSearch.TorrentContent(ctx,
+			query.Where(LegacyTorrentIdentityCriteria(model.TableNameTorrentContent)),
+			query.SearchString("synthetic obsidian 1080p"),
+			query.OrderByQueryStringRank(),
+			query.Limit(10),
+			query.WithHasNextPage(true),
+			query.WithTotalCount(true),
+			query.WithAggregationBudget(0),
+		)
+		require.NoError(t, qErr)
+		require.Greater(t, countPrefix(), before, "legacy identity criterion must stay on clean BM25 Top-K prefix path")
+		require.Len(t, res.Items, 10)
+		require.True(t, res.HasNextPage)
+		require.EqualValues(t, 50, res.TotalCount)
+		require.NotContains(t, bm25ResultHashes(res.Items), adultHash)
+		require.NotContains(t, bm25ResultHashes(res.Items), heldHash)
+		require.NotContains(t, bm25ResultHashes(res.Items), quarantinedHash)
+	})
+
+	t.Run("policy_payload_evidence_uses_exact_tsquery_without_cap", func(t *testing.T) {
+		_, ddlErr := f.pool.Exec(ctx, `
+CREATE TABLE IF NOT EXISTS processor_registry (
+  id text PRIMARY KEY, mode text NOT NULL, state text NOT NULL,
+  execution_generation integer NOT NULL, manifest jsonb NOT NULL
+);
+CREATE TABLE IF NOT EXISTS processor_publication_sources (
+  info_hash bytea PRIMARY KEY, revision bigint NOT NULL
+);
+CREATE TABLE IF NOT EXISTS processor_publication_reviews (
+  info_hash bytea NOT NULL, processor_id text NOT NULL, source_revision bigint NOT NULL,
+  execution_generation integer NOT NULL, processor_identity jsonb NOT NULL,
+  approved boolean NOT NULL, policy_contract text NOT NULL,
+  PRIMARY KEY (info_hash, processor_id)
+);
+CREATE TABLE IF NOT EXISTS processor_payload_reviews (
+  info_hash bytea NOT NULL, source_revision bigint NOT NULL, verifier_artifact text NOT NULL,
+  policy text NOT NULL, approved boolean NOT NULL, expires_at timestamptz NOT NULL
+);
+CREATE TABLE IF NOT EXISTS processor_exclusions (
+  info_hash bytea PRIMARY KEY
+);`)
+		require.NoError(t, ddlErr)
+		const procDigest = "1111111111111111111111111111111111111111111111111111111111111111"
+		const payloadDigest = "2222222222222222222222222222222222222222222222222222222222222222"
+		_, ddlErr = f.pool.Exec(ctx, `INSERT INTO processor_registry (id, mode, state, execution_generation, manifest)
+VALUES ('synthetic-proc', 'apply', 'active', 1, $1::jsonb)
+ON CONFLICT (id) DO NOTHING`, `{"processor":{"artifact_digest":"`+procDigest+`"},"capabilities":["policy"]}`)
+		require.NoError(t, ddlErr)
+
+		// Insert 1 approved older row followed by 1,050 newer unapproved rows so
+		// the newest-1000 tc_cap would silently omit the approved match.
+		approvedHash := mkHash(9001)
+		_, ddlErr = f.pool.Exec(ctx, `INSERT INTO torrents (info_hash, name, size, private, files_status, extension) VALUES ($1, $2, 4096, false, 'single', 'mkv')`,
+			approvedHash.Bytes(), "Synthetic PayloadGate 1080p Approved")
+		require.NoError(t, ddlErr)
+		approvedTSV := fts.Tsvector{}
+		approvedTSV.AddText("Synthetic PayloadGate 1080p Approved", fts.TsvectorWeightA)
+		_, ddlErr = f.pool.Exec(ctx, `INSERT INTO torrent_contents (id, info_hash, content_type, tsv, seeders, published_at)
+VALUES ('bm25-payload-approved', $1, 'movie', $2::tsvector, 25, $3)`,
+			approvedHash.Bytes(), approvedTSV.String(), now.Add(-48*time.Hour))
+		require.NoError(t, ddlErr)
+		_, ddlErr = f.pool.Exec(ctx, `INSERT INTO processor_publication_sources (info_hash, revision) VALUES ($1, 1)`, approvedHash.Bytes())
+		require.NoError(t, ddlErr)
+		_, ddlErr = f.pool.Exec(ctx, `INSERT INTO processor_publication_reviews (info_hash, processor_id, source_revision, execution_generation, processor_identity, approved, policy_contract)
+VALUES ($1, 'synthetic-proc', 1, 1, $2::jsonb, true, $3)`, approvedHash.Bytes(), `{"artifact_digest":"`+procDigest+`"}`, serving.PublicationReviewPolicy)
+		require.NoError(t, ddlErr)
+		_, ddlErr = f.pool.Exec(ctx, `INSERT INTO processor_payload_reviews (info_hash, source_revision, verifier_artifact, policy, approved, expires_at)
+VALUES ($1, 1, $2, $3, true, $4)`, approvedHash.Bytes(), payloadDigest, serving.PayloadEvidenceContractV2, now.Add(24*time.Hour))
+		require.NoError(t, ddlErr)
+
+		_, ddlErr = f.pool.Exec(ctx, `
+INSERT INTO torrents (info_hash, name, size, private, files_status, extension)
+SELECT decode(lpad(to_hex(20000 + g), 40, '0'), 'hex'), 'Synthetic PayloadGate 1080p Noise ' || g, 4096, false, 'single', 'mkv'
+FROM generate_series(1, 1050) g`)
+		require.NoError(t, ddlErr)
+		_, ddlErr = f.pool.Exec(ctx, `
+INSERT INTO torrent_contents (id, info_hash, content_type, tsv, seeders, published_at)
+SELECT 'bm25-payload-noise-' || g, decode(lpad(to_hex(20000 + g), 40, '0'), 'hex'), 'movie',
+       to_tsvector('simple', 'synthetic payloadgate 1080p noise ' || g), 10, $1::timestamptz + (g * interval '1 second')
+FROM generate_series(1, 1050) g`, now)
+		require.NoError(t, ddlErr)
+
+		gatedPolicy, pErr := serving.NewPolicy(serving.Config{
+			ExcludeAdult:                          true,
+			RequiredProcessor:                     "synthetic-proc",
+			RequiredProcessorArtifactDigest:       procDigest,
+			RequiredPayloadVerifierArtifactDigest: payloadDigest,
+		}, []string{"siterip"}, []string{"mkv", "jpg"})
+		require.NoError(t, pErr)
+		require.True(t, gatedPolicy.RequiresPayloadEvidence())
+
+		gatedSearch := f.fresh(t)
+		gatedSearch.adultPolicy = gatedPolicy
+		before := countPrefix()
+		t.Setenv("SEARCH_BM25_MODE", "auto")
+		res, qErr := gatedSearch.TorrentContent(ctx,
+			query.Where(LegacyTorrentIdentityCriteria(model.TableNameTorrentContent)),
+			query.SearchString("synthetic payloadgate 1080p"),
+			query.OrderByQueryStringRank(),
+			query.Limit(10),
+			query.WithTotalCount(true),
+			query.WithAggregationBudget(0),
+		)
+		require.NoError(t, qErr)
+		require.Equal(t, before, countPrefix(), "payload-evidence policy must bypass un-gated BM25 prefix")
+		require.EqualValues(t, 1, res.TotalCount)
+		require.Equal(t, []protocol.InfoHash{approvedHash}, bm25ResultHashes(res.Items))
+	})
+
 	for _, tc := range []struct {
 		name        string
 		opts        []query.Option

@@ -218,8 +218,8 @@ func (gq *genericQuery[T]) groupedPrefixItems() ([]T, bool, error) {
 		winnerSQL = "WITH fast AS MATERIALIZED (" + strings.Join(fastBranches, " UNION ALL ") +
 			") SELECT * FROM fast UNION ALL " + winnerSQL
 	}
-	fresh := func() *gorm.DB {
-		return gq.factory(gq.ctx, gq.daoQ).UnderlyingDB().Session(&gorm.Session{NewDB: true})
+	fresh := func(ctx context.Context) *gorm.DB {
+		return freshDB(gq.factory(ctx, gq.daoQ).UnderlyingDB(), ctx)
 	}
 	if candidateSQL != "" && b.tsquery != "" {
 		// For a selective text query, letting ORDER/LIMIT pull through this
@@ -228,12 +228,13 @@ func (gq *genericQuery[T]) groupedPrefixItems() ([]T, bool, error) {
 		// from common terms, which should retain their ordered-index strategy.
 		// This is a cost hint only: no result/exhaustion decision uses the count.
 		var matches int64
-		executionDB := fresh()
+		probeCtx, cancelProbe := context.WithTimeout(gq.ctx, 150*time.Millisecond)
+		executionDB := fresh(probeCtx)
 		if _, inTransaction := executionDB.Statement.ConnPool.(gorm.TxCommitter); inTransaction {
+			cancelProbe()
 			return nil, false, nil
 		}
-		probeCtx, cancelProbe := context.WithTimeout(gq.ctx, 150*time.Millisecond)
-		probeErr := executionDB.WithContext(probeCtx).Transaction(func(tx *gorm.DB) error {
+		probeErr := executionDB.Transaction(func(tx *gorm.DB) error {
 			if settingErr := tx.Exec("SET LOCAL jit = off").Error; settingErr != nil {
 				return settingErr
 			}
@@ -267,7 +268,7 @@ func (gq *genericQuery[T]) groupedPrefixItems() ([]T, bool, error) {
 				"), winner_source AS NOT MATERIALIZED (SELECT * FROM candidate_source)"
 		}
 	}
-	outer := fresh().Table("selected")
+	outer := fresh(gq.ctx).Table("selected")
 	if err = b.applyPost(outer); err != nil {
 		return nil, false, err
 	}
@@ -302,7 +303,7 @@ func (gq *genericQuery[T]) groupedPrefixItems() ([]T, bool, error) {
 		candidateBuilder.limit = model.NewNullUint(uint(prefix))
 		candidateBuilder.nextPage = false
 		candidateBuilder.preloads = nil
-		candidates := fresh().Table(candidateTable)
+		candidates := fresh(gq.ctx).Table(candidateTable)
 		if err = candidateBuilder.applyPost(candidates); err != nil {
 			return nil, false, err
 		}
@@ -338,7 +339,7 @@ func (gq *genericQuery[T]) groupedPrefixItems() ([]T, bool, error) {
 		}
 		var items []T
 		var candidateCount int64
-		executionDB := fresh()
+		executionDB := fresh(gq.ctx)
 		if _, inTransaction := executionDB.Statement.ConnPool.(gorm.TxCommitter); inTransaction {
 			return nil, false, nil
 		}

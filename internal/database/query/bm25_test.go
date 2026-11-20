@@ -190,3 +190,116 @@ func TestBM25ValuesJoinAndExtractResultID(t *testing.T) {
 		t.Fatalf("extractResultID(*wrapped) = (%q, %v), want (tc-99, true)", id, ok)
 	}
 }
+
+func TestFreshDBStripsDeferredScopes(t *testing.T) {
+	t.Parallel()
+
+	gdb := newDryRunDB(t)
+	scoped := gdb.Scopes(func(tx *gorm.DB) *gorm.DB {
+		return tx.Where("torrent_contents.info_hash IN (SELECT info_hash FROM processor_publication_reviews)")
+	})
+	clean := freshDB(scoped, context.Background())
+	sql := clean.ToSQL(func(tx *gorm.DB) *gorm.DB {
+		return dao.Use(tx).TorrentContent.WithContext(context.Background()).ReadDB().UnderlyingDB().
+			Where("torrent_contents.search_text &&& ?", "synthetic 1080p").
+			Select("torrent_contents.id AS id, pdb.score(torrent_contents.id) AS score").
+			Order("score DESC").
+			Limit(128).
+			Scan(&[]bm25Candidate{})
+	})
+	if strings.Contains(sql, "processor_publication_reviews") {
+		t.Fatalf("freshDB leaked deferred scope into clean query:\n%s", sql)
+	}
+	if !strings.Contains(sql, "search_text &&&") {
+		t.Fatalf("expected search_text predicate in:\n%s", sql)
+	}
+}
+
+func TestIsBM25IndexedWhereSQL(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		sql  string
+		want bool
+	}{
+		{"no where clause", `SELECT * FROM "torrent_contents"`, true},
+		{"content_type IN", `SELECT * FROM "torrent_contents" WHERE "torrent_contents"."content_type" IN ('movie')`, true},
+		{"video_resolution eq", `SELECT * FROM "torrent_contents" WHERE torrent_contents.video_resolution = 'V1080p'`, true},
+		{"ep_text single", `SELECT * FROM "torrent_contents" WHERE torrent_contents.ep_text ||| 's2all s2e5'`, true},
+		{"ep_text multi", `SELECT * FROM "torrent_contents" WHERE (torrent_contents.ep_text &&& 's2all' OR torrent_contents.ep_text &&& 's2e5 s2e6')`, true},
+		{"seeders and published_at", `SELECT * FROM "torrent_contents" WHERE torrent_contents.seeders >= 10 AND torrent_contents.published_at > '2026-01-01'::timestamptz`, true},
+		{"quoted keyword inside literal allowed", `SELECT * FROM "torrent_contents" WHERE torrent_contents.search_text &&& 'select exists octet_length'`, true},
+		{"legacy octet_length rejected", `SELECT * FROM "torrent_contents" WHERE octet_length(torrent_contents.info_hash)=20`, false},
+		{"non-indexed video_codec rejected", `SELECT * FROM "torrent_contents" WHERE torrent_contents.video_codec = 'H264'`, false},
+		{"jsonb_exists episodes rejected", `SELECT * FROM "torrent_contents" WHERE jsonb_exists(torrent_contents.episodes, '2')`, false},
+		{"release_attributes jsonb rejected", `SELECT * FROM "torrent_contents" WHERE torrent_contents.release_attributes @> '{"hdr":"HDR10"}'`, false},
+		{"subquery IN SELECT rejected", `SELECT * FROM "torrent_contents" WHERE torrent_contents.info_hash IN (SELECT info_hash FROM processor_payload_reviews)`, false},
+		{"EXISTS subquery rejected", `SELECT * FROM "torrent_contents" WHERE EXISTS (SELECT 1 FROM torrents t WHERE t.info_hash = torrent_contents.info_hash)`, false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := isBM25IndexedWhereSQL(tc.sql); got != tc.want {
+				t.Errorf("isBM25IndexedWhereSQL(%q) = %v, want %v", tc.sql, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestWithoutRelevanceCapSkipsTcCap(t *testing.T) {
+	t.Parallel()
+
+	gdb := newDryRunDB(t)
+	b := bm25Builder(t, gdb, "synthetic 1080p", false, false)
+	next, err := WithoutRelevanceCap()(b)
+	if err != nil {
+		t.Fatalf("WithoutRelevanceCap: %v", err)
+	}
+	sql := bm25QuerySQL(t, gdb, next.(optionBuilder))
+	for _, want := range []string{"tsv @@", "ts_rank_cd("} {
+		if !strings.Contains(sql, want) {
+			t.Errorf("uncapped tsquery SQL missing %q in:\n%s", want, sql)
+		}
+	}
+	if strings.Contains(sql, "tc_cap") {
+		t.Errorf("WithoutRelevanceCap must omit tc_cap subquery in:\n%s", sql)
+	}
+}
+
+func TestFilterBM25Step1Scopes(t *testing.T) {
+	t.Parallel()
+
+	gdb := newDryRunDB(t)
+	scopes := []Scope{
+		func(db *gorm.DB) error { db.Where("octet_length(torrent_contents.info_hash)=20"); return nil },
+		func(db *gorm.DB) error { db.Where("torrent_contents.ep_text ||| ?", "s2all s2e5"); return nil },
+		func(db *gorm.DB) error { db.Where("torrents.extension = ?", "mkv"); return nil },
+		func(db *gorm.DB) error { db.Where("torrent_contents.content_type = ?", "movie"); return nil },
+	}
+	kept, err := filterBM25Step1Scopes(gdb, context.Background(), "torrent_contents", scopes)
+	if err != nil {
+		t.Fatalf("filterBM25Step1Scopes: %v", err)
+	}
+	if len(kept) != 2 {
+		t.Fatalf("len(kept) = %d, want 2 (only ep_text and content_type)", len(kept))
+	}
+	sql := freshDB(gdb, context.Background()).Table("torrent_contents").ToSQL(func(tx *gorm.DB) *gorm.DB {
+		initTx := tx.Session(&gorm.Session{Initialized: true})
+		for _, sc := range kept {
+			_ = sc(initTx)
+		}
+		return initTx.Find(&[]interface{}{})
+	})
+	for _, want := range []string{"ep_text |||", "content_type ="} {
+		if !strings.Contains(sql, want) {
+			t.Errorf("kept scopes SQL missing %q in:\n%s", want, sql)
+		}
+	}
+	for _, unwanted := range []string{"octet_length", "torrents.extension"} {
+		if strings.Contains(sql, unwanted) {
+			t.Errorf("kept scopes SQL must not include %q in:\n%s", unwanted, sql)
+		}
+	}
+}

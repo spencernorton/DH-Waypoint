@@ -132,5 +132,25 @@ A migration can make a binary-only downgrade unsafe; retain the matching
 backup and previous artifact. For 3.x combined images, follow
 [the 4.0 migration](migration-v4.md).
 
+### Optional database migration to ParadeDB (PostgreSQL 18 + BM25)
+
+Upgrading DH-Waypoint on an existing `postgres:16-alpine` or stock `postgres:18` database requires **no database migration**: Goose migrations run in place on connect and search remains on stock `tsquery`.
+
+Switching PostgreSQL to `paradedb/paradedb:0.26.6-pg18` is **100% opt-in**:
+
+- **Why migrate:** unlocks native ParadeDB BM25 Top-K ranking (`TopKScanExecState`), TV episode token pushdown (`ep_text`), and full table/index bloat reclamation after online `torrent_file_bundles` compaction (shrinking a compacted 15.8M-torrent catalogue from `100.0 GiB` on PG 16 to `66.7 GiB` on PG 18 *including* the `3.93 GiB` BM25 index). Because PostgreSQL 16 Alpine (`musl`) and PostgreSQL 18 Debian (`glibc`) differ in both major on-disk format and libc collations — and PG 18 mounts its data volume at `/var/lib/postgresql` rather than `/var/lib/postgresql/data` — migrating requires a logical dump and parallel restore into a fresh volume.
+- **What the process looks like:**
+  1. While live (zero downtime), run `dh-waypoint storage compact-files --prune-legacy` to compact multi-file `torrent_files` rows into `torrent_file_bundles`.
+  2. Stop writers briefly during the maintenance window.
+  3. Run `scripts/migrate-to-paradedb.sh` (pass `--format directory --jobs 8` for multi-million-row databases) into a fresh PG 18 `/var/lib/postgresql` volume; the script checks 13-table exact row counts and publication/approval invariants before activation and warns if extra cluster roles need `pg_dumpall --roles-only` + ACL replay.
+  4. Run `dh-waypoint search bm25 enable` and `dh-waypoint search bm25 verify --verbose`, then start DH-Waypoint with the `examples/docker-compose.paradedb.yml` overlay.
+  5. Keep the original PG 16 volume untouched until soak verification completes so rollback is an immediate Compose switch.
+- **How long it takes (measured on NVMe):**
+  - ~129K torrents: **~24 seconds** total (dump, restore, parity, and BM25 build).
+  - ~344K torrents: **~46 seconds** total (~25s data cutover + ~21s BM25 build).
+  - ~15.8M torrents / 14.2M `torrent_contents` (12-core NVMe, `--format directory --jobs 8`): **~46 minutes** offline data cutover (`10.9 min` dump, `32.3 min` parallel restore, `0.8 min` `ANALYZE`, `2.0 min` exact parity) plus **~37 minutes** for `bm25 enable` (`25.8 min` single-pass `ALTER TABLE`, `11.5 min` concurrent BM25 index build) = **~84 minutes** end-to-end.
+
+See [ParadeDB BM25 Search & Migration](paradedb-bm25.md) for complete commands, verification checks, and rollback steps.
+
 See [security](operations/security.md), [monitoring](operations/monitoring.md)
 and [troubleshooting](troubleshooting.md) for further operational guidance.

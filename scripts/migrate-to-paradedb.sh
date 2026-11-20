@@ -15,6 +15,7 @@ WORK_DIR=""
 KEEP_DUMP=0
 JOBS=4
 COMPRESS=1
+FORMAT="custom"
 PG_BIN=""
 PG_CONTAINER=""
 CONTAINER_DUMP_PATH="/tmp/dhw-paradedb-migrate.dump"
@@ -33,8 +34,9 @@ Options:
   --target-dsn <dsn>         Target ParadeDB PG 18+ DSN (or env TARGET_DSN)
   --work-dir <dir>           Directory for temporary custom dump (default: mktemp -d)
   --keep-dump                Keep custom dump artifact after completion
-  --jobs <N>                 Parallel pg_restore worker count (default: 4)
-  --compress <0-9>           pg_dump custom-format compression level (default: 1)
+  --jobs <N>                 Parallel worker count for pg_restore (and pg_dump when --format directory; default: 4)
+  --format <custom|directory> pg_dump format: custom (single file, default) or directory (parallel dump for multi-million-row DBs)
+  --compress <0-9>           pg_dump compression level (default: 1)
   --pg-bin <dir>             Directory holding PG 18+ pg_dump/pg_restore/psql
   --pg-container <name>      Run pg_dump/pg_restore/psql inside this PG 18+ container
   --container-dump-path <p>  Dump path inside --pg-container (default: /tmp/dhw-paradedb-migrate.dump)
@@ -64,6 +66,7 @@ while [[ $# -gt 0 ]]; do
     --work-dir) WORK_DIR="$2"; shift 2 ;;
     --keep-dump) KEEP_DUMP=1; shift ;;
     --jobs|-j) JOBS="$2"; shift 2 ;;
+    --format|-F) FORMAT="$2"; shift 2 ;;
     --compress|-Z) COMPRESS="$2"; shift 2 ;;
     --pg-bin) PG_BIN="$2"; shift 2 ;;
     --pg-container) PG_CONTAINER="$2"; shift 2 ;;
@@ -82,6 +85,7 @@ done
 [[ -n "$SOURCE_DSN" ]] || die "--source-dsn (or SOURCE_DSN) is required"
 [[ -n "$TARGET_DSN" ]] || die "--target-dsn (or TARGET_DSN) is required"
 [[ "$JOBS" =~ ^[1-9][0-9]*$ ]] || die "--jobs must be a positive integer"
+[[ "$FORMAT" == "custom" || "$FORMAT" == "directory" ]] || die "--format must be custom or directory"
 [[ "$COMPRESS" =~ ^[0-9]$ ]] || die "--compress must be 0..9"
 
 CREATED_WORK_DIR=0
@@ -89,9 +93,9 @@ DUMP_FILE=""
 cleanup() {
   if [[ "$KEEP_DUMP" -eq 0 ]]; then
     if [[ -n "$PG_CONTAINER" ]]; then
-      docker exec "$PG_CONTAINER" rm -f "$CONTAINER_DUMP_PATH" >/dev/null 2>&1 || true
-    elif [[ -n "$DUMP_FILE" && -f "$DUMP_FILE" ]]; then
-      rm -f "$DUMP_FILE" >/dev/null 2>&1 || true
+      docker exec "$PG_CONTAINER" rm -rf "$CONTAINER_DUMP_PATH" >/dev/null 2>&1 || true
+    elif [[ -n "$DUMP_FILE" && -e "$DUMP_FILE" ]]; then
+      rm -rf "$DUMP_FILE" >/dev/null 2>&1 || true
     fi
     if [[ "$CREATED_WORK_DIR" -eq 1 && -n "$WORK_DIR" && -d "$WORK_DIR" ]]; then
       rmdir "$WORK_DIR" >/dev/null 2>&1 || true
@@ -161,6 +165,11 @@ if [[ "$SRC_SCHEMA" -lt 81 ]]; then
   log "WARNING: source schema is ${SRC_SCHEMA} (< 81); migrating to schema 81 and compacting torrent_file_bundles before cutover shrinks dump/restore time significantly."
 fi
 
+EXTRA_ROLES="$(psql_scalar "$SOURCE_DSN" "SELECT COALESCE(string_agg(rolname, ',' ORDER BY rolname), '') FROM pg_roles WHERE rolname !~ '^pg_' AND rolname NOT IN ('postgres', current_user);")"
+if [[ -n "$EXTRA_ROLES" ]]; then
+  log "WARNING: source cluster defines additional PostgreSQL role(s) (${EXTRA_ROLES}). Because pg_dump runs with --no-owner --no-privileges, transfer cluster roles with 'pg_dumpall --roles-only' and replay schema/object GRANT statements after restore if external services connect with those roles."
+fi
+
 if [[ "$DRY_RUN" -eq 1 ]]; then
   log "Dry-run pre-flight checks passed. No data written."
   exit 0
@@ -179,22 +188,48 @@ else
   DUMP_FILE="${WORK_DIR}/dhw-paradedb-migrate.dump"
 fi
 
-# Step 1: Logical custom-format dump
-log "Step 1/5: Dumping source database (custom format, compression=${COMPRESS})..."
-T_DUMP_START="$(now_ms)"
-run_pg pg_dump "$SOURCE_DSN" \
-  --format=custom \
-  --compress="$COMPRESS" \
-  --no-owner \
-  --no-privileges \
+# Step 1: Logical dump (custom single-file or parallel directory format)
+DUMP_ARGS=(
+  --format="$FORMAT"
+  --compress="$COMPRESS"
+  --no-owner
+  --no-privileges
   --file="$DUMP_FILE"
+)
+if [[ "$FORMAT" == "directory" ]]; then
+  DUMP_ARGS+=(--jobs="$JOBS")
+  if [[ -n "$PG_CONTAINER" ]]; then
+    docker exec "$PG_CONTAINER" rm -rf "$DUMP_FILE"
+  else
+    rm -rf "$DUMP_FILE"
+  fi
+fi
+log "Step 1/5: Dumping source database (format=${FORMAT}, jobs=${JOBS}, compression=${COMPRESS})..."
+T_DUMP_START="$(now_ms)"
+run_pg pg_dump "$SOURCE_DSN" "${DUMP_ARGS[@]}"
 T_DUMP_END="$(now_ms)"
 DUMP_SEC="$(elapsed_sec "$T_DUMP_START" "$T_DUMP_END")"
 
 if [[ -n "$PG_CONTAINER" ]]; then
-  DUMP_BYTES="$(docker exec "$PG_CONTAINER" stat -c '%s' "$DUMP_FILE")"
+  if [[ "$FORMAT" == "directory" ]]; then
+    DUMP_BYTES="$(docker exec "$PG_CONTAINER" du -sb "$DUMP_FILE" | awk '{print $1}')"
+  else
+    DUMP_BYTES="$(docker exec "$PG_CONTAINER" stat -c '%s' "$DUMP_FILE")"
+  fi
 else
-  DUMP_BYTES="$(python3 -c 'import os,sys; print(os.path.getsize(sys.argv[1]))' "$DUMP_FILE")"
+  DUMP_BYTES="$(python3 - "$DUMP_FILE" <<'PY'
+import os, sys
+p = sys.argv[1]
+if os.path.isdir(p):
+    total = 0
+    for r, _, files in os.walk(p):
+        for fn in files:
+            total += os.path.getsize(os.path.join(r, fn))
+    print(total)
+else:
+    print(os.path.getsize(p))
+PY
+)"
 fi
 log "Dump completed in ${DUMP_SEC}s (${DUMP_BYTES} bytes)."
 
@@ -238,6 +273,7 @@ CORE_TABLES=(
   content
   torrents_torrent_sources
   processor_publication_sources
+  processor_publication_reviews
   processor_payload_reviews
   processor_exclusions
   processor_publication_holds
