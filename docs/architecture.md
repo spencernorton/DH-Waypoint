@@ -1,6 +1,6 @@
 # DH-Waypoint Core Architecture Guide
 
-DH-Waypoint is a high-throughput, model-independent BitTorrent DHT crawler, metadata exchanger, enrichment engine, and Torznab/GraphQL indexer written in Go. It is designed to operate as a self-contained backend (`ghcr.io/spencernorton/dh-waypoint`) backed by PostgreSQL 16 (`pg_trgm` + full-text `tsvector`), while delegating optional neural or statistical classification and safety-gating passes to isolated processor services over the bounded [`dh-waypoint.processor.v1`](processor-contract.md) HTTP webhook contract.
+DH-Waypoint is a high-throughput, model-independent BitTorrent DHT crawler, metadata exchanger, enrichment engine, and Torznab/GraphQL indexer written in Go. It is designed to operate as a self-contained backend (`ghcr.io/spencernorton/dh-waypoint`) backed by PostgreSQL 16+ (`pg_trgm` + full-text `tsvector` + compact `torrent_file_bundles` sidecar storage, with opt-in ParadeDB PG 18 `pg_search` BM25), while delegating optional neural or statistical classification and safety-gating passes to isolated processor services over the bounded [`dh-waypoint.processor.v1`](processor-contract.md) HTTP webhook contract.
 
 ```mermaid
 flowchart TB

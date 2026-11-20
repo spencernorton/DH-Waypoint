@@ -3,6 +3,7 @@ package adapter
 import (
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/spencernorton/DH-Waypoint/internal/database/query"
@@ -105,6 +106,11 @@ func searchRequestToQueryOptionsWithIdentifiers(r torznab.SearchRequest, include
 		}
 	case torznab.FunctionMusic:
 		options = append(options, query.Where(search.TorrentContentTypeCriteria(model.ContentTypeMusic)))
+	case torznab.FunctionAudio:
+		options = append(options, query.Where(search.TorrentContentTypeCriteria(
+			model.ContentTypeMusic,
+			model.ContentTypeAudiobook,
+		)))
 	case torznab.FunctionBook:
 		options = append(options, query.Where(search.TorrentContentTypeCriteria(
 			model.ContentTypeEbook,
@@ -118,15 +124,23 @@ func searchRequestToQueryOptionsWithIdentifiers(r torznab.SearchRequest, include
 		}
 	}
 
-	if r.Query != "" {
+	searchQuery := effectiveSearchQuery(r)
+	if searchQuery != "" {
 		order := search.TorrentContentOrderByRelevance
 		if r.Profile.DisableOrderByRelevance {
 			order = search.TorrentContentOrderByPublishedAt
 		}
 
 		options = append(options,
-			query.SearchString(r.Query),
+			query.SearchString(searchQuery),
 			query.OrderBy(order.Clauses(search.OrderDirectionDescending)...))
+	}
+
+	if r.Year.Valid && r.Year.Int >= 1800 && r.Year.Int <= 2200 {
+		switch r.Type {
+		case torznab.FunctionMovie, torznab.FunctionTV, torznab.FunctionSearch:
+			options = append(options, query.Where(search.TorrentContentReleaseYearCriteria(r.Year.Int)))
+		}
 	}
 
 	var catsCriteria []query.Criteria
@@ -284,4 +298,46 @@ func requestPagination(r torznab.SearchRequest) (uint, uint) {
 		offset = r.Offset.Uint
 	}
 	return limit, offset
+}
+
+// effectiveSearchQuery combines q with structured Torznab search parameters
+// sent by Lidarr (artist, album), Readarr (author, title), and non-TMDB year
+// filters (music/audio/book) without duplicating tokens already in q.
+func effectiveSearchQuery(r torznab.SearchRequest) string {
+	parts := make([]string, 0, 4)
+	addPart := func(raw string) {
+		s := strings.TrimSpace(raw)
+		if s == "" {
+			return
+		}
+		lower := strings.ToLower(s)
+		for _, existing := range parts {
+			if strings.Contains(strings.ToLower(existing), lower) {
+				return
+			}
+		}
+		parts = append(parts, s)
+	}
+
+	addPart(r.Query)
+	switch r.Type {
+	case torznab.FunctionMusic, torznab.FunctionAudio:
+		addPart(r.Artist)
+		addPart(r.Album)
+		if r.Year.Valid && r.Year.Int >= 1800 && r.Year.Int <= 2200 {
+			addPart(strconv.Itoa(r.Year.Int))
+		}
+	case torznab.FunctionBook:
+		addPart(r.Author)
+		addPart(r.Title)
+		if r.Year.Valid && r.Year.Int >= 1800 && r.Year.Int <= 2200 {
+			addPart(strconv.Itoa(r.Year.Int))
+		}
+	case torznab.FunctionSearch:
+		addPart(r.Artist)
+		addPart(r.Album)
+		addPart(r.Author)
+		addPart(r.Title)
+	}
+	return strings.Join(parts, " ")
 }

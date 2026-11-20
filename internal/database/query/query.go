@@ -229,6 +229,25 @@ func (gq *genericQuery[T]) doItems() {
 			gq.result.Items = items
 			return
 		}
+		pgItems, pgHandled, pgErr := gq.payloadGatePrefixItems()
+		if pgErr != nil {
+			gq.addError(pgErr)
+			return
+		}
+		if pgHandled {
+			if gq.builder.hasNextPage(len(pgItems)) {
+				gq.result.HasNextPage = true
+				pgItems = pgItems[:len(pgItems)-1]
+			}
+			if len(pgItems) > 0 {
+				if cbErr := gq.builder.applyCallbacks(gq.ctx, pgItems); cbErr != nil {
+					gq.addError(cbErr)
+					return
+				}
+			}
+			gq.result.Items = pgItems
+			return
+		}
 		itemBuilder := gq.builder
 		if fallbackTsquery {
 			if ob, ok := itemBuilder.(optionBuilder); ok {
@@ -598,8 +617,10 @@ type optionBuilder struct {
 	tsquery             string
 	rawQueryString      string
 	bm25Enabled         bool
+	bm25ExtraCols       map[string]struct{}
 	skipRelevanceCap    bool
 	bm25PrefixScoreExpr string
+	payloadGatePrefix   *clause.Expr
 	scopes              []Scope
 	selections          []clause.Expr
 	groupBy             []clause.Column

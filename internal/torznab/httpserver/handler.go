@@ -143,6 +143,14 @@ func (h handler) handleSearch(ctx *gin.Context, profile torznab.Profile, tp stri
 	}
 
 	t0 := time.Now()
+	year := model.NullInt{}
+	if qYear := strings.TrimSpace(ctx.Query(torznab.ParamYear)); qYear != "" {
+		if intYear, yearErr := strconv.Atoi(qYear); yearErr == nil && intYear >= 1800 && intYear <= 2200 {
+			year.Valid = true
+			year.Int = intYear
+		}
+	}
+
 	result, searchErr := h.client.Search(reqCtx, torznab.SearchRequest{
 		Profile: profile,
 		Query:   ctx.Query(torznab.ParamQuery),
@@ -154,6 +162,11 @@ func (h handler) handleSearch(ctx *gin.Context, profile torznab.Profile, tp stri
 		Season:  season,
 		Episode: episode,
 		AirDate: airDate,
+		Artist:  strings.TrimSpace(ctx.Query(torznab.ParamArtist)),
+		Album:   strings.TrimSpace(ctx.Query(torznab.ParamAlbum)),
+		Author:  strings.TrimSpace(ctx.Query(torznab.ParamAuthor)),
+		Title:   strings.TrimSpace(ctx.Query(torznab.ParamTitle)),
+		Year:    year,
 		Limit:   limit,
 		Offset:  offset,
 	})

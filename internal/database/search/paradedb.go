@@ -58,9 +58,18 @@ func PrometheusCollectors() []prometheus.Collector {
 	}
 }
 
+var bm25OptionalPushdownCols = []string{
+	"video_codec",
+	"video_source",
+	"is_anime",
+	"content_source",
+	"content_id",
+}
+
 type dbCapabilities struct {
 	paradeDBBM25    bool
 	bm25EpisodeText bool
+	bm25ExtraCols   []string
 	episodeKeysIdx  bool
 }
 
@@ -112,13 +121,24 @@ func ResolveBM25Mode() BM25Mode {
 
 func probeDBCapabilities(ctx context.Context, cp gorm.ConnPool) (dbCapabilities, error) {
 	var hasParade, hasEpText, hasEpIdx bool
+	var indexDef string
 	err := cp.QueryRowContext(ctx, `SELECT
 		EXISTS(SELECT 1 FROM pg_extension WHERE extname = 'pg_search')
 		AND EXISTS(SELECT 1 FROM pg_index WHERE indexrelid = to_regclass('torrent_contents_bm25_idx') AND indisvalid AND indisready)
 		AND EXISTS(SELECT 1 FROM pg_attribute WHERE attrelid = to_regclass('torrent_contents') AND attname = 'search_text' AND NOT attisdropped),
 		EXISTS(SELECT 1 FROM pg_attribute WHERE attrelid = to_regclass('torrent_contents') AND attname = 'ep_text' AND NOT attisdropped),
-		to_regclass('torrent_contents_episode_keys_idx') IS NOT NULL`).Scan(&hasParade, &hasEpText, &hasEpIdx)
-	return dbCapabilities{paradeDBBM25: hasParade, bm25EpisodeText: hasEpText, episodeKeysIdx: hasEpIdx}, err
+		to_regclass('torrent_contents_episode_keys_idx') IS NOT NULL,
+		COALESCE(pg_get_indexdef(to_regclass('torrent_contents_bm25_idx')), '')`).Scan(&hasParade, &hasEpText, &hasEpIdx, &indexDef)
+	var extraCols []string
+	if hasParade && indexDef != "" {
+		lowerDef := strings.ToLower(indexDef)
+		for _, col := range bm25OptionalPushdownCols {
+			if strings.Contains(lowerDef, col) {
+				extraCols = append(extraCols, col)
+			}
+		}
+	}
+	return dbCapabilities{paradeDBBM25: hasParade, bm25EpisodeText: hasEpText, bm25ExtraCols: extraCols, episodeKeysIdx: hasEpIdx}, err
 }
 
 func loadDBCapabilities(ctx context.Context, db *gorm.DB) dbCapabilities {
@@ -170,6 +190,13 @@ func HasParadeDBBM25(ctx context.Context, db *gorm.DB) bool {
 // alongside search_text is present on torrent_contents.
 func HasBM25EpisodeText(ctx context.Context, db *gorm.DB) bool {
 	return loadDBCapabilities(ctx, db).bm25EpisodeText
+}
+
+// BM25ExtraColumns reports optional filter columns (video_codec, video_source,
+// is_anime, content_source, content_id) confirmed indexed in the live
+// torrent_contents_bm25_idx definition.
+func BM25ExtraColumns(ctx context.Context, db *gorm.DB) []string {
+	return loadDBCapabilities(ctx, db).bm25ExtraCols
 }
 
 // BM25Status is a fresh (uncached) snapshot of the opt-in ParadeDB BM25
@@ -246,7 +273,7 @@ FROM (
  CROSS JOIN LATERAL jsonb_object_keys(CASE WHEN jsonb_typeof(s.value)='object' THEN s.value ELSE '{}'::jsonb END) AS e(key)
  WHERE s.value<>'{}'::jsonb
 ) t $$`
-	bm25IndexFieldsSQL = `(id, (search_text::pdb.whitespace('lowercase=false')), (ep_text::pdb.whitespace), (content_type::pdb.literal), (video_resolution::pdb.literal), seeders, published_at)`
+	bm25IndexFieldsSQL = `(id, (search_text::pdb.whitespace('lowercase=false')), (ep_text::pdb.whitespace), (content_type::pdb.literal), (video_resolution::pdb.literal), (video_codec::pdb.literal), (video_source::pdb.literal), is_anime, (content_source::pdb.literal), (content_id::pdb.literal), seeders, published_at)`
 )
 
 // EnableParadeDBBM25 idempotently installs the opt-in ParadeDB BM25 objects:
@@ -299,6 +326,19 @@ func EnableParadeDBBM25(ctx context.Context, db *gorm.DB) error {
 		return fmt.Errorf("enable paradedb bm25: installation incomplete after DDL (index_valid=%v search_text=%v ep_text=%v)", status.IndexValid, status.SearchTextColumn, status.EpisodeTextColumn)
 	}
 	return nil
+}
+
+// RebuildParadeDBBM25 drops and rebuilds torrent_contents_bm25_idx with the
+// current field definition (adding newly indexed filter columns such as
+// video_codec, video_source, is_anime, content_source, content_id).
+func RebuildParadeDBBM25(ctx context.Context, db *gorm.DB) error {
+	if db == nil {
+		return fmt.Errorf("rebuild paradedb bm25: nil database handle")
+	}
+	if err := db.WithContext(ctx).Exec(`DROP INDEX IF EXISTS torrent_contents_bm25_idx`).Error; err != nil {
+		return fmt.Errorf("rebuild paradedb bm25: drop existing index: %w", err)
+	}
+	return EnableParadeDBBM25(ctx, db)
 }
 
 func createBM25Index(ctx context.Context, db *gorm.DB) error {

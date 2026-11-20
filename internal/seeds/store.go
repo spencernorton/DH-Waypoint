@@ -1,8 +1,10 @@
 package seeds
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -17,6 +19,18 @@ import (
 type Store struct {
 	pool  lazy.Lazy[*pgxpool.Pool]
 	names *namepolicy.Policy
+
+	// Keyset cursors allow successive SelectStale cycles to advance past
+	// permanently excluded rows (private/adult/name-policy) and already-scraped
+	// prefixes instead of re-scanning them from the start of the index every
+	// cycle. Each cursor wraps cleanly back to empty when a pass exhausts its
+	// partition.
+	cursorMu         sync.Mutex
+	recheckCursorAt  time.Time
+	recheckCursorH   []byte
+	neverCursorH     []byte
+	payloadTableOnce sync.Once
+	hasPayloadTable  bool
 }
 
 func NewStore(pool lazy.Lazy[*pgxpool.Pool], names ...*namepolicy.Policy) *Store {
@@ -27,11 +41,197 @@ func NewStore(pool lazy.Lazy[*pgxpool.Pool], names ...*namepolicy.Policy) *Store
 	return s
 }
 
+func (s *Store) payloadReviewsAvailable(ctx context.Context, pool *pgxpool.Pool) bool {
+	s.payloadTableOnce.Do(func() {
+		var exists bool
+		if err := pool.QueryRow(ctx, `SELECT to_regclass('processor_payload_reviews') IS NOT NULL`).Scan(&exists); err == nil {
+			s.hasPayloadTable = exists
+		}
+	})
+	return s.hasPayloadTable
+}
+
+func (s *Store) queryRechecks(
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	minAge time.Duration,
+	limit int,
+	afterAt time.Time,
+	afterHash []byte,
+	seen map[string]struct{},
+) (hashes [][]byte, lastAt time.Time, lastHash []byte, rawCount int, err error) {
+	if limit <= 0 {
+		return nil, afterAt, afterHash, 0, nil
+	}
+	var sql string
+	var args []any
+	if !afterAt.IsZero() && len(afterHash) > 0 {
+		adm, admArgs := s.selectionAdmissionAt(5)
+		sql = `
+select t.info_hash, s.checked_at
+from torrent_tracker_seeds s
+join torrents t on t.info_hash = s.info_hash
+where s.checked_at < now() - make_interval(secs => $1)
+  and (s.checked_at > $3 or (s.checked_at = $3 and t.info_hash > $4))
+  AND ` + adm + `
+order by s.checked_at asc, t.info_hash asc
+limit $2::bigint`
+		args = append([]any{minAge.Seconds(), limit, afterAt, afterHash}, admArgs...)
+	} else {
+		adm, admArgs := s.selectionAdmissionAt(3)
+		sql = `
+select t.info_hash, s.checked_at
+from torrent_tracker_seeds s
+join torrents t on t.info_hash = s.info_hash
+where s.checked_at < now() - make_interval(secs => $1) AND ` + adm + `
+order by s.checked_at asc, t.info_hash asc
+limit $2::bigint`
+		args = append([]any{minAge.Seconds(), limit}, admArgs...)
+	}
+	rows, qErr := pool.Query(ctx, sql, args...)
+	if qErr != nil {
+		return nil, time.Time{}, nil, 0, qErr
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var h []byte
+		var checkedAt time.Time
+		if scanErr := rows.Scan(&h, &checkedAt); scanErr != nil {
+			return nil, time.Time{}, nil, rawCount, scanErr
+		}
+		rawCount++
+		lastAt = checkedAt
+		lastHash = append([]byte(nil), h...)
+		if _, dup := seen[string(h)]; dup {
+			continue
+		}
+		seen[string(h)] = struct{}{}
+		hashes = append(hashes, h)
+	}
+	if rowsErr := rows.Err(); rowsErr != nil {
+		return nil, time.Time{}, nil, rawCount, rowsErr
+	}
+	return hashes, lastAt, lastHash, rawCount, nil
+}
+
+func (s *Store) queryNeverChecked(
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	limit int,
+	afterHash []byte,
+	seen map[string]struct{},
+) (hashes [][]byte, lastHash []byte, rawCount int, err error) {
+	if limit <= 0 {
+		return nil, afterHash, 0, nil
+	}
+	var sql string
+	var args []any
+	if len(afterHash) > 0 {
+		adm, admArgs := s.selectionAdmissionAt(3)
+		sql = `
+select t.info_hash
+from torrents t
+where t.info_hash > $2
+  and not exists (select 1 from torrent_tracker_seeds s where s.info_hash = t.info_hash)
+  AND ` + adm + `
+order by t.info_hash asc
+limit $1::bigint`
+		args = append([]any{limit, afterHash}, admArgs...)
+	} else {
+		adm, admArgs := s.selectionAdmissionAt(2)
+		sql = `
+select t.info_hash
+from torrents t
+where not exists (select 1 from torrent_tracker_seeds s where s.info_hash = t.info_hash)
+  AND ` + adm + `
+order by t.info_hash asc
+limit $1::bigint`
+		args = append([]any{limit}, admArgs...)
+	}
+	rows, qErr := pool.Query(ctx, sql, args...)
+	if qErr != nil {
+		return nil, nil, 0, qErr
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var h []byte
+		if scanErr := rows.Scan(&h); scanErr != nil {
+			return nil, nil, rawCount, scanErr
+		}
+		rawCount++
+		lastHash = append([]byte(nil), h...)
+		if _, dup := seen[string(h)]; dup {
+			continue
+		}
+		seen[string(h)] = struct{}{}
+		hashes = append(hashes, h)
+	}
+	if rowsErr := rows.Err(); rowsErr != nil {
+		return nil, nil, rawCount, rowsErr
+	}
+	return hashes, lastHash, rawCount, nil
+}
+
+// queryPriorityApproved selects up to limit hashes that carry active approved
+// payload evidence and have either never been scraped or are older than minAge,
+// ensuring user-facing verified releases receive fresh seed/leech counts ahead
+// of the unverified backlog.
+func (s *Store) queryPriorityApproved(
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	minAge time.Duration,
+	limit int,
+	seen map[string]struct{},
+) (neverHashes [][]byte, recheckHashes [][]byte, err error) {
+	if limit <= 0 || !s.payloadReviewsAvailable(ctx, pool) {
+		return nil, nil, nil
+	}
+	adm, admArgs := s.selectionAdmissionAt(3)
+	sql := `
+select t.info_hash, (s.info_hash is not null) as is_recheck
+from processor_payload_reviews p
+join torrents t on t.info_hash = p.info_hash
+left join torrent_tracker_seeds s on s.info_hash = p.info_hash
+where p.approved and p.expires_at > now()
+  and (s.info_hash is null or s.checked_at < now() - make_interval(secs => $1))
+  AND ` + adm + `
+order by s.checked_at asc nulls first, t.info_hash asc
+limit $2::bigint`
+	rows, qErr := pool.Query(ctx, sql, append([]any{minAge.Seconds(), limit}, admArgs...)...)
+	if qErr != nil {
+		return nil, nil, qErr
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var h []byte
+		var isRecheck bool
+		if scanErr := rows.Scan(&h, &isRecheck); scanErr != nil {
+			return nil, nil, scanErr
+		}
+		if _, dup := seen[string(h)]; dup {
+			continue
+		}
+		seen[string(h)] = struct{}{}
+		if isRecheck {
+			recheckHashes = append(recheckHashes, h)
+		} else {
+			neverHashes = append(neverHashes, h)
+		}
+	}
+	if rowsErr := rows.Err(); rowsErr != nil {
+		return nil, nil, rowsErr
+	}
+	return neverHashes, recheckHashes, nil
+}
+
 // SelectStale returns up to limit info-hashes that have never been scraped or
-// whose last scrape is older than minAge. Half of a batch is reserved for the
-// oldest previously checked hashes so a continuous never-checked backlog cannot
-// starve rechecks. The remaining capacity keeps never-checked priority and fills
-// from either class. A one-item batch retains never-checked priority.
+// whose last scrape is older than minAge. Up to a quarter of multi-item
+// batches prioritizes active payload-verified torrents so user-facing results
+// stay fresh ahead of large backlogs. Half of remaining capacity is reserved
+// for oldest previously checked hashes so a continuous never-checked backlog
+// cannot starve rechecks, while keyset cursors skip permanently excluded
+// prefixes across successive cycles. A one-item batch retains never-checked
+// priority.
 func (s *Store) SelectStale(ctx context.Context, minAge time.Duration, limit int) ([][]byte, error) {
 	if limit < 0 {
 		return nil, fmt.Errorf("seeds: select stale: limit must be non-negative: %d", limit)
@@ -43,137 +243,136 @@ func (s *Store) SelectStale(ctx context.Context, minAge time.Duration, limit int
 	if err != nil {
 		return nil, fmt.Errorf("seeds: acquire pool: %w", err)
 	}
-	// Split stale rechecks and never-checked selection into separate index-backed
-	// queries rather than an OR over LEFT JOIN (which forces a full-table join
-	// and sort across millions of torrents). Rechecks scan
-	// torrent_tracker_seeds_checked_at_idx; never-checked uses a Merge Anti Join
-	// over torrents_pkey and torrent_tracker_seeds_pkey and stops at LIMIT.
-	recheckLimit := limit / 2
-	var rechecks [][]byte
-	var lastCheckedAt time.Time
-	var lastRecheckHash []byte
+
+	s.cursorMu.Lock()
+	startRecheckAt := s.recheckCursorAt
+	startRecheckH := append([]byte(nil), s.recheckCursorH...)
+	startNeverH := append([]byte(nil), s.neverCursorH...)
+	s.cursorMu.Unlock()
+
 	seen := make(map[string]struct{}, limit)
+	var priorityNever, priorityRecheck [][]byte
+	if limit >= 4 {
+		prioLimit := limit / 4
+		pNever, pRecheck, pErr := s.queryPriorityApproved(ctx, pool, minAge, prioLimit, seen)
+		if pErr != nil {
+			return nil, fmt.Errorf("seeds: select priority approved: %w", pErr)
+		}
+		priorityNever = pNever
+		priorityRecheck = pRecheck
+	}
+
+	recheckTarget := limit / 2
+	recheckLimit := recheckTarget - len(priorityRecheck)
+	if recheckLimit < 0 {
+		recheckLimit = 0
+	}
+	var rechecks [][]byte
+	nextRecheckAt := startRecheckAt
+	nextRecheckH := startRecheckH
 
 	if recheckLimit > 0 {
-		admRecheck, admRecheckArgs := s.selectionAdmissionAt(3)
-		recheckSQL := `
-select t.info_hash, s.checked_at
-from torrent_tracker_seeds s
-join torrents t on t.info_hash = s.info_hash
-where s.checked_at < now() - make_interval(secs => $1) AND ` + admRecheck + `
-order by s.checked_at asc, t.info_hash asc
-limit $2::bigint`
-		rows, qErr := pool.Query(ctx, recheckSQL, append([]any{minAge.Seconds(), recheckLimit}, admRecheckArgs...)...)
+		got, lastAt, lastH, rawN, qErr := s.queryRechecks(ctx, pool, minAge, recheckLimit, startRecheckAt, startRecheckH, seen)
 		if qErr != nil {
 			return nil, fmt.Errorf("seeds: select stale rechecks: %w", qErr)
 		}
-		for rows.Next() {
-			var h []byte
-			var checkedAt time.Time
-			if scanErr := rows.Scan(&h, &checkedAt); scanErr != nil {
-				rows.Close()
-				return nil, fmt.Errorf("seeds: scan recheck: %w", scanErr)
+		rechecks = append(rechecks, got...)
+		if rawN == recheckLimit && !lastAt.IsZero() && len(lastH) > 0 {
+			nextRecheckAt = lastAt
+			nextRecheckH = lastH
+		} else if !startRecheckAt.IsZero() && len(startRecheckH) > 0 {
+			// Exhausted the tail past the cursor; wrap cleanly to the start.
+			nextRecheckAt = time.Time{}
+			nextRecheckH = nil
+			if rem := recheckLimit - len(rechecks); rem > 0 {
+				wrapGot, wAt, wH, wRaw, wErr := s.queryRechecks(ctx, pool, minAge, rem, time.Time{}, nil, seen)
+				if wErr != nil {
+					return nil, fmt.Errorf("seeds: select stale rechecks wrap: %w", wErr)
+				}
+				rechecks = append(rechecks, wrapGot...)
+				if wRaw == rem && !wAt.IsZero() && len(wH) > 0 {
+					nextRecheckAt = wAt
+					nextRecheckH = wH
+				}
 			}
-			seen[string(h)] = struct{}{}
-			rechecks = append(rechecks, h)
-			lastCheckedAt = checkedAt
-			lastRecheckHash = h
 		}
-		if rowsErr := rows.Err(); rowsErr != nil {
-			rows.Close()
-			return nil, fmt.Errorf("seeds: recheck rows: %w", rowsErr)
-		}
-		rows.Close()
 	}
 
-	neverLimit := limit - len(rechecks)
+	neverLimit := limit - len(priorityNever) - len(priorityRecheck) - len(rechecks)
+	if neverLimit < 0 {
+		neverLimit = 0
+	}
 	var neverChecked [][]byte
+	nextNeverH := startNeverH
+
 	if neverLimit > 0 {
-		admNever, admNeverArgs := s.selectionAdmissionAt(2)
-		neverSQL := `
-select t.info_hash
-from torrents t
-where not exists (select 1 from torrent_tracker_seeds s where s.info_hash = t.info_hash)
-  AND ` + admNever + `
-order by t.info_hash asc
-limit $1::bigint`
-		rows, qErr := pool.Query(ctx, neverSQL, append([]any{neverLimit}, admNeverArgs...)...)
+		got, lastH, rawN, qErr := s.queryNeverChecked(ctx, pool, neverLimit, startNeverH, seen)
 		if qErr != nil {
 			return nil, fmt.Errorf("seeds: select never-checked: %w", qErr)
 		}
-		for rows.Next() {
-			var h []byte
-			if scanErr := rows.Scan(&h); scanErr != nil {
-				rows.Close()
-				return nil, fmt.Errorf("seeds: scan never-checked: %w", scanErr)
+		neverChecked = append(neverChecked, got...)
+		if rawN == neverLimit && len(lastH) > 0 {
+			nextNeverH = lastH
+		} else if len(startNeverH) > 0 {
+			// Exhausted the tail past the cursor; wrap cleanly to the start.
+			nextNeverH = nil
+			if rem := neverLimit - len(neverChecked); rem > 0 {
+				wrapGot, wH, wRaw, wErr := s.queryNeverChecked(ctx, pool, rem, nil, seen)
+				if wErr != nil {
+					return nil, fmt.Errorf("seeds: select never-checked wrap: %w", wErr)
+				}
+				neverChecked = append(neverChecked, wrapGot...)
+				if wRaw == rem && len(wH) > 0 {
+					nextNeverH = wH
+				}
 			}
-			if _, dup := seen[string(h)]; dup {
-				continue
-			}
-			seen[string(h)] = struct{}{}
-			neverChecked = append(neverChecked, h)
 		}
-		if rowsErr := rows.Err(); rowsErr != nil {
-			rows.Close()
-			return nil, fmt.Errorf("seeds: never-checked rows: %w", rowsErr)
-		}
-		rows.Close()
 	}
 
-	extraLimit := limit - len(rechecks) - len(neverChecked)
+	extraLimit := limit - len(priorityNever) - len(priorityRecheck) - len(rechecks) - len(neverChecked)
 	if extraLimit > 0 {
-		var extraSQL string
-		var extraArgs []any
-		if len(rechecks) > 0 {
-			admExtra, admExtraArgs := s.selectionAdmissionAt(5)
-			extraSQL = `
-select t.info_hash
-from torrent_tracker_seeds s
-join torrents t on t.info_hash = s.info_hash
-where s.checked_at < now() - make_interval(secs => $1)
-  and (s.checked_at > $3 or (s.checked_at = $3 and t.info_hash > $4))
-  AND ` + admExtra + `
-order by s.checked_at asc, t.info_hash asc
-limit $2::bigint`
-			extraArgs = append([]any{minAge.Seconds(), extraLimit, lastCheckedAt, lastRecheckHash}, admExtraArgs...)
-		} else {
-			admExtra, admExtraArgs := s.selectionAdmissionAt(3)
-			extraSQL = `
-select t.info_hash
-from torrent_tracker_seeds s
-join torrents t on t.info_hash = s.info_hash
-where s.checked_at < now() - make_interval(secs => $1) AND ` + admExtra + `
-order by s.checked_at asc, t.info_hash asc
-limit $2::bigint`
-			extraArgs = append([]any{minAge.Seconds(), extraLimit}, admExtraArgs...)
-		}
-		rows, qErr := pool.Query(ctx, extraSQL, extraArgs...)
+		got, lastAt, lastH, rawN, qErr := s.queryRechecks(ctx, pool, minAge, extraLimit, nextRecheckAt, nextRecheckH, seen)
 		if qErr != nil {
 			return nil, fmt.Errorf("seeds: select extra rechecks: %w", qErr)
 		}
-		for rows.Next() {
-			var h []byte
-			if scanErr := rows.Scan(&h); scanErr != nil {
-				rows.Close()
-				return nil, fmt.Errorf("seeds: scan extra recheck: %w", scanErr)
+		rechecks = append(rechecks, got...)
+		if rawN == extraLimit && !lastAt.IsZero() && len(lastH) > 0 {
+			nextRecheckAt = lastAt
+			nextRecheckH = lastH
+		} else if !nextRecheckAt.IsZero() && len(nextRecheckH) > 0 {
+			nextRecheckAt = time.Time{}
+			nextRecheckH = nil
+			if rem := extraLimit - len(got); rem > 0 {
+				wrapGot, wAt, wH, wRaw, wErr := s.queryRechecks(ctx, pool, minAge, rem, time.Time{}, nil, seen)
+				if wErr != nil {
+					return nil, fmt.Errorf("seeds: select extra rechecks wrap: %w", wErr)
+				}
+				rechecks = append(rechecks, wrapGot...)
+				if wRaw == rem && !wAt.IsZero() && len(wH) > 0 {
+					nextRecheckAt = wAt
+					nextRecheckH = wH
+				}
 			}
-			if _, dup := seen[string(h)]; dup {
-				continue
-			}
-			seen[string(h)] = struct{}{}
-			rechecks = append(rechecks, h)
 		}
-		if rowsErr := rows.Err(); rowsErr != nil {
-			rows.Close()
-			return nil, fmt.Errorf("seeds: extra recheck rows: %w", rowsErr)
-		}
-		rows.Close()
 	}
 
-	// Preserve checked_at ASC NULLS FIRST, info_hash ASC ordering: never-checked
-	// hashes first, followed by oldest rechecks.
-	out := make([][]byte, 0, len(neverChecked)+len(rechecks))
+	s.cursorMu.Lock()
+	// Only advance cursors if they were not concurrently overwritten by another caller.
+	if s.recheckCursorAt.Equal(startRecheckAt) && bytes.Equal(s.recheckCursorH, startRecheckH) {
+		s.recheckCursorAt = nextRecheckAt
+		s.recheckCursorH = append([]byte(nil), nextRecheckH...)
+	}
+	if bytes.Equal(s.neverCursorH, startNeverH) {
+		s.neverCursorH = append([]byte(nil), nextNeverH...)
+	}
+	s.cursorMu.Unlock()
+
+	// Preserve never-checked first, followed by oldest rechecks, with approved
+	// priority hashes leading each class.
+	out := make([][]byte, 0, len(priorityNever)+len(neverChecked)+len(priorityRecheck)+len(rechecks))
+	out = append(out, priorityNever...)
 	out = append(out, neverChecked...)
+	out = append(out, priorityRecheck...)
 	out = append(out, rechecks...)
 	return out, nil
 }

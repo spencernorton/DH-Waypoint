@@ -63,13 +63,22 @@ func (s search) TorrentContent(ctx context.Context, options ...query.Option) (To
 }
 
 func (s search) torrentContent(ctx context.Context, serial bool, options ...query.Option) (TorrentContentResult, error) {
+	underlyingDB := s.q.TorrentContent.WithContext(ctx).UnderlyingDB()
 	hasPayloadGate := s.adultPolicy != nil && s.adultPolicy.RequiresPayloadEvidence()
 	bm25Enabled := !hasPayloadGate &&
 		ResolveBM25Mode() != BM25ModeOff &&
-		HasParadeDBBM25(ctx, s.q.TorrentContent.WithContext(ctx).UnderlyingDB())
+		HasParadeDBBM25(ctx, underlyingDB)
 	prefixOptions := []query.Option{query.SelectAll(), query.WithBM25Search(bm25Enabled)}
+	if bm25Enabled {
+		if extraCols := BM25ExtraColumns(ctx, underlyingDB); len(extraCols) > 0 {
+			prefixOptions = append(prefixOptions, query.WithBM25ExtraColumns(extraCols...))
+		}
+	}
 	if hasPayloadGate {
 		prefixOptions = append(prefixOptions, query.WithoutRelevanceCap())
+		if gate, ok := s.adultPolicy.PayloadGateCondition(model.TableNameTorrentContent); ok {
+			prefixOptions = append(prefixOptions, query.WithPayloadGatePrefix(gate))
+		}
 	}
 	options = append(prefixOptions, options...)
 	if s.adultPolicy != nil && s.adultPolicy.ExcludesAdult() {

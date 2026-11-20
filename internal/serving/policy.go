@@ -142,22 +142,9 @@ func (p *Policy) TorrentCondition(table string) clause.Expr {
  AND jsonb_exists(reviewer.manifest->'capabilities','policy'))`
 		args = append(args, p.requiredProcessor, PublicationReviewPolicy, p.requiredArtifact)
 	}
-	if p.requiredPayloadArtifact != "" {
-		if p.previousPayloadArtifact != "" && p.previousPayloadArtifact != p.requiredPayloadArtifact {
-			sql += ` AND ` + root + ` IN (
- SELECT payload.info_hash FROM processor_payload_reviews payload
- JOIN processor_publication_sources payload_source ON payload_source.info_hash=payload.info_hash
- WHERE payload.approved AND payload.source_revision=payload_source.revision
- AND payload.verifier_artifact IN (?,?) AND payload.policy IN (?,?) AND payload.expires_at>CURRENT_TIMESTAMP)`
-			args = append(args, p.requiredPayloadArtifact, p.previousPayloadArtifact, PayloadEvidenceContract, PayloadEvidenceContractV2)
-		} else {
-			sql += ` AND ` + root + ` IN (
- SELECT payload.info_hash FROM processor_payload_reviews payload
- JOIN processor_publication_sources payload_source ON payload_source.info_hash=payload.info_hash
- WHERE payload.approved AND payload.source_revision=payload_source.revision
- AND payload.verifier_artifact=? AND payload.policy IN (?,?) AND payload.expires_at>CURRENT_TIMESTAMP)`
-			args = append(args, p.requiredPayloadArtifact, PayloadEvidenceContract, PayloadEvidenceContractV2)
-		}
+	if gate, ok := p.PayloadGateCondition(table); ok {
+		sql += " AND " + gate.SQL
+		args = append(args, gate.Vars...)
 	}
 	// Authentic source snapshots were added with the complete recovery producer.
 	// Do not silently elevate legacy marker-only records into consumer authority.
@@ -265,6 +252,40 @@ func (p *Policy) ExcludesAdult() bool { return p.excludeAdult }
 // or capping relevance scoring to the newest unapproved rows.
 func (p *Policy) RequiresPayloadEvidence() bool {
 	return p != nil && p.requiredPayloadArtifact != ""
+}
+
+// PayloadGateCondition returns the positive payload-evidence semi-join clause
+// for table when required payload verification is active. Candidate-prefix
+// query planners use this to select ordered candidate IDs before re-evaluating
+// the complete TorrentCondition verbatim on every returned row.
+func (p *Policy) PayloadGateCondition(table string) (clause.Expr, bool) {
+	if !p.RequiresPayloadEvidence() {
+		return clause.Expr{}, false
+	}
+	switch table {
+	case "torrents", "torrent_contents", "torrent_files", "torrent_tags":
+	default:
+		panic("invalid serving torrent table")
+	}
+	root := table + ".info_hash"
+	if p.previousPayloadArtifact != "" && p.previousPayloadArtifact != p.requiredPayloadArtifact {
+		return clause.Expr{
+			SQL: root + ` IN (
+ SELECT payload.info_hash FROM processor_payload_reviews payload
+ JOIN processor_publication_sources payload_source ON payload_source.info_hash=payload.info_hash
+ WHERE payload.approved AND payload.source_revision=payload_source.revision
+ AND payload.verifier_artifact IN (?,?) AND payload.policy IN (?,?) AND payload.expires_at>CURRENT_TIMESTAMP)`,
+			Vars: []any{p.requiredPayloadArtifact, p.previousPayloadArtifact, PayloadEvidenceContract, PayloadEvidenceContractV2},
+		}, true
+	}
+	return clause.Expr{
+		SQL: root + ` IN (
+ SELECT payload.info_hash FROM processor_payload_reviews payload
+ JOIN processor_publication_sources payload_source ON payload_source.info_hash=payload.info_hash
+ WHERE payload.approved AND payload.source_revision=payload_source.revision
+ AND payload.verifier_artifact=? AND payload.policy IN (?,?) AND payload.expires_at>CURRENT_TIMESTAMP)`,
+		Vars: []any{p.requiredPayloadArtifact, PayloadEvidenceContract, PayloadEvidenceContractV2},
+	}, true
 }
 
 // ContentCondition leaves common metadata stored and hides only positive adult metadata.
