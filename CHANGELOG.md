@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 5.13.1 — 2026-11-20
+
 ### Fixed
 
 - **Prevent `serving.Policy` scopes and non-BM25 predicates from leaking into ParadeDB BM25 Step 1 candidate scans.** Replaces chained `.Session(&gorm.Session{NewDB: true}).WithContext(...)` with `freshDB` (`Session{NewDB: true, Initialized: true, Context: ctx}`) in `bm25_prefix.go` and `grouped_prefix.go` so deferred `serving.Policy` scopes never leak into Step 1 candidate queries, filters Step 1 predicates to BM25-indexed columns only (keeping `octet_length(info_hash) = 20` and non-indexed filters in Step 2 to avoid ParadeDB `heap_filter` degradation), bounds speculative prefix work (`3s`) with clean `tsquery` fallback on exhaustion, and unwraps caller context cancellation instead of masking it behind `sql.ErrTxDone`.
