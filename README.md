@@ -100,9 +100,6 @@ runs in `full` mode; [the quickstart](docs/quickstart.md) covers both stacks.
 The published image is `linux/amd64` only, and there is no browser interface,
 account system or hosted site here. The optional plugin services build from
 your checkout when their Compose profile is on; they have no published images.
-`main` is ahead of the latest
-release: [`CHANGELOG.md`](CHANGELOG.md) lists what is unreleased, including
-BitTorrent v2 indexing, the REST v2 catalogue and the external LLM processor.
 
 ## Upgrading and optional ParadeDB (PG 18) search
 

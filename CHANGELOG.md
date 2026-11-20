@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+## 5.13.2 — 2026-11-20
+
+### Fixed
+
+- **Use PostgreSQL server-side `statement_timeout` inside the unlinked ID-search `SAVEPOINT`.** `TorrentContentByIdentifiersWithUnlinked` previously wrapped the 40 ms fallback inside a shorter Go `context.WithTimeout` on the active `REPEATABLE READ` transaction, which caused `pgx` to close the underlying connection on timeout and fail the whole Torznab request with HTTP 500 (`failed to deallocate cached statement(s): conn closed`). The fallback now enforces its remaining budget with `set_config('statement_timeout', ..., true)` inside `SAVEPOINT unlinked_fallback` and rolls back cleanly on SQLSTATE `57014`, preserving the connection and returning linked rows.
+- **Eliminate full-table `SelectStale` scans and multi-tracker lock pileups in `internal/seeds`.** Splits `SelectStale` into index-backed stale recheck (`torrent_tracker_seeds_checked_at_idx`) and never-checked (`Merge Anti Join` on primary keys) queries instead of an `OR` over `LEFT JOIN`, initializes UDP tracker clients before acquiring admission locks, staggers chunk traversal across concurrent tracker workers so parallel trackers operate on disjoint hash slices, and lowers `persistChunk` from 250 to 50 to bound write-lock hold duration.
+- **Allow `process_torrent` to refresh release attributes after a torrent's name is updated by full metadata.** `restoreReleaseAttributes` now distinguishes a concurrent rename during classification (which still fails with `errReleaseAttributesChanged`) from pre-existing `torrent_contents.release_attributes` whose `sourceNameSha256` belongs to a superseded earlier name (such as a hash-only import later updated by BEP 9 metadata), replacing the stale attributes cleanly instead of failing the entire batch.
+- **Restore Torznab `files` attribute and populate `<newznab:response total=...>` without `COUNT(*)`.** Emits `torznab:attr name="files"` from hydrated `files_count` / single-file status under the lean Torznab preload path, enables `WithHasNextPage(true)` (`limit + 1`) on Torznab queries, and reports exact totals on final pages or `offset + count + 1` when another page exists.
+
+### Changed
+
+- **Documentation and Compose housekeeping.** Updates the bundled `docker-compose.yml` default image tags to `v5.13.2` and `armiger:3.13.2`, removes the outdated `README.md` note claiming BitTorrent v2 and REST v2 are unreleased, and documents the Torznab `files` attribute in `docs/reference/torznab-api.md`.
+
 ## 5.13.1 — 2026-11-20
 
 ### Fixed

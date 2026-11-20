@@ -190,7 +190,7 @@ func (a Adapter) Search(ctx context.Context, req torznab.SearchRequest) (torznab
 		}
 		ctx = search.WithEpisodesHint(ctx, eps)
 	}
-	options := []query.Option{search.TorrentContentTorznabOption(), query.WithTotalCount(false), query.Where(search.LegacyTorrentIdentityCriteria("torrent_contents"))}
+	options := []query.Option{search.TorrentContentTorznabOption(), query.WithTotalCount(false), query.WithHasNextPage(true), query.Where(search.LegacyTorrentIdentityCriteria("torrent_contents"))}
 
 	identifiers := requestIdentifierRefs(req)
 	unlinkedSearch, supportsUnlinked := a.search.(search.IdentifierWithUnlinkedTorrentContentSearch)
@@ -218,7 +218,7 @@ func (a Adapter) Search(ctx context.Context, req torznab.SearchRequest) (torznab
 			if rErr != nil {
 				return search.TorrentContentResult{}, 0, rErr
 			}
-			pageOptions = append([]query.Option{search.TorrentContentTorznabOption(), query.WithTotalCount(false), query.Where(search.LegacyTorrentIdentityCriteria("torrent_contents"))}, rebuilt...)
+			pageOptions = append([]query.Option{search.TorrentContentTorznabOption(), query.WithTotalCount(false), query.WithHasNextPage(true), query.Where(search.LegacyTorrentIdentityCriteria("torrent_contents"))}, rebuilt...)
 		}
 		var rawRes search.TorrentContentResult
 		var sErr error
@@ -259,14 +259,23 @@ func (a Adapter) Search(ctx context.Context, req torznab.SearchRequest) (torznab
 		for topUp := 0; topUp < 2 && len(searchResult.Items) < int(limit); topUp++ {
 			moreRes, moreRaw, moreErr := fetchFilteredPage(nextOffset)
 			if moreErr != nil || moreRaw == 0 {
+				if moreErr == nil {
+					searchResult.HasNextPage = false
+				}
 				break
 			}
 			needed := int(limit) - len(searchResult.Items)
+			truncated := false
 			if len(moreRes.Items) > needed {
 				moreRes.Items = moreRes.Items[:needed]
+				truncated = true
 			}
 			searchResult.Items = append(searchResult.Items, moreRes.Items...)
+			searchResult.HasNextPage = truncated || moreRes.HasNextPage
 			if moreRaw < int(limit) {
+				if !truncated {
+					searchResult.HasNextPage = false
+				}
 				break
 			}
 			nextOffset += limit

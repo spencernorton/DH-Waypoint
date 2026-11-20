@@ -65,7 +65,7 @@ func NewRunner(cfg Config, pool lazy.Lazy[*pgxpool.Pool], metrics *Metrics, live
 		metrics:      metrics,
 		liveness:     livenessRec,
 		logger:       logger,
-		persistChunk: 250,
+		persistChunk: 50,
 	}
 }
 

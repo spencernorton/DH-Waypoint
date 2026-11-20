@@ -126,6 +126,7 @@ The attributes emitted per item (`internal/torznab/adapter/search_result.go`):
 | Attribute | Emitted |
 |---|---|
 | `infohash`, `magneturl`, `category`, `size`, `publishdate` | always; anime TV adds a second `category` of `5070` |
+| `files` | when file-count metadata is available (from `files_count`, single-file status, or loaded file rows) |
 | `seeders` | when known; a DHT-only zero is omitted while `TORZNAB_ZERO_SEEDERS_AUTHORITATIVE_ONLY` is `true` |
 | `seedscheckedat` | when a tracker scrape verified the counts (RFC 3339) |
 | `leechers`, `peers` | when known; `peers` (seeders + leechers) only with `seeders` |
