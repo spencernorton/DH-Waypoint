@@ -229,6 +229,9 @@ func (c processor) restoreReleaseAttributes(ctx context.Context, tx *dao.Query, 
 		if err != nil {
 			return err
 		}
+		if names[hash] != raw.Name {
+			return errReleaseAttributesChanged
+		}
 		rows, err := tx.TorrentContent.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).Where(tx.TorrentContent.InfoHash.Eq(hash)).Find()
 		if err != nil {
 			return err
@@ -241,8 +244,15 @@ func (c processor) restoreReleaseAttributes(ctx context.Context, tx *dao.Query, 
 				continue
 			}
 			a := row.ReleaseAttributes
-			if a.Version != 1 || a.Parser != model.ReleaseAttributesParser || a.SourceNameSHA256 != nameHash {
+			if a.Version != 1 || a.Parser != model.ReleaseAttributesParser {
 				return errReleaseAttributesChanged
+			}
+			if a.SourceNameSHA256 != nameHash {
+				// Stored release attributes belonged to a superseded torrent name
+				// (for example, a hash-only import before full metadata updated
+				// torrents.name). Because this batch already classified raw.Name,
+				// do not retain stale attributes or fail the batch.
+				continue
 			}
 			if retained != nil {
 				left, _ := json.Marshal(retained)
@@ -254,9 +264,6 @@ func (c processor) restoreReleaseAttributes(ctx context.Context, tx *dao.Query, 
 			retained = a
 		}
 		for _, tc := range byHash[hash] {
-			if names[hash] != raw.Name {
-				return errReleaseAttributesChanged
-			}
 			if retained != nil {
 				tc.ReleaseAttributes = retained
 			} else if tc.ReleaseAttributes != nil && tc.ReleaseAttributes.SourceNameSHA256 != nameHash {

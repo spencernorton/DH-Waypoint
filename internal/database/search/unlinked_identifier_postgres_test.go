@@ -9,6 +9,7 @@ import (
 
 	"github.com/spencernorton/DH-Waypoint/internal/database/query"
 	"github.com/spencernorton/DH-Waypoint/internal/model"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/spencernorton/DH-Waypoint/internal/protocol"
 	"github.com/stretchr/testify/require"
 )
@@ -213,4 +214,85 @@ INSERT INTO content_attributes (content_type, content_source, content_id, source
 	)
 	require.NoError(t, aErr)
 	require.Empty(t, adultRes.Items)
+}
+
+
+func TestUnlinkedIdentifierFallbackTimeoutPreservesConnectionAndLinkedRows(t *testing.T) {
+	f := newAdultServingPostgresFixture(t)
+	ctx := context.Background()
+
+	_, err := f.pool.Exec(ctx, `
+ALTER TABLE content ADD COLUMN IF NOT EXISTS original_title text;
+ALTER TABLE content ADD COLUMN IF NOT EXISTS release_year integer;
+ALTER TABLE torrent_contents ADD COLUMN IF NOT EXISTS episodes jsonb;
+INSERT INTO metadata_sources (key, name) VALUES ('tmdb', 'TMDB'), ('imdb', 'IMDb') ON CONFLICT DO NOTHING;
+INSERT INTO content (type, source, id, title, release_year, adult) VALUES
+  ('tv_show', 'tmdb', '7101', 'Timeout Creek', 2024, false);
+INSERT INTO content_attributes (content_type, content_source, content_id, source, key, value) VALUES
+  ('tv_show', 'tmdb', '7101', 'imdb', 'id', 'tt7101000');
+`)
+	require.NoError(t, err)
+
+	mkHash := func(n int) protocol.InfoHash {
+		raw, decErr := hex.DecodeString(fmt.Sprintf("%040x", 0xA100+n))
+		require.NoError(t, decErr)
+		var h protocol.InfoHash
+		copy(h[:], raw)
+		return h
+	}
+
+	baseTime := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+	hLinked := mkHash(1)
+	hUnlinked := mkHash(2)
+	_, err = f.pool.Exec(ctx, `INSERT INTO torrents (info_hash, name) VALUES ($1, $2), ($3, $4)`,
+		hLinked.Bytes(), "Timeout.Creek.S01E01.1080p.WEB-DL-SYNTH",
+		hUnlinked.Bytes(), "Timeout.Creek.S01E01.720p.WEB-DL-SYNTH")
+	require.NoError(t, err)
+	_, err = f.pool.Exec(ctx, `INSERT INTO torrent_contents
+  (id, info_hash, content_type, content_source, content_id, episodes, seeders, published_at, search_string) VALUES
+  ('tc-linked', $1, 'tv_show', 'tmdb', '7101', '{"1":{"1":{}}}'::jsonb, 10, $2, 'timeout creek s01e01 1080p'),
+  ('tc-unlinked', $3, 'tv_show', NULL, NULL, '{"1":{"1":{}}}'::jsonb, 5, $4, 'timeout creek s01e01 720p')`,
+		hLinked.Bytes(), baseTime, hUnlinked.Bytes(), baseTime.Add(time.Minute))
+	require.NoError(t, err)
+
+	s := f.serving(t, true)
+	s.unlinkedTimeout = 15 * time.Millisecond
+
+	before := testutil.ToFloat64(unlinkedTimeoutCounter)
+	// Force a real PostgreSQL statement_timeout (SQLSTATE 57014) only on the
+	// unlinked fallback scan (content_id IS NULL). The server-side timeout must
+	// roll back cleanly to SAVEPOINT unlinked_fallback without tearing down the
+	// pgx connection or failing the outer REPEATABLE READ transaction.
+	opts := []query.Option{
+		TorrentContentDefaultOption(),
+		query.WithTotalCount(false),
+		query.Where(TorrentContentTypeCriteria(model.ContentTypeTvShow)),
+		query.Where(query.DBCriteria{
+			SQL: "CASE WHEN torrent_contents.content_id IS NULL THEN pg_sleep(0.08) IS NULL ELSE true END",
+		}),
+	}
+	res, qErr := s.TorrentContentByIdentifiersWithUnlinked(
+		ctx,
+		[]model.ContentRef{{Type: model.ContentTypeTvShow, Source: "imdb", ID: "tt7101000"}},
+		10,
+		0,
+		opts...,
+	)
+	require.NoError(t, qErr)
+	require.Equal(t, []protocol.InfoHash{hLinked}, adultServingContentHashes(res.Items))
+	require.GreaterOrEqual(t, testutil.ToFloat64(unlinkedTimeoutCounter), before+1)
+
+	// Verify the underlying connection pool remains completely healthy and
+	// statement_timeout was restored after savepoint rollback.
+	followUp, fErr := s.TorrentContentByIdentifiersWithUnlinked(
+		ctx,
+		[]model.ContentRef{{Type: model.ContentTypeTvShow, Source: "imdb", ID: "tt7101000"}},
+		10,
+		0,
+		TorrentContentDefaultOption(),
+		query.WithTotalCount(false),
+		query.Where(TorrentContentTypeCriteria(model.ContentTypeTvShow)),
+	)
+	require.NoError(t, fErr)
+	require.Equal(t, []protocol.InfoHash{hLinked, hUnlinked}, adultServingContentHashes(followUp.Items))
 }

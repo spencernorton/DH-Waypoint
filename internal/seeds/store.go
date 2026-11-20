@@ -33,52 +33,149 @@ func NewStore(pool lazy.Lazy[*pgxpool.Pool], names ...*namepolicy.Policy) *Store
 // starve rechecks. The remaining capacity keeps never-checked priority and fills
 // from either class. A one-item batch retains never-checked priority.
 func (s *Store) SelectStale(ctx context.Context, minAge time.Duration, limit int) ([][]byte, error) {
+	if limit < 0 {
+		return nil, fmt.Errorf("seeds: select stale: limit must be non-negative: %d", limit)
+	}
+	if limit == 0 {
+		return nil, nil
+	}
 	pool, err := s.pool.Get()
 	if err != nil {
 		return nil, fmt.Errorf("seeds: acquire pool: %w", err)
 	}
-	admission, args := s.selectionAdmission()
-	q := `
-with rechecks as materialized (
-  select t.info_hash, s.checked_at
-  from torrent_tracker_seeds s
-  join torrents t on t.info_hash = s.info_hash
-  where s.checked_at < now() - make_interval(secs => $1) AND ` + admission + `
-  order by s.checked_at asc, t.info_hash asc
-  limit ($2::bigint / 2)
-)
-select selected.info_hash
-from (
-  select info_hash, checked_at from rechecks
-  union all
-  (
-    select t.info_hash, s.checked_at
-    from torrents t
-    left join torrent_tracker_seeds s on s.info_hash = t.info_hash
-    where (s.info_hash is null
-       or s.checked_at < now() - make_interval(secs => $1)) AND ` + admission + `
-      and not exists(select 1 from rechecks r where r.info_hash = t.info_hash)
-    order by s.checked_at asc nulls first, t.info_hash asc
-    limit greatest(0::bigint, $2::bigint - (select count(*) from rechecks))
-  )
-) selected
-order by selected.checked_at asc nulls first, selected.info_hash asc
+	// Split stale rechecks and never-checked selection into separate index-backed
+	// queries rather than an OR over LEFT JOIN (which forces a full-table join
+	// and sort across millions of torrents). Rechecks scan
+	// torrent_tracker_seeds_checked_at_idx; never-checked uses a Merge Anti Join
+	// over torrents_pkey and torrent_tracker_seeds_pkey and stops at LIMIT.
+	recheckLimit := limit / 2
+	var rechecks [][]byte
+	var lastCheckedAt time.Time
+	var lastRecheckHash []byte
+	seen := make(map[string]struct{}, limit)
+
+	if recheckLimit > 0 {
+		admRecheck, admRecheckArgs := s.selectionAdmissionAt(3)
+		recheckSQL := `
+select t.info_hash, s.checked_at
+from torrent_tracker_seeds s
+join torrents t on t.info_hash = s.info_hash
+where s.checked_at < now() - make_interval(secs => $1) AND ` + admRecheck + `
+order by s.checked_at asc, t.info_hash asc
 limit $2::bigint`
-	args = append([]any{minAge.Seconds(), limit}, args...)
-	rows, err := pool.Query(ctx, q, args...)
-	if err != nil {
-		return nil, fmt.Errorf("seeds: select stale: %w", err)
-	}
-	defer rows.Close()
-	var out [][]byte
-	for rows.Next() {
-		var h []byte
-		if err := rows.Scan(&h); err != nil {
-			return nil, fmt.Errorf("seeds: scan: %w", err)
+		rows, qErr := pool.Query(ctx, recheckSQL, append([]any{minAge.Seconds(), recheckLimit}, admRecheckArgs...)...)
+		if qErr != nil {
+			return nil, fmt.Errorf("seeds: select stale rechecks: %w", qErr)
 		}
-		out = append(out, h)
+		for rows.Next() {
+			var h []byte
+			var checkedAt time.Time
+			if scanErr := rows.Scan(&h, &checkedAt); scanErr != nil {
+				rows.Close()
+				return nil, fmt.Errorf("seeds: scan recheck: %w", scanErr)
+			}
+			seen[string(h)] = struct{}{}
+			rechecks = append(rechecks, h)
+			lastCheckedAt = checkedAt
+			lastRecheckHash = h
+		}
+		if rowsErr := rows.Err(); rowsErr != nil {
+			rows.Close()
+			return nil, fmt.Errorf("seeds: recheck rows: %w", rowsErr)
+		}
+		rows.Close()
 	}
-	return out, rows.Err()
+
+	neverLimit := limit - len(rechecks)
+	var neverChecked [][]byte
+	if neverLimit > 0 {
+		admNever, admNeverArgs := s.selectionAdmissionAt(2)
+		neverSQL := `
+select t.info_hash
+from torrents t
+where not exists (select 1 from torrent_tracker_seeds s where s.info_hash = t.info_hash)
+  AND ` + admNever + `
+order by t.info_hash asc
+limit $1::bigint`
+		rows, qErr := pool.Query(ctx, neverSQL, append([]any{neverLimit}, admNeverArgs...)...)
+		if qErr != nil {
+			return nil, fmt.Errorf("seeds: select never-checked: %w", qErr)
+		}
+		for rows.Next() {
+			var h []byte
+			if scanErr := rows.Scan(&h); scanErr != nil {
+				rows.Close()
+				return nil, fmt.Errorf("seeds: scan never-checked: %w", scanErr)
+			}
+			if _, dup := seen[string(h)]; dup {
+				continue
+			}
+			seen[string(h)] = struct{}{}
+			neverChecked = append(neverChecked, h)
+		}
+		if rowsErr := rows.Err(); rowsErr != nil {
+			rows.Close()
+			return nil, fmt.Errorf("seeds: never-checked rows: %w", rowsErr)
+		}
+		rows.Close()
+	}
+
+	extraLimit := limit - len(rechecks) - len(neverChecked)
+	if extraLimit > 0 {
+		var extraSQL string
+		var extraArgs []any
+		if len(rechecks) > 0 {
+			admExtra, admExtraArgs := s.selectionAdmissionAt(5)
+			extraSQL = `
+select t.info_hash
+from torrent_tracker_seeds s
+join torrents t on t.info_hash = s.info_hash
+where s.checked_at < now() - make_interval(secs => $1)
+  and (s.checked_at > $3 or (s.checked_at = $3 and t.info_hash > $4))
+  AND ` + admExtra + `
+order by s.checked_at asc, t.info_hash asc
+limit $2::bigint`
+			extraArgs = append([]any{minAge.Seconds(), extraLimit, lastCheckedAt, lastRecheckHash}, admExtraArgs...)
+		} else {
+			admExtra, admExtraArgs := s.selectionAdmissionAt(3)
+			extraSQL = `
+select t.info_hash
+from torrent_tracker_seeds s
+join torrents t on t.info_hash = s.info_hash
+where s.checked_at < now() - make_interval(secs => $1) AND ` + admExtra + `
+order by s.checked_at asc, t.info_hash asc
+limit $2::bigint`
+			extraArgs = append([]any{minAge.Seconds(), extraLimit}, admExtraArgs...)
+		}
+		rows, qErr := pool.Query(ctx, extraSQL, extraArgs...)
+		if qErr != nil {
+			return nil, fmt.Errorf("seeds: select extra rechecks: %w", qErr)
+		}
+		for rows.Next() {
+			var h []byte
+			if scanErr := rows.Scan(&h); scanErr != nil {
+				rows.Close()
+				return nil, fmt.Errorf("seeds: scan extra recheck: %w", scanErr)
+			}
+			if _, dup := seen[string(h)]; dup {
+				continue
+			}
+			seen[string(h)] = struct{}{}
+			rechecks = append(rechecks, h)
+		}
+		if rowsErr := rows.Err(); rowsErr != nil {
+			rows.Close()
+			return nil, fmt.Errorf("seeds: extra recheck rows: %w", rowsErr)
+		}
+		rows.Close()
+	}
+
+	// Preserve checked_at ASC NULLS FIRST, info_hash ASC ordering: never-checked
+	// hashes first, followed by oldest rechecks.
+	out := make([][]byte, 0, len(neverChecked)+len(rechecks))
+	out = append(out, neverChecked...)
+	out = append(out, rechecks...)
+	return out, nil
 }
 
 // Every write is guarded by `where exists (select 1 from torrents ...)` so a

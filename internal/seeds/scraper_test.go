@@ -249,3 +249,42 @@ func TestScrapeTrackerChunks_AbandonsMidStreamAfterConsecutiveFails(t *testing.T
 		t.Error("final hash must be unattempted after mid-stream abandon")
 	}
 }
+
+
+func TestScrapeBatch_StaggersChunkOrderAcrossTrackers(t *testing.T) {
+	cfg := NewDefaultConfig()
+	cfg.MaxHashesPerPacket = 1
+	cfg.Concurrency = 3
+	cfg.PerTrackerInterval = 0
+	cfg.TrackerUrls = []string{"udp://t0.invalid:80", "udp://t1.invalid:80", "udp://t2.invalid:80"}
+	s := newTestScraper(cfg)
+
+	hashes, _, _ := testHashes(3)
+	var mu sync.Mutex
+	firstChunkByTracker := map[string]int{}
+	s.scrape = func(_ context.Context, trackerURL string, chunk []infohash.T) ([]scrapeItem, error) {
+		idx := chunkIndex(chunk)
+		mu.Lock()
+		if _, seen := firstChunkByTracker[trackerURL]; !seen {
+			firstChunkByTracker[trackerURL] = idx
+		}
+		mu.Unlock()
+		return []scrapeItem{{Seeders: int32(idx + 1), Leechers: 1}}, nil
+	}
+
+	out, err := s.ScrapeBatch(context.Background(), hashes)
+	if err != nil {
+		t.Fatalf("ScrapeBatch: %v", err)
+	}
+	for i, url := range cfg.TrackerUrls {
+		if got, ok := firstChunkByTracker[url]; !ok || got != i {
+			t.Errorf("tracker %s first chunk = %d (ok=%v), want %d", url, got, ok, i)
+		}
+	}
+	for i, h := range hashes {
+		o := out[string(h)]
+		if o == nil || !o.TrackerKnown || o.Seeders != int32(i+1) {
+			t.Errorf("hash %d outcome = %+v, want TrackerKnown seeders=%d", i, o, i+1)
+		}
+	}
+}

@@ -15,14 +15,18 @@ import (
 // Public UDP trackers never receive known private hashes, including qualified
 // bitgrab tags (catalogueguard.PublicSQL).
 func (s *Store) selectionAdmission() (string, []any) {
-	sql := catalogueguard.PublicSQL("t", "$3")
+	return s.selectionAdmissionAt(3)
+}
+
+func (s *Store) selectionAdmissionAt(startParam int) (string, []any) {
+	sql := catalogueguard.PublicSQL("t", fmt.Sprintf("$%d", startParam))
 	args := []any{catalogueguard.TagWhitespace}
 	if s.names.Enabled() {
 		allowed, nameArgs := s.names.AllowsSQL("t.name", "t.info_hash")
-		// AllowsSQL uses question placeholders; this query uses pgx's numbered
-		// parameters after minAge, limit and the shared whitespace argument.
+		// AllowsSQL uses question placeholders; convert sequentially after the
+		// caller's leading parameters and the shared whitespace argument.
 		for i := range nameArgs {
-			allowed = strings.Replace(allowed, "?", fmt.Sprintf("$%d", i+4), 1)
+			allowed = strings.Replace(allowed, "?", fmt.Sprintf("$%d", startParam+1+i), 1)
 		}
 		sql += " AND (" + allowed + ") AND NOT EXISTS(SELECT 1 FROM torrent_contents c WHERE c.info_hash=t.info_hash AND c.content_type='xxx')"
 		args = append(args, nameArgs...)

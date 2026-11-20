@@ -4,10 +4,12 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 	"unicode"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/mozillazg/go-unidecode"
 	"github.com/spencernorton/DH-Waypoint/internal/classifier/classification"
 	"github.com/spencernorton/DH-Waypoint/internal/classifier/parsers"
@@ -95,20 +97,61 @@ func (s search) TorrentContentByIdentifiersWithUnlinked(
 			return nil
 		}
 
-		unlinkedCtx := ctx
-		var cancelUnlinked context.CancelFunc
+		// Bound the optional unlinked fallback using PostgreSQL's server-side
+		// statement_timeout inside a SAVEPOINT rather than a shorter Go
+		// context.WithTimeout on tx. Canceling a pgx sub-context mid-transaction
+		// tears down the underlying connection and breaks ROLLBACK TO SAVEPOINT /
+		// COMMIT ("failed to deallocate cached statement(s): conn closed"), whereas
+		// server-side statement_timeout cleanly aborts only the active statement
+		// with SQLSTATE 57014 and leaves the connection and REPEATABLE READ
+		// transaction intact.
 		useSavepoint := fallbackTimeout > 0 && ctx.Err() == nil
+		var fallbackDeadline time.Time
+		var prevStatementTimeout string
+		savepointOpen := false
 		if useSavepoint {
-			if spErr := tx.Exec("SAVEPOINT unlinked_fallback").Error; spErr != nil {
+			_ = tx.WithContext(ctx).Raw("SHOW statement_timeout").Scan(&prevStatementTimeout).Error
+			if spErr := tx.WithContext(ctx).Exec("SAVEPOINT unlinked_fallback").Error; spErr != nil {
 				useSavepoint = false
 			} else {
-				unlinkedCtx, cancelUnlinked = context.WithTimeout(ctx, fallbackTimeout)
-				defer cancelUnlinked()
+				savepointOpen = true
+				fallbackDeadline = time.Now().Add(fallbackTimeout)
 			}
 		}
+		finishSavepoint := func() {
+			if !savepointOpen {
+				return
+			}
+			savepointOpen = false
+			_ = tx.WithContext(ctx).Exec("RELEASE SAVEPOINT unlinked_fallback").Error
+			if prevStatementTimeout != "" {
+				_ = tx.WithContext(ctx).Exec("SELECT set_config('statement_timeout', ?, true)", prevStatementTimeout).Error
+			} else {
+				_ = tx.WithContext(ctx).Exec("SET LOCAL statement_timeout = DEFAULT").Error
+			}
+		}
+		applyFallbackBudget := func() bool {
+			if !savepointOpen {
+				return true
+			}
+			remaining := time.Until(fallbackDeadline)
+			if remaining <= 0 {
+				return false
+			}
+			ms := remaining.Milliseconds()
+			if ms < 1 {
+				ms = 1
+			}
+			return tx.WithContext(ctx).Exec("SELECT set_config('statement_timeout', ?, true)", fmt.Sprintf("%dms", ms)).Error == nil
+		}
 		handleUnlinkedErr := func(uErr error, partial []TorrentContentResultItem) error {
-			if useSavepoint && ctx.Err() == nil && (errors.Is(uErr, context.DeadlineExceeded) || unlinkedCtx.Err() != nil || strings.Contains(uErr.Error(), "57014") || strings.Contains(uErr.Error(), "canceling statement")) {
-				_ = tx.Exec("ROLLBACK TO SAVEPOINT unlinked_fallback").Error
+			if savepointOpen && ctx.Err() == nil && isStatementTimeoutErr(uErr) {
+				savepointOpen = false
+				// ROLLBACK TO SAVEPOINT clears the aborted subtransaction and
+				// automatically reverts SET LOCAL statement_timeout changes made
+				// inside the savepoint.
+				_ = tx.WithContext(ctx).Exec("ROLLBACK TO SAVEPOINT unlinked_fallback").Error
+				_ = tx.WithContext(ctx).Exec("RELEASE SAVEPOINT unlinked_fallback").Error
 				unlinkedTimeoutCounter.Inc()
 				if len(partial) > 0 {
 					result.Items = append(result.Items, partial...)
@@ -118,22 +161,34 @@ func (s search) TorrentContentByIdentifiersWithUnlinked(
 			return uErr
 		}
 
-		contents, contentErr := snapshot.resolveCanonicalContents(unlinkedCtx, tx, keys)
+		if !applyFallbackBudget() {
+			finishSavepoint()
+			unlinkedTimeoutCounter.Inc()
+			return nil
+		}
+		contents, contentErr := snapshot.resolveCanonicalContents(ctx, tx, keys)
 		if contentErr != nil {
 			return handleUnlinkedErr(contentErr, nil)
 		}
 		if len(contents) == 0 {
+			finishSavepoint()
 			return nil
 		}
 
 		matchers, resolvedTypes, tsq := buildUnlinkedMatchersAndTSQuery(contents)
 		if tsq == "" || len(matchers) == 0 || len(resolvedTypes) == 0 {
+			finishSavepoint()
 			return nil
 		}
 
 		unlinkedNeeded := int(limit) - len(linked.Items)
 		var unlinkedSkip uint
 		if offset > 0 && len(linked.Items) == 0 {
+			if !applyFallbackBudget() {
+				finishSavepoint()
+				unlinkedTimeoutCounter.Inc()
+				return nil
+			}
 			countOpts := append(
 				append([]query.Option(nil), options...),
 				query.Where(linkedCriteria),
@@ -142,7 +197,7 @@ func (s search) TorrentContentByIdentifiersWithUnlinked(
 				query.WithTotalCount(true),
 				query.WithAggregationBudget(0),
 			)
-			linkedCountRes, countErr := snapshot.torrentContent(unlinkedCtx, true, countOpts...)
+			linkedCountRes, countErr := snapshot.torrentContent(ctx, true, countOpts...)
 			if countErr != nil {
 				return handleUnlinkedErr(countErr, nil)
 			}
@@ -170,8 +225,13 @@ func (s search) TorrentContentByIdentifiersWithUnlinked(
 		var matched []TorrentContentResultItem
 		var skipped uint
 		var sqlOffset uint
+		hasMoreUnlinked := false
 
 		for len(matched) < unlinkedNeeded && sqlOffset < unlinkedCandidateMaxScan {
+			if !applyFallbackBudget() {
+				unlinkedTimeoutCounter.Inc()
+				break
+			}
 			remainingScan := unlinkedCandidateMaxScan - sqlOffset
 			batchSize := uint((unlinkedNeeded-len(matched))*2) + unlinkedSkip - skipped
 			if batchSize < unlinkedCandidateMinBatch {
@@ -189,7 +249,7 @@ func (s search) TorrentContentByIdentifiersWithUnlinked(
 				query.Limit(batchSize),
 				query.Offset(sqlOffset),
 			)
-			page, pageErr := snapshot.torrentContent(unlinkedCtx, true, pageOpts...)
+			page, pageErr := snapshot.torrentContent(ctx, true, pageOpts...)
 			if pageErr != nil {
 				return handleUnlinkedErr(pageErr, matched)
 			}
@@ -197,11 +257,15 @@ func (s search) TorrentContentByIdentifiersWithUnlinked(
 				break
 			}
 
-			if hydrateErr := hydrateMissingTorrentNames(unlinkedCtx, tx, page.Items); hydrateErr != nil {
+			if !applyFallbackBudget() {
+				unlinkedTimeoutCounter.Inc()
+				break
+			}
+			if hydrateErr := hydrateMissingTorrentNames(ctx, tx, page.Items); hydrateErr != nil {
 				return handleUnlinkedErr(hydrateErr, matched)
 			}
 
-			for _, item := range page.Items {
+			for idx, item := range page.Items {
 				if _, exists := seenHashes[item.InfoHash]; exists {
 					continue
 				}
@@ -213,21 +277,27 @@ func (s search) TorrentContentByIdentifiersWithUnlinked(
 					continue
 				}
 				seenHashes[item.InfoHash] = struct{}{}
-				matched = append(matched, item)
 				if len(matched) >= unlinkedNeeded {
+					hasMoreUnlinked = true
 					break
+				}
+				matched = append(matched, item)
+				if len(matched) >= unlinkedNeeded && idx == len(page.Items)-1 && uint(len(page.Items)) == batchSize {
+					hasMoreUnlinked = true
 				}
 			}
 
-			if uint(len(page.Items)) < batchSize {
+			if uint(len(page.Items)) < batchSize || len(matched) >= unlinkedNeeded {
 				break
 			}
 			sqlOffset += uint(len(page.Items))
 		}
 
+		finishSavepoint()
 		if len(matched) > 0 {
 			result.Items = append(result.Items, matched...)
 		}
+		result.HasNextPage = hasMoreUnlinked
 		return nil
 	}, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
 	return result, err
@@ -266,14 +336,24 @@ func resolveSnapshotIdentifierKeys(
 	return dedupeContentRefs(keys), true, nil
 }
 
+func isStatementTimeoutErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "57014" {
+		return true
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "57014") || strings.Contains(msg, "canceling statement")
+}
+
 func (s search) resolveCanonicalContents(
 	requestCtx context.Context,
 	tx *gorm.DB,
 	keys []model.ContentRef,
 ) ([]model.Content, error) {
-	lookupCtx, cancel := context.WithTimeout(requestCtx, 5*time.Second)
-	defer cancel()
-	if err := lookupCtx.Err(); err != nil {
+	if err := requestCtx.Err(); err != nil {
 		return nil, err
 	}
 
@@ -284,7 +364,7 @@ func (s search) resolveCanonicalContents(
 		args = append(args, key.Type.String(), key.Source, key.ID)
 	}
 
-	q := tx.WithContext(lookupCtx).Table(model.TableNameContent).Where(strings.Join(arms, " OR "), args...)
+	q := tx.WithContext(requestCtx).Table(model.TableNameContent).Where(strings.Join(arms, " OR "), args...)
 	if s.adultPolicy != nil {
 		q = q.Where(s.adultPolicy.ContentCondition())
 	}

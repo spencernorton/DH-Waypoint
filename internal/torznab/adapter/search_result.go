@@ -20,12 +20,20 @@ func torrentContentResultToTorznabResult(
 		entries = append(entries, torrentContentResultItemToTorznabResultItem(item, authoritativeZeroOnly))
 	}
 
+	total := res.TotalCount
+	if total == 0 && len(entries) > 0 {
+		total = req.Offset.Uint + uint(len(entries))
+		if res.HasNextPage {
+			total++
+		}
+	}
+
 	return torznab.SearchResult{
 		Channel: torznab.SearchResultChannel{
 			Title: req.Profile.Title,
 			Response: torznab.SearchResultResponse{
 				Offset: req.Offset.Uint,
-				// Total:  res.TotalCount,
+				Total:  total,
 			},
 			Items: entries,
 		},
@@ -180,10 +188,21 @@ func torrentContentResultItemToTorznabResultItem(item search.TorrentContentResul
 		})
 	}
 
-	if len(item.Torrent.Files) > 0 {
+	filesCount := 0
+	switch {
+	case item.FilesCount.Valid && item.FilesCount.Uint > 0:
+		filesCount = int(item.FilesCount.Uint)
+	case item.Torrent.FilesCount.Valid && item.Torrent.FilesCount.Uint > 0:
+		filesCount = int(item.Torrent.FilesCount.Uint)
+	case len(item.Torrent.Files) > 0:
+		filesCount = len(item.Torrent.Files)
+	case item.Torrent.FilesStatus == model.FilesStatusSingle:
+		filesCount = 1
+	}
+	if filesCount > 0 {
 		attrs = append(attrs, torznab.SearchResultItemTorznabAttr{
 			AttrName:  torznab.AttrFiles,
-			AttrValue: strconv.Itoa(len(item.Torrent.Files)),
+			AttrValue: strconv.Itoa(filesCount),
 		})
 	}
 

@@ -114,7 +114,7 @@ func (s *Scraper) ScrapeBatch(ctx context.Context, hashes [][]byte) (map[string]
 		cancel()
 	}
 
-	for _, url := range s.cfg.TrackerUrls {
+	for trackerIdx, url := range s.cfg.TrackerUrls {
 		select {
 		case <-ctx.Done():
 			wg.Wait()
@@ -125,11 +125,15 @@ func (s *Scraper) ScrapeBatch(ctx context.Context, hashes [][]byte) (map[string]
 		case sem <- struct{}{}:
 		}
 		wg.Add(1)
-		go func(trackerURL string) {
+		go func(idx int, trackerURL string) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			s.scrapeOneTracker(ctx, trackerURL, ihs, hashes, out, &mu, packetAdmission{fail: reportAdmissionError, withheld: withheld})
-		}(url)
+			s.scrapeOneTracker(ctx, trackerURL, ihs, hashes, out, &mu, packetAdmission{
+				fail:        reportAdmissionError,
+				withheld:    withheld,
+				chunkOffset: idx,
+			})
+		}(trackerIdx, url)
 	}
 	wg.Wait()
 	if admissionErr == nil {
@@ -158,6 +162,29 @@ func (s *Scraper) scrapeOneTracker(
 			closeClient()
 		}
 	}()
+	// Initialize the UDP tracker client (DNS lookup + socket bind) before
+	// acquiring per-packet admission locks so dead or slow tracker setup never
+	// holds PostgreSQL row/table locks.
+	if s.scrape == nil {
+		cl, err := tracker.NewClient(trackerURL, tracker.NewClientOpts{})
+		if err != nil {
+			s.trackerResult(trackerURL, "error")
+			s.logger.Debugw("seeds: tracker client init failed", "tracker", trackerURL, "err", err)
+			return
+		}
+		closeClient = func() { _ = cl.Close() }
+		connected = func(ctx context.Context, chunk []infohash.T) ([]scrapeItem, error) {
+			resp, err := cl.Scrape(ctx, chunk)
+			if err != nil {
+				return nil, err
+			}
+			items := make([]scrapeItem, len(resp))
+			for i := range resp {
+				items[i] = scrapeItem{Seeders: resp[i].Seeders, Leechers: resp[i].Leechers, Completed: resp[i].Completed}
+			}
+			return items, nil
+		}
+	}
 	// scrape wraps the anacrolix client with our per-packet timeout and adapts
 	// its result into the network-free scrapeItem slice, so the chunk loop's
 	// retry / continue / abandon policy lives in the testable
@@ -168,24 +195,6 @@ func (s *Scraper) scrapeOneTracker(
 		}
 		cctx, cancel := context.WithTimeout(ctx, s.cfg.ScrapeTimeout)
 		defer cancel()
-		if connected == nil {
-			cl, err := tracker.NewClient(trackerURL, tracker.NewClientOpts{})
-			if err != nil {
-				return nil, err
-			}
-			closeClient = func() { _ = cl.Close() }
-			connected = func(ctx context.Context, chunk []infohash.T) ([]scrapeItem, error) {
-				resp, err := cl.Scrape(ctx, chunk)
-				if err != nil {
-					return nil, err
-				}
-				items := make([]scrapeItem, len(resp))
-				for i := range resp {
-					items[i] = scrapeItem{Seeders: resp[i].Seeders, Leechers: resp[i].Leechers, Completed: resp[i].Completed}
-				}
-				return items, nil
-			}
-		}
 		return connected(cctx, chunk)
 	}
 	s.scrapeTrackerChunks(ctx, trackerURL, ihs, hashes, out, mu, scrape, admission)
@@ -194,8 +203,9 @@ func (s *Scraper) scrapeOneTracker(
 // A denial is monotonic within one batch. A delayed earlier tracker response
 // cannot recreate a withheld hash; a later ordinary batch may recheck it.
 type packetAdmission struct {
-	fail     func(error)
-	withheld map[string]bool
+	fail        func(error)
+	withheld    map[string]bool
+	chunkOffset int
 }
 
 const (
@@ -253,12 +263,22 @@ func (s *Scraper) scrapeTrackerChunks(
 		limit = 70
 	}
 
+	if len(ihs) == 0 {
+		return
+	}
+	numChunks := (len(ihs) + limit - 1) / limit
+	offset := 0
+	if admission.chunkOffset > 0 {
+		offset = admission.chunkOffset % numChunks
+	}
 	scrapedAny := false
 	consecutiveFails := 0
-	for start := 0; start < len(ihs); start += limit {
+	for step := 0; step < numChunks; step++ {
 		if ctx.Err() != nil {
 			return
 		}
+		chunkIdx := (step + offset) % numChunks
+		start := chunkIdx * limit
 		end := min(start+limit, len(ihs))
 
 		var items []scrapeItem
@@ -364,7 +384,7 @@ func (s *Scraper) scrapeTrackerChunks(
 		mu.Unlock()
 
 		// Pace successive packets to the same tracker.
-		if end < len(ihs) && s.cfg.PerTrackerInterval > 0 {
+		if step+1 < numChunks && s.cfg.PerTrackerInterval > 0 {
 			select {
 			case <-ctx.Done():
 				return
