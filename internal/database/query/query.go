@@ -130,12 +130,16 @@ type genericQuery[T interface{}] struct {
 }
 
 func (gq *genericQuery[_]) newSubQuery(ctx context.Context, withOrder bool) (SubQuery, error) {
+	return gq.newSubQueryWithBuilder(ctx, gq.builder, withOrder)
+}
+
+func (gq *genericQuery[_]) newSubQueryWithBuilder(ctx context.Context, builder OptionBuilder, withOrder bool) (SubQuery, error) {
 	sq := gq.factory(ctx, gq.daoQ)
-	if selectErr := gq.builder.applySelect(sq.UnderlyingDB(), withOrder); selectErr != nil {
+	if selectErr := builder.applySelect(sq.UnderlyingDB(), withOrder); selectErr != nil {
 		return sq, selectErr
 	}
 
-	if preErr := gq.builder.applyPre(sq, withOrder); preErr != nil {
+	if preErr := builder.applyPre(sq, withOrder); preErr != nil {
 		return sq, preErr
 	}
 
@@ -148,8 +152,8 @@ func (gq *genericQuery[_]) addError(err error) {
 	gq.errs = append(gq.errs, err)
 }
 
-func (gq *genericQuery[_]) checkExists(ctx context.Context) (bool, error) {
-	sq, sqErr := gq.newSubQuery(ctx, false)
+func (gq *genericQuery[_]) checkExists(ctx context.Context, builder OptionBuilder) (bool, error) {
+	sq, sqErr := gq.newSubQueryWithBuilder(ctx, builder, false)
 	if sqErr != nil {
 		return false, sqErr
 	}
@@ -206,10 +210,12 @@ func (gq *genericQuery[T]) doItems() {
 			gq.doItemsSerial()
 			return
 		}
-		if items, handled, err := gq.bm25CandidatePrefixItems(); err != nil {
-			gq.addError(err)
+		items, handled, fallbackTsquery, prefixErr := gq.bm25CandidatePrefixItems()
+		if prefixErr != nil {
+			gq.addError(prefixErr)
 			return
-		} else if handled {
+		}
+		if handled {
 			if gq.builder.hasNextPage(len(items)) {
 				gq.result.HasNextPage = true
 				items = items[:len(items)-1]
@@ -223,7 +229,14 @@ func (gq *genericQuery[T]) doItems() {
 			gq.result.Items = items
 			return
 		}
-		recordSearchQuery(gq.builder, "direct")
+		itemBuilder := gq.builder
+		if fallbackTsquery {
+			if ob, ok := itemBuilder.(optionBuilder); ok {
+				ob.bm25Enabled = false
+				itemBuilder = ob
+			}
+		}
+		recordSearchQuery(itemBuilder, "direct")
 
 		var finalItems []T
 
@@ -249,13 +262,13 @@ func (gq *genericQuery[T]) doItems() {
 		}
 		// start the default strategy
 		go func() {
-			sq, sqErr := gq.newSubQuery(raceCtx, true)
+			sq, sqErr := gq.newSubQueryWithBuilder(raceCtx, itemBuilder, true)
 			if sqErr != nil {
 				done(nil, sqErr)
 				return
 			}
 
-			if postErr := gq.builder.applyPost(sq.UnderlyingDB()); postErr != nil {
+			if postErr := itemBuilder.applyPost(sq.UnderlyingDB()); postErr != nil {
 				done(nil, postErr)
 				return
 			}
@@ -269,12 +282,12 @@ func (gq *genericQuery[T]) doItems() {
 			done(items, nil)
 		}()
 
-		if gq.builder.shouldTryCteStrategy() {
+		if itemBuilder.shouldTryCteStrategy() {
 			// start the CTE strategy
 			go func() {
 				stoppingPoint := 50_000
 
-				sqCte, sqCteErr := gq.newSubQuery(raceCtx, true)
+				sqCte, sqCteErr := gq.newSubQueryWithBuilder(raceCtx, itemBuilder, true)
 				if sqCteErr != nil {
 					done(nil, sqCteErr)
 					return
@@ -286,8 +299,8 @@ func (gq *genericQuery[T]) doItems() {
 				// A fresh outer statement must not replay table-specific scopes
 				// against the CTE rather than the underlying table.
 				cteSub := "(WITH cte AS MATERIALIZED (" + sql + "), cte_count AS MATERIALIZED (SELECT COUNT(*) AS total_count FROM cte) SELECT * FROM cte WHERE (SELECT MAX(total_count) FROM cte_count) < " + strconv.Itoa(stoppingPoint) + ") AS cte"
-				cte := gq.factory(raceCtx, gq.daoQ).UnderlyingDB().Session(&gorm.Session{NewDB: true}).Table(cteSub)
-				if postErr := gq.builder.applyPost(cte); postErr != nil {
+				cte := freshDB(gq.factory(raceCtx, gq.daoQ).UnderlyingDB(), raceCtx).Table(cteSub)
+				if postErr := itemBuilder.applyPost(cte); postErr != nil {
 					done(nil, postErr)
 					return
 				}
@@ -301,7 +314,7 @@ func (gq *genericQuery[T]) doItems() {
 				if len(items) == 0 {
 					// if no items are returned, we need a further check
 					// to distinguish between stopping point reached and no matching items
-					exists, existsErr := gq.checkExists(raceCtx)
+					exists, existsErr := gq.checkExists(raceCtx, itemBuilder)
 					if existsErr != nil {
 						done(nil, existsErr)
 						return
@@ -585,6 +598,7 @@ type optionBuilder struct {
 	tsquery             string
 	rawQueryString      string
 	bm25Enabled         bool
+	skipRelevanceCap    bool
 	bm25PrefixScoreExpr string
 	scopes              []Scope
 	selections          []clause.Expr
@@ -695,6 +709,11 @@ func (b optionBuilder) QueryString(str string) OptionBuilder {
 // ungrouped torrent_contents searches can use BM25: grouped mode has its own
 // derived-table text path, and pdb.score must never be emitted against an
 // outer alias.
+// BM25Enabled reports whether ParadeDB BM25 query routing is enabled on this builder.
+func (b optionBuilder) BM25Enabled() bool {
+	return b.bm25Enabled
+}
+
 func (b optionBuilder) bm25Terms() ([]string, bool) {
 	if !b.bm25Enabled || b.tableName != "torrent_contents" || b.grouping != nil || b.tsquery == "" {
 		return nil, false
@@ -916,7 +935,7 @@ func (b optionBuilder) applyPre(sq SubQuery, withOrderJoins bool) error {
 			sq.UnderlyingDB().Where(b.tableName+".search_text &&& ?", strings.Join(terms, " "))
 		} else {
 			sq.UnderlyingDB().Where(b.tableName+".tsv @@ ?::tsquery", b.tsquery)
-			if b.tableName == "torrent_contents" && b.grouping == nil {
+			if !b.skipRelevanceCap && b.tableName == "torrent_contents" && b.grouping == nil {
 				for _, ob := range b.orderBy {
 					if ob.Column.Name == QueryStringRankField {
 						sq.UnderlyingDB().Where(

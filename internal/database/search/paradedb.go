@@ -282,11 +282,10 @@ func EnableParadeDBBM25(ctx context.Context, db *gorm.DB) error {
 			return fmt.Errorf("enable paradedb bm25: create torrent_contents_ep_tokens: %w", err)
 		}
 	}
-	if err := db.WithContext(ctx).Exec(`ALTER TABLE torrent_contents ADD COLUMN IF NOT EXISTS search_text text GENERATED ALWAYS AS (torrent_contents_tsv_text(tsv)) STORED`).Error; err != nil {
-		return fmt.Errorf("enable paradedb bm25: add search_text column: %w", err)
-	}
-	if err := db.WithContext(ctx).Exec(`ALTER TABLE torrent_contents ADD COLUMN IF NOT EXISTS ep_text text GENERATED ALWAYS AS (torrent_contents_ep_tokens(episodes)) STORED`).Error; err != nil {
-		return fmt.Errorf("enable paradedb bm25: add ep_text column: %w", err)
+	if err := db.WithContext(ctx).Exec(`ALTER TABLE torrent_contents
+		ADD COLUMN IF NOT EXISTS search_text text GENERATED ALWAYS AS (torrent_contents_tsv_text(tsv)) STORED,
+		ADD COLUMN IF NOT EXISTS ep_text text GENERATED ALWAYS AS (torrent_contents_ep_tokens(episodes)) STORED`).Error; err != nil {
+		return fmt.Errorf("enable paradedb bm25: add generated columns: %w", err)
 	}
 	if err := createBM25Index(ctx, db); err != nil {
 		return err

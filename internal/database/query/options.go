@@ -102,6 +102,22 @@ func WithBM25Search(enabled bool) Option {
 	}
 }
 
+// WithoutRelevanceCap disables the newest-1000 ts_rank_cd candidate cap on
+// stock tsquery relevance queries. Callers that already constrain visibility
+// through a selective positive gate (such as required payload verification)
+// use this so PostgreSQL drives directly from the approved set without
+// truncating older approved matches.
+func WithoutRelevanceCap() Option {
+	return func(ctx OptionBuilder) (OptionBuilder, error) {
+		b, ok := ctx.(optionBuilder)
+		if !ok {
+			return ctx, nil
+		}
+		b.skipRelevanceCap = true
+		return b, nil
+	}
+}
+
 func Select(columns ...clause.Expr) Option {
 	return func(ctx OptionBuilder) (OptionBuilder, error) {
 		return ctx.Select(columns...), nil

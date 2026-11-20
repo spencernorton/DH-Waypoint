@@ -109,3 +109,25 @@ func TestQueryBudgetDoesNotPoisonNextStreamingRequest(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "payload", string(body))
 }
+
+func TestQueryBudgetGetHonorsFullBudgetWithoutEarlyReadCancel(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	e := gin.New()
+	e.GET("/slow", QueryBudget(400*time.Millisecond), func(c *gin.Context) {
+		select {
+		case <-time.After(120 * time.Millisecond):
+			c.String(http.StatusOK, "completed")
+		case <-c.Request.Context().Done():
+			c.String(http.StatusGatewayTimeout, c.Request.Context().Err().Error())
+		}
+	})
+	s := httptest.NewServer(e)
+	defer s.Close()
+	resp, err := http.Get(s.URL + "/slow")
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.Equal(t, "completed", string(body))
+}

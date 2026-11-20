@@ -18,18 +18,15 @@ func QueryBudget(timeout time.Duration) gin.HandlerFunc {
 		c.Request = c.Request.WithContext(ctx)
 		deadline, _ := ctx.Deadline()
 		controller := http.NewResponseController(c.Writer)
-		_ = controller.SetReadDeadline(minTime(deadline, time.Now().Add(10*time.Second)))
+		// Keep the read deadline aligned with the request's QueryBudget: a
+		// shorter read deadline triggers net/http's backgroundRead disconnect
+		// probe early on bodyless GET requests and cancels c.Request.Context()
+		// before the configured QueryBudget expires.
+		_ = controller.SetReadDeadline(deadline)
 		_ = controller.SetWriteDeadline(deadline.Add(5 * time.Second))
 		// net/http still finalizes unread bodies and buffered responses after
 		// the handler returns. Keep deadlines through that work; the server
 		// resets them before reusing the connection for another request.
 		c.Next()
 	}
-}
-
-func minTime(a, b time.Time) time.Time {
-	if a.Before(b) {
-		return a
-	}
-	return b
 }

@@ -104,9 +104,16 @@ your checkout when their Compose profile is on; they have no published images.
 release: [`CHANGELOG.md`](CHANGELOG.md) lists what is unreleased, including
 BitTorrent v2 indexing, the REST v2 catalogue and the external LLM processor.
 
+## Upgrading and optional ParadeDB (PG 18) search
+
+Existing `postgres:16-alpine` and stock `postgres:18` installs **do not need a database migration** to upgrade DH-Waypoint — schema migrations run in place on startup and search continues on stock `tsquery` (`SEARCH_BM25_MODE=auto`).
+
+Migrating to [ParadeDB (`paradedb/paradedb:0.26.6-pg18`)](docs/paradedb-bm25.md) is **100% opt-in**. Operators choose it for native BM25 Top-K relevance ranking and to reclaim multi-gigabyte storage bloat after online file-bundle compaction (real production benchmark: `100.0 GiB` compacted PG 16 → `66.7 GiB` PG 18 *including* the BM25 index). Because PG 16 Alpine (`musl`) cannot be upgraded in place to PG 18 (`glibc`), migrating uses a logical dump/restore into a fresh volume while leaving your original PG 16 volume untouched as a rollback copy — taking roughly **24 seconds** for ~130K torrents, **46 seconds** for ~345K torrents, or **~46 minutes** of data cutover (**~84 minutes** including BM25 index build) for a 15.8M-torrent catalogue. See the [ParadeDB BM25 & migration guide](docs/paradedb-bm25.md) for the full step-by-step walkthrough.
+
 ## Documentation
 
 - [Documentation index](docs/index.md): every guide in one place
+- [ParadeDB BM25 search & optional PG 16 → PG 18 migration](docs/paradedb-bm25.md): why to migrate, step-by-step cutover, rollback, and measured timings
 - [Quickstart](docs/quickstart.md) and [configuration](docs/configuration.md)
 - [API guide](docs/api-guide.md), with [Torznab](docs/reference/torznab-api.md), [GraphQL](docs/reference/graphql-api.md), [metrics](docs/reference/metrics.md) and [CLI](docs/reference/cli.md) references
 - [Evidence](docs/evidence.md): wiring the \*arrs and qBittorrent into labels, ranking and liveness

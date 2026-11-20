@@ -258,6 +258,15 @@ func (p *Policy) TorrentCondition(table string) clause.Expr {
 // enforces the complete evidence guard independently of client input.
 func (p *Policy) ExcludesAdult() bool { return p.excludeAdult }
 
+// RequiresPayloadEvidence reports whether the consumer policy restricts
+// visibility to torrents carrying active piece-bound payload verification.
+// Query planners use this signal to drive searches from the selective
+// processor_payload_reviews gate rather than scanning the un-gated catalogue
+// or capping relevance scoring to the newest unapproved rows.
+func (p *Policy) RequiresPayloadEvidence() bool {
+	return p != nil && p.requiredPayloadArtifact != ""
+}
+
 // ContentCondition leaves common metadata stored and hides only positive adult metadata.
 func (p *Policy) ContentCondition() clause.Expr {
 	if !p.excludeAdult {

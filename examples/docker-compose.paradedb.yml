@@ -13,7 +13,10 @@ services:
   postgres:
     image: paradedb/paradedb:0.26.6-pg18
     volumes:
-      - dh-waypoint-paradedb:/var/lib/postgresql/data
+      # PostgreSQL 18 images set PGDATA=/var/lib/postgresql/18/docker and declare
+      # VOLUME /var/lib/postgresql. Mount at /var/lib/postgresql so PG18 data
+      # persists in the named volume instead of an anonymous volume.
+      - dh-waypoint-paradedb:/var/lib/postgresql
     # Preserves the public file tuning flags, plus the ParadeDB preloads.
     # pg_cron must be included because the image init script creates the
     # pg_cron extension and fresh initdb fails with pg_search alone.
@@ -37,6 +40,8 @@ services:
       - autovacuum_naptime=30s
       - -c
       - shared_preload_libraries=pg_search,pg_cron
+      - -c
+      - paradedb.planner_warnings=Off
 
   dh-waypoint:
     environment:
