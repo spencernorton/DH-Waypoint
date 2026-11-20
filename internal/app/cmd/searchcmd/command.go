@@ -77,12 +77,19 @@ func New(p Params) (Result, error) {
 			{
 				Name:  "enable",
 				Usage: "Install pg_search, generated columns, and the BM25 index",
+				Flags: []cli.Flag{
+					&cli.BoolFlag{Name: "rebuild", Usage: "drop and recreate torrent_contents_bm25_idx to include newly supported filter fields"},
+				},
 				Action: func(ctx *cli.Context) error {
 					db, err := p.db(ctx)
 					if err != nil {
 						return cli.Exit(err.Error(), 1)
 					}
-					if err := search.EnableParadeDBBM25(ctx.Context, db); err != nil {
+					enableFn := search.EnableParadeDBBM25
+					if ctx.Bool("rebuild") {
+						enableFn = search.RebuildParadeDBBM25
+					}
+					if err := enableFn(ctx.Context, db); err != nil {
 						return cli.Exit(err.Error(), 1)
 					}
 					status, err := search.ParadeDBBM25Status(ctx.Context, db)

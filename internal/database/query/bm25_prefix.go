@@ -75,6 +75,10 @@ var (
 // torrent_contents_bm25_idx with no subqueries, joins, or SQL function calls
 // (such as octet_length(info_hash) = 20) that force ParadeDB heap_filter scans.
 func isBM25IndexedWhereSQL(renderedSQL string) bool {
+	return isBM25IndexedWhereSQLWithExtras(renderedSQL, nil)
+}
+
+func isBM25IndexedWhereSQLWithExtras(renderedSQL string, extras map[string]struct{}) bool {
 	stripped := bm25SQLSingleQuoted.ReplaceAllString(renderedSQL, "''")
 	upper := strings.ToUpper(stripped)
 	whereIdx := strings.Index(upper, " WHERE ")
@@ -99,7 +103,9 @@ func isBM25IndexedWhereSQL(renderedSQL string) bool {
 	}
 	for _, ident := range bm25SQLIdent.FindAllString(cleaned, -1) {
 		if _, ok := bm25AllowedIdents[ident]; !ok {
-			return false
+			if _, extraOK := extras[ident]; !extraOK {
+				return false
+			}
 		}
 	}
 	return true
@@ -109,7 +115,7 @@ func isBM25IndexedWhereSQL(renderedSQL string) bool {
 // predicates touch columns indexed by torrent_contents_bm25_idx. Inside GORM's
 // ToSQL callback, tx starts with clone=2, so Initialized: true is required for
 // mutating Scope callbacks (db.Where(...)) to record their predicates on tx.
-func filterBM25Step1Scopes(db *gorm.DB, ctx context.Context, tableName string, scopes []Scope) ([]Scope, error) {
+func filterBM25Step1Scopes(db *gorm.DB, ctx context.Context, tableName string, scopes []Scope, extras map[string]struct{}) ([]Scope, error) {
 	kept := make([]Scope, 0, len(scopes))
 	for _, sc := range scopes {
 		var scopeErr error
@@ -121,7 +127,7 @@ func filterBM25Step1Scopes(db *gorm.DB, ctx context.Context, tableName string, s
 		if scopeErr != nil {
 			return nil, scopeErr
 		}
-		if isBM25IndexedWhereSQL(probeSQL) {
+		if isBM25IndexedWhereSQLWithExtras(probeSQL, extras) {
 			kept = append(kept, sc)
 		}
 	}
@@ -293,7 +299,7 @@ func (gq *genericQuery[T]) bm25CandidatePrefixItems() ([]T, bool, bool, error) {
 	// non-indexed predicates (e.g. octet_length(info_hash)=20, video_codec,
 	// release_attributes, subqueries) that must stay in Step 2 so Step 1 never
 	// degrades into ParadeDB heap_filter scans.
-	step1Scopes, err := filterBM25Step1Scopes(gq.daoQ.TorrentContent.UnderlyingDB(), gq.ctx, b.tableName, b.scopes)
+	step1Scopes, err := filterBM25Step1Scopes(gq.daoQ.TorrentContent.UnderlyingDB(), gq.ctx, b.tableName, b.scopes, b.bm25ExtraCols)
 	if err != nil {
 		return nil, false, false, err
 	}
@@ -303,7 +309,7 @@ func (gq *genericQuery[T]) bm25CandidatePrefixItems() ([]T, bool, bool, error) {
 		facetSQL := freshDB(gq.daoQ.TorrentContent.UnderlyingDB(), gq.ctx).Table(b.tableName).ToSQL(func(tx *gorm.DB) *gorm.DB {
 			return tx.Where(raw.Query, raw.Args...).Find(&[]interface{}{})
 		})
-		pushFacetsInStep1 = isBM25IndexedWhereSQL(facetSQL)
+		pushFacetsInStep1 = isBM25IndexedWhereSQLWithExtras(facetSQL, b.bm25ExtraCols)
 	}
 
 	hasNonIndexedScope := len(step1Scopes) < len(b.scopes)

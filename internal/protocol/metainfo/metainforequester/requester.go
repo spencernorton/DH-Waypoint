@@ -9,12 +9,15 @@ import (
 	"io"
 	"net"
 	"net/netip"
+	"syscall"
 	"time"
 
 	"github.com/anacrolix/torrent/bencode"
+	"github.com/anacrolix/torrent/mse"
 	"github.com/anacrolix/torrent/peer_protocol"
 	"github.com/spencernorton/DH-Waypoint/internal/protocol"
 	"github.com/spencernorton/DH-Waypoint/internal/protocol/metainfo"
+	"github.com/spencernorton/DH-Waypoint/internal/telemetry/dualemit"
 )
 
 type Requester interface {
@@ -22,9 +25,11 @@ type Requester interface {
 }
 
 type requester struct {
-	clientID protocol.ID
-	timeout  time.Duration
-	dialer   *net.Dialer
+	clientID       protocol.ID
+	timeout        time.Duration
+	dialer         *net.Dialer
+	enableMSE      bool
+	transportTotal *dualemit.CounterVec
 }
 
 type ExtensionBit uint
@@ -100,16 +105,80 @@ func RequestInfoHash(ctx context.Context, r Requester, hash protocol.InfoHash, a
 	return res, err
 }
 
+const minMSEFallbackRemaining = 250 * time.Millisecond
+
+func (r requester) observeTransport(transport, outcome string) {
+	if r.transportTotal != nil {
+		r.transportTotal.WithLabelValues(transport, outcome).Inc()
+	}
+}
+
+func shouldFallbackToMSE(ctx context.Context, err error) bool {
+	if err == nil || ctx.Err() != nil {
+		return false
+	}
+	if errors.Is(err, metainfo.ErrWrongInfoHash) {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return false
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return false
+	}
+	if dl, ok := ctx.Deadline(); ok && time.Until(dl) < minMSEFallbackRemaining {
+		return false
+	}
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) ||
+		errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.EPIPE) {
+		return true
+	}
+	return true
+}
+
 func (r requester) Request(ctx context.Context, infoHash protocol.ID, addr netip.AddrPort) (Response, error) {
 	timeoutCtx, cancel := context.WithTimeout(ctx, r.timeout)
 	defer cancel()
 
 	conn, connErr := r.connect(timeoutCtx, addr)
 	if connErr != nil {
+		r.observeTransport("tcp_plain", "error")
 		return Response{}, connErr
 	}
 
-	return FetchFromStream(timeoutCtx, conn, conn, infoHash, r.clientID)
+	res, plainErr := FetchFromStream(timeoutCtx, conn, conn, infoHash, r.clientID)
+	if plainErr == nil {
+		r.observeTransport("tcp_plain", "ok")
+		return res, nil
+	}
+	r.observeTransport("tcp_plain", "error")
+
+	if !r.enableMSE || !shouldFallbackToMSE(timeoutCtx, plainErr) {
+		return Response{}, plainErr
+	}
+
+	mseConn, mseDialErr := r.connect(timeoutCtx, addr)
+	if mseDialErr != nil {
+		r.observeTransport("tcp_mse", "error")
+		return Response{}, plainErr
+	}
+	stopClose := context.AfterFunc(timeoutCtx, func() { _ = mseConn.Close() })
+	encRW, _, mseErr := mse.InitiateHandshake(mseConn, infoHash[:], nil, mse.AllSupportedCrypto)
+	stopClose()
+	if mseErr != nil {
+		_ = mseConn.Close()
+		r.observeTransport("tcp_mse", "error")
+		return Response{}, plainErr
+	}
+
+	mseRes, fetchErr := FetchFromStream(timeoutCtx, mseConn, encRW, infoHash, r.clientID)
+	if fetchErr != nil {
+		r.observeTransport("tcp_mse", "error")
+		return Response{}, fetchErr
+	}
+	r.observeTransport("tcp_mse", "ok")
+	return mseRes, nil
 }
 
 // FetchFromStream runs the BitTorrent handshake, BEP 10 extension handshake,

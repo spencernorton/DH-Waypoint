@@ -6,5 +6,6 @@ const (
 	FunctionMovie  = "movie"
 	FunctionTV     = "tvsearch"
 	FunctionMusic  = "music"
+	FunctionAudio  = "audio"
 	FunctionBook   = "book"
 )

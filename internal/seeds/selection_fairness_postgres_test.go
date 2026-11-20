@@ -158,3 +158,79 @@ func TestPostgresSelectStaleRejectsNegativeBatchAndSkipsFresh(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, selected)
 }
+
+func TestPostgresSelectStaleKeysetCursorSkipsStuckExcludedAndPrioritizesPayloadApproved(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	pool := seedsTestPool(t)
+	_, err := pool.Exec(ctx, `create table if not exists processor_payload_reviews (
+		info_hash bytea primary key,
+		approved boolean not null,
+		expires_at timestamptz not null
+	)`)
+	require.NoError(t, err)
+
+	store := NewStore(lazy.New(func() (*pgxpool.Pool, error) { return pool, nil }))
+	makeHash := func(id uint32) []byte {
+		h := make([]byte, 20)
+		binary.BigEndian.PutUint32(h[16:], id)
+		return h
+	}
+
+	// Insert 10 permanently excluded private rows at the very oldest timestamp,
+	// plus 6 public stale rows after them, plus 1 payload-approved stale row
+	// with a much newer hash ID that would normally wait behind the others.
+	for i := uint32(1); i <= 10; i++ {
+		h := makeHash(i)
+		_, err = pool.Exec(ctx, `insert into torrents(info_hash,name,private) values($1,'Private.Stuck',true)`, h)
+		require.NoError(t, err)
+		_, err = pool.Exec(ctx, `insert into torrent_tracker_seeds(info_hash,checked_at) values($1,now()-interval '720 hours')`, h)
+		require.NoError(t, err)
+	}
+	for i := uint32(20); i < 26; i++ {
+		h := makeHash(i)
+		_, err = pool.Exec(ctx, `insert into torrents(info_hash,name,private) values($1,'Public.Stale',false)`, h)
+		require.NoError(t, err)
+		_, err = pool.Exec(ctx, `insert into torrent_tracker_seeds(info_hash,checked_at) values($1,now()-interval '48 hours' + make_interval(mins => $2))`, h, int(i))
+		require.NoError(t, err)
+	}
+	prioHash := makeHash(9999)
+	_, err = pool.Exec(ctx, `insert into torrents(info_hash,name,private) values($1,'Approved.Priority.Movie',false)`, prioHash)
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `insert into torrent_tracker_seeds(info_hash,checked_at) values($1,now()-interval '30 hours')`, prioHash)
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `insert into processor_payload_reviews(info_hash,approved,expires_at) values($1,true,now()+interval '7 days')`, prioHash)
+	require.NoError(t, err)
+
+	// Cycle 1: limit=4 must include prioHash first AND advance recheckCursor.
+	batch1, err := store.SelectStale(ctx, 24*time.Hour, 4)
+	require.NoError(t, err)
+	require.Len(t, batch1, 4)
+	foundPrio := false
+	seen := map[string]bool{}
+	for _, h := range batch1 {
+		if string(h) == string(prioHash) {
+			foundPrio = true
+		}
+		seen[string(h)] = true
+	}
+	require.True(t, foundPrio, "payload-approved stale torrent must be prioritized in batch1")
+	// Persist prioHash as fresh so cycle 2 advances through the remaining stale rows via keyset cursor.
+	_, _, err = store.Persist(ctx, [][]byte{prioHash}, map[string]*ScrapeOutcome{
+		string(prioHash): {TrackerKnown: true, Seeders: 5},
+	})
+	require.NoError(t, err)
+
+	// Cycle 2 (without persisting the first 3 public stale rows): keyset cursor
+	// must advance to the remaining 3 distinct stale rows before wrapping.
+	batch2, err := store.SelectStale(ctx, 24*time.Hour, 4)
+	require.NoError(t, err)
+	require.Len(t, batch2, 4)
+	newInBatch2 := 0
+	for _, h := range batch2 {
+		if !seen[string(h)] {
+			newInBatch2++
+		}
+	}
+	require.Equal(t, 3, newInBatch2, "keyset cursor must advance to the 3 unseen tail stale rows before wrapping")
+}

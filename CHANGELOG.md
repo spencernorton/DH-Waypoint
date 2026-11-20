@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+## 5.14.0 — 2026-11-20
+
+### Added
+
+- **Covering serving-gate and match-rate indexes (migration `00082`, `CONCURRENTLY`).** Adds four additive partial/covering indexes (`processor_payload_reviews_serving_idx`, `processor_publication_sources_hash_rev_idx`, `processor_publication_reviews_serving_idx`, and `torrent_contents_type_created_content_idx`) so payload/publication gate checks run index-only without random heap lookups and 30-day movie/TV match-rate telemetry stops scanning the full `torrent_contents` table.
+- **Two-stage payload-gated candidate prefix (`internal/database/query/payload_prefix.go`).** Accelerates payload-gated ungrouped browse, RSS sync (`t=tvsearch&limit=100`), and text queries inside a single `REPEATABLE READ` snapshot: Step 1 selects ordered candidate IDs from the selective positive payload gate plus client filters, and Step 2 evaluates the complete authoritative `serving.Policy` verbatim strictly on those bounded candidate IDs (escalating `128 -> 512 -> 2048 -> 8192` when filtered), eliminating 30 s RSS sync timeouts without weakening any serving guard.
+- **Expanded ParadeDB BM25 filter pushdown and `--rebuild`.** Extends `EnableParadeDBBM25` to index `video_codec`, `video_source`, `is_anime`, `content_source`, and `content_id`, dynamically probes indexed columns from `pg_get_indexdef` so existing BM25 indexes remain compatible without forced rebuilds, and adds `dh-waypoint search bm25 enable --rebuild`.
+- **Full `*Arr` Torznab parameter parity (`t=audio`, `artist`, `album`, `author`, `title`, `year`, freeleech factors).** Enables `t=audio` (`audio-search`), advertises and handles `artist`/`album` (Lidarr), `author`/`title` (Readarr), and `year` across `movie`/`tvsearch`/`music`/`audio`/`book`, emits standard `downloadvolumefactor=0` and `uploadvolumefactor=1` attributes, and always emits `<newznab:response offset=... total=.../>` even on empty responses.
+- **Opt-in TCP MSE/PE protocol-encryption fallback for BEP-9 metadata fetches.** Adds `METAINFO_REQUESTER_ENABLE_MSE` (default `false`) to retry once over TCP MSE/PE within the single shared `RequestTimeout` budget when a connected peer rejects a plaintext BitTorrent handshake, retaining `refuseNonPublic` SSRF protection and exporting `dh_waypoint_metainfo_requester_transport_total{transport,outcome}`.
+
+### Changed
+
+- **Priority keyset scheduling in `seeds.SelectStale`.** Tracks per-partition keyset cursors (with automatic wrap-around) across cycles so repeated scrapes skip permanently excluded private/adult rows and already-scraped prefixes instead of re-scanning from the start of each index, and reserves up to 25% of multi-item batches for active payload-verified torrents so user-facing releases keep fresh tracker seed/leech counts ahead of bulk backlogs.
+- **Architecture and Torznab documentation updates.** Updates `docs/architecture.md` to cover opt-in ParadeDB PG 18 BM25 and `torrent_file_bundles` compact file storage, and updates `docs/reference/torznab-api.md` for `t=audio`, structured `*arr` parameters, and freeleech attributes.
+
 ## 5.13.2 — 2026-11-20
 
 ### Fixed

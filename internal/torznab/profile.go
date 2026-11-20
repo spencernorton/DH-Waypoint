@@ -65,6 +65,7 @@ func (p Profile) Caps() Caps {
 					ParamTVDBID,
 					ParamSeason,
 					ParamEpisode,
+					ParamYear,
 				}, ","),
 			},
 			MovieSearch: CapsSearch{
@@ -73,18 +74,35 @@ func (p Profile) Caps() Caps {
 					ParamQuery,
 					ParamIMDBID,
 					ParamTMDBID,
+					ParamYear,
 				}, ","),
 			},
 			MusicSearch: CapsSearch{
-				Available:       "yes",
-				SupportedParams: ParamQuery,
+				Available: "yes",
+				SupportedParams: strings.Join([]string{
+					ParamQuery,
+					ParamArtist,
+					ParamAlbum,
+					ParamYear,
+				}, ","),
 			},
 			AudioSearch: CapsSearch{
-				Available: "no",
+				Available: "yes",
+				SupportedParams: strings.Join([]string{
+					ParamQuery,
+					ParamArtist,
+					ParamAlbum,
+					ParamYear,
+				}, ","),
 			},
 			BookSearch: CapsSearch{
-				Available:       "yes",
-				SupportedParams: ParamQuery,
+				Available: "yes",
+				SupportedParams: strings.Join([]string{
+					ParamQuery,
+					ParamAuthor,
+					ParamTitle,
+					ParamYear,
+				}, ","),
 			},
 		},
 		Categories: CapsCategories{

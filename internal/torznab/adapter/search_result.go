@@ -131,6 +131,19 @@ func torrentContentResultItemToTorznabResultItem(item search.TorrentContentResul
 		AttrValue: item.PublishedAt.Format(torznab.RssDateDefaultFormat),
 	})
 
+	// DHT / public magnet releases carry zero download ratio cost; emit
+	// standard Torznab freeleech factors so *arr clients never penalize grabs.
+	attrs = append(attrs,
+		torznab.SearchResultItemTorznabAttr{
+			AttrName:  torznab.AttrDownloadVolumeFactor,
+			AttrValue: "0",
+		},
+		torznab.SearchResultItemTorznabAttr{
+			AttrName:  torznab.AttrUploadVolumeFactor,
+			AttrValue: "1",
+		},
+	)
+
 	seeders := item.Torrent.Seeders()
 	leechers := item.Torrent.Leechers()
 

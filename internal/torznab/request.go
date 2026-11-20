@@ -17,6 +17,11 @@ type SearchRequest struct {
 	// AirDate is the daily-show form of an episode request: Torznab
 	// season=YYYY&ep=MM/DD. Zero when the request is not date-based.
 	AirDate  model.Date
+	Artist   string
+	Album    string
+	Author   string
+	Title    string
+	Year     model.NullInt
 	Attrs    []string
 	Extended bool
 	Limit    model.NullUint

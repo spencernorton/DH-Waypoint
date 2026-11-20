@@ -11,6 +11,7 @@ import (
 	"github.com/spencernorton/DH-Waypoint/internal/concurrency"
 	"github.com/spencernorton/DH-Waypoint/internal/protocol"
 	"github.com/spencernorton/DH-Waypoint/internal/protocol/metainfo/peerrep"
+	"github.com/spencernorton/DH-Waypoint/internal/telemetry/dualemit"
 	"go.uber.org/fx"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -32,6 +33,7 @@ type Result struct {
 	RequestErrorTotal     prometheus.Collector   `group:"prometheus_collectors"`
 	RequestErrorsByReason prometheus.Collector   `group:"prometheus_collectors"`
 	RequestConcurrency    prometheus.Collector   `group:"prometheus_collectors"`
+	RequestTransportTotal prometheus.Collector   `group:"prometheus_collectors"`
 	PeerRepCollectors   []prometheus.Collector `group:"prometheus_collectors,flatten"`
 }
 
@@ -55,10 +57,19 @@ func New(p Params) Result {
 		dialer.Control = refuseNonPublic
 	}
 
+	transportTotal := dualemit.NewCounterVec(prometheus.CounterOpts{
+		Namespace: namespace,
+		Subsystem: subsystem,
+		Name:      "transport_total",
+		Help:      "BEP-9 metadata fetch attempts partitioned by transport (tcp_plain, tcp_mse) and outcome (ok, error).",
+	}, []string{"transport", "outcome"})
+
 	collector := newPrometheusCollector(requester{
-		clientID: protocol.RandomPeerID(),
-		timeout:  p.Config.RequestTimeout,
-		dialer:   dialer,
+		clientID:       protocol.RandomPeerID(),
+		timeout:        p.Config.RequestTimeout,
+		dialer:         dialer,
+		enableMSE:      p.Config.EnableMSE,
+		transportTotal: transportTotal,
 	})
 
 	// Per-peer reputation cache. Defaults: Enabled=false, so the
@@ -97,6 +108,7 @@ func New(p Params) Result {
 		RequestErrorTotal:     collector.requestErrorTotal,
 		RequestErrorsByReason: collector.requestErrorsByReason,
 		RequestConcurrency:    collector.requestConcurrency,
+		RequestTransportTotal: transportTotal,
 		PeerRepCollectors:   peerRepMet.collectors(),
 	}
 }

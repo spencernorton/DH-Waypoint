@@ -278,7 +278,7 @@ func TestFilterBM25Step1Scopes(t *testing.T) {
 		func(db *gorm.DB) error { db.Where("torrents.extension = ?", "mkv"); return nil },
 		func(db *gorm.DB) error { db.Where("torrent_contents.content_type = ?", "movie"); return nil },
 	}
-	kept, err := filterBM25Step1Scopes(gdb, context.Background(), "torrent_contents", scopes)
+	kept, err := filterBM25Step1Scopes(gdb, context.Background(), "torrent_contents", scopes, nil)
 	if err != nil {
 		t.Fatalf("filterBM25Step1Scopes: %v", err)
 	}
@@ -301,5 +301,31 @@ func TestFilterBM25Step1Scopes(t *testing.T) {
 		if strings.Contains(sql, unwanted) {
 			t.Errorf("kept scopes SQL must not include %q in:\n%s", unwanted, sql)
 		}
+	}
+}
+
+func TestFilterBM25Step1ScopesWithExtras(t *testing.T) {
+	t.Parallel()
+
+	gdb := newDryRunDB(t)
+	scopes := []Scope{
+		func(db *gorm.DB) error { db.Where("torrent_contents.video_codec = ?", "x265"); return nil },
+		func(db *gorm.DB) error { db.Where("torrent_contents.is_anime = ?", true); return nil },
+		func(db *gorm.DB) error { db.Where("octet_length(torrent_contents.info_hash)=20"); return nil },
+	}
+	baseKept, err := filterBM25Step1Scopes(gdb, context.Background(), "torrent_contents", scopes, nil)
+	if err != nil {
+		t.Fatalf("filterBM25Step1Scopes(nil): %v", err)
+	}
+	if len(baseKept) != 0 {
+		t.Fatalf("expected 0 kept scopes without extra columns, got %d", len(baseKept))
+	}
+	extras := map[string]struct{}{"video_codec": {}, "is_anime": {}}
+	extraKept, err := filterBM25Step1Scopes(gdb, context.Background(), "torrent_contents", scopes, extras)
+	if err != nil {
+		t.Fatalf("filterBM25Step1Scopes(extras): %v", err)
+	}
+	if len(extraKept) != 2 {
+		t.Fatalf("expected 2 kept scopes with video_codec+is_anime extras, got %d", len(extraKept))
 	}
 }

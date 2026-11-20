@@ -118,6 +118,44 @@ func WithoutRelevanceCap() Option {
 	}
 }
 
+// WithBM25ExtraColumns advertises additional torrent_contents columns confirmed
+// present in the live torrent_contents_bm25_idx definition (such as
+// video_codec, video_source, is_anime, content_source, content_id) so Step 1
+// BM25 Top-K candidate selection can safely push down predicates on them.
+func WithBM25ExtraColumns(cols ...string) Option {
+	return func(ctx OptionBuilder) (OptionBuilder, error) {
+		b, ok := ctx.(optionBuilder)
+		if !ok || len(cols) == 0 {
+			return ctx, nil
+		}
+		extra := make(map[string]struct{}, len(cols))
+		for _, c := range cols {
+			if c != "" {
+				extra[c] = struct{}{}
+			}
+		}
+		b.bm25ExtraCols = extra
+		return b, nil
+	}
+}
+
+// WithPayloadGatePrefix enables two-stage REPEATABLE READ candidate-prefix
+// execution for payload-gated torrent_contents searches. Step 1 orders and
+// bounds candidate IDs using the selective positive payload gate plus client
+// filters; Step 2 evaluates the complete authoritative serving policy verbatim
+// strictly on those candidate IDs.
+func WithPayloadGatePrefix(cond clause.Expr) Option {
+	return func(ctx OptionBuilder) (OptionBuilder, error) {
+		b, ok := ctx.(optionBuilder)
+		if !ok || cond.SQL == "" {
+			return ctx, nil
+		}
+		c := cond
+		b.payloadGatePrefix = &c
+		return b, nil
+	}
+}
+
 func Select(columns ...clause.Expr) Option {
 	return func(ctx OptionBuilder) (OptionBuilder, error) {
 		return ctx.Select(columns...), nil

@@ -40,4 +40,6 @@ const (
 	AttrClaimedAudioFeatures = "claimedaudiofeatures"
 	AttrClaimedRevision      = "claimedrevision"
 	AttrClaimedEncoder       = "claimedencoder"
+	AttrDownloadVolumeFactor = "downloadvolumefactor"
+	AttrUploadVolumeFactor   = "uploadvolumefactor"
 )

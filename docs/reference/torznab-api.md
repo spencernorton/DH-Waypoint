@@ -37,7 +37,8 @@ The Torznab function is selected with the `t` query parameter.
 | `tvsearch` | TV episode/season search |
 | `movie` | Movie search |
 | `music` | Music album/artist search |
-| `book` | Book / audiobook search |
+| `audio` | Music and audiobook search |
+| `book` | Book / comic / audiobook search |
 
 ## Search parameters
 
@@ -46,10 +47,11 @@ Each function accepts a different parameter set.
 | Function | Common params | Identifier params |
 |---|---|---|
 | `search` | `q`, `cat`, `limit`, `offset` | `imdbid`, `tmdbid` |
-| `tvsearch` | `q`, `season`, `ep`, `cat`, `limit`, `offset` | `tvdbid`, `imdbid`, `tmdbid` |
-| `movie` | `q`, `cat`, `limit`, `offset` | `imdbid`, `tmdbid` |
-| `music` | `q`, `cat`, `limit`, `offset` | — |
-| `book` | `q`, `cat`, `limit`, `offset` | — |
+| `tvsearch` | `q`, `season`, `ep`, `year`, `cat`, `limit`, `offset` | `tvdbid`, `imdbid`, `tmdbid` |
+| `movie` | `q`, `year`, `cat`, `limit`, `offset` | `imdbid`, `tmdbid` |
+| `music` | `q`, `artist`, `album`, `year`, `cat`, `limit`, `offset` | — |
+| `audio` | `q`, `artist`, `album`, `year`, `cat`, `limit`, `offset` | — |
+| `book` | `q`, `author`, `title`, `year`, `cat`, `limit`, `offset` | — |
 
 Notes:
 
@@ -126,6 +128,8 @@ The attributes emitted per item (`internal/torznab/adapter/search_result.go`):
 | Attribute | Emitted |
 |---|---|
 | `infohash`, `magneturl`, `category`, `size`, `publishdate` | always; anime TV adds a second `category` of `5070` |
+| `downloadvolumefactor` | Always `0` (public/DHT freeleech release) |
+| `uploadvolumefactor` | Always `1` |
 | `files` | when file-count metadata is available (from `files_count`, single-file status, or loaded file rows) |
 | `seeders` | when known; a DHT-only zero is omitted while `TORZNAB_ZERO_SEEDERS_AUTHORITATIVE_ONLY` is `true` |
 | `seedscheckedat` | when a tracker scrape verified the counts (RFC 3339) |

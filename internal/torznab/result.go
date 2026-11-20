@@ -102,8 +102,8 @@ type SearchResultChannel struct {
 }
 
 type SearchResultResponse struct {
-	Offset uint `xml:"offset,attr,omitempty"`
-	Total  uint `xml:"total,attr,omitempty"`
+	Offset uint `xml:"offset,attr"`
+	Total  uint `xml:"total,attr"`
 }
 
 type SearchResultItem struct {
