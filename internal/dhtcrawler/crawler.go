@@ -34,6 +34,7 @@ type crawler struct {
 	metainfoRequester            metainforequester.Requester
 	banningChecker               banning.Checker
 	bootstrapNodes               []string
+	enableIPv6                   bool
 	reseedBootstrapNodesInterval time.Duration
 	getOldestNodesInterval       time.Duration
 	oldPeerThreshold             time.Duration

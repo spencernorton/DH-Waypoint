@@ -48,9 +48,14 @@ func New(p Params) Result {
 				return nil, err
 			}
 			c := collector
+			nodeIDv6 := kTable.Origin()
+			if v6, ok := kTable.(ktable.IPv6Table); ok {
+				nodeIDv6 = v6.Origin6()
+			}
 			c.responder = responderLimiter{
 				responder: responder{
 					nodeID:                   kTable.Origin(),
+					nodeIDv6:                 nodeIDv6,
 					kTable:                   kTable,
 					tokenSecret:              protocol.RandomNodeID().Bytes(),
 					sampleInfoHashesInterval: 10,

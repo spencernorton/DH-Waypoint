@@ -47,6 +47,15 @@ type Table interface {
 	BatchCommand(commands ...Command)
 }
 
+// IPv6Table exposes the separate BEP-32 IPv6 routing table maintained alongside
+// the IPv4 routing table. Kept as a separate interface so existing Table mocks
+// remain compatible while dual-stack callers query IPv6 neighbors directly.
+type IPv6Table interface {
+	Origin6() ID
+	GetClosestNodes6(id ID) []Node
+	SampleNodes6(n int) []Node
+}
+
 type GetHashOrClosestNodesResult struct {
 	Hash         Hash
 	ClosestNodes []Node
@@ -62,15 +71,36 @@ type SampleHashesAndNodesResult struct {
 type table struct {
 	mutex   sync.RWMutex
 	origin  ID
+	origin6 ID
 	nodesK  int
 	hashesK int
 	nodes   nodeKeyspace
+	nodes6  nodeKeyspace
 	hashes  hashKeyspace
 	addrs   *reverseMap
 }
 
 func (t *table) Origin() ID {
 	return t.origin
+}
+
+func (t *table) Origin6() ID {
+	return t.origin6
+}
+
+func (t *table) GetClosestNodes6(id ID) []Node {
+	t.mutex.RLock()
+	defer t.mutex.RUnlock()
+	return t.nodes6.getClosest(id)
+}
+
+func (t *table) SampleNodes6(n int) []Node {
+	t.mutex.RLock()
+	defer t.mutex.RUnlock()
+	if n <= 0 {
+		return nil
+	}
+	return t.nodes6.getRandom(n)
 }
 
 func (t *table) BatchCommand(commands ...Command) {
@@ -175,16 +205,16 @@ func (t *table) SnapshotNodeAddrs(limit int) []netip.AddrPort {
 		return nil
 	}
 
-	nodes := t.nodes.getRandom(limit)
-	addrs := make([]netip.AddrPort, 0, len(nodes))
-
-	for _, n := range nodes {
-		addr := n.Addr()
-		if !addr.IsValid() {
-			continue
+	nodes4 := t.nodes.getRandom(limit)
+	nodes6 := t.nodes6.getRandom(limit)
+	addrs := make([]netip.AddrPort, 0, min(limit, len(nodes4)+len(nodes6)))
+	for i := 0; len(addrs) < limit && (i < len(nodes4) || i < len(nodes6)); i++ {
+		if i < len(nodes4) && nodes4[i].Addr().IsValid() {
+			addrs = append(addrs, nodes4[i].Addr())
 		}
-		addrs = append(addrs, addr)
+		if len(addrs) < limit && i < len(nodes6) && nodes6[i].Addr().IsValid() {
+			addrs = append(addrs, nodes6[i].Addr())
+		}
 	}
-
 	return addrs
 }

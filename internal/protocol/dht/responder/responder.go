@@ -5,6 +5,7 @@ import (
 	"crypto/md5"
 	"encoding/hex"
 	"net/netip"
+	"slices"
 
 	"github.com/spencernorton/DH-Waypoint/internal/protocol"
 	"github.com/spencernorton/DH-Waypoint/internal/protocol/dht"
@@ -17,6 +18,7 @@ type Responder interface {
 
 type responder struct {
 	nodeID                   protocol.ID
+	nodeIDv6                 protocol.ID
 	kTable                   ktable.Table
 	tokenSecret              []byte
 	sampleInfoHashesInterval int64
@@ -46,6 +48,40 @@ var ErrTooManyRequests = dht.Error{
 	Msg:  "too many requests",
 }
 
+func (r responder) nodeIDFor(addr netip.Addr) protocol.ID {
+	if addr.Unmap().Is6() && r.nodeIDv6 != (protocol.ID{}) {
+		return r.nodeIDv6
+	}
+	return r.nodeID
+}
+
+// wantFamilies implements BEP 32 section 3: explicit want ("n4"/"n6") selects
+// the requested address families; an absent want list defaults to the family of
+// the incoming query source address.
+func wantFamilies(want []dht.Want, from netip.Addr) (wantV4, wantV6 bool) {
+	if len(want) == 0 {
+		if from.Unmap().Is6() {
+			return false, true
+		}
+		return true, false
+	}
+	return slices.Contains(want, dht.WantNodes), slices.Contains(want, dht.WantNodes6)
+}
+
+func (r responder) closestNodes6(id protocol.ID) []ktable.Node {
+	if v6, ok := r.kTable.(ktable.IPv6Table); ok {
+		return v6.GetClosestNodes6(id)
+	}
+	return nil
+}
+
+func (r responder) sampleNodes6(n int) []ktable.Node {
+	if v6, ok := r.kTable.(ktable.IPv6Table); ok {
+		return v6.SampleNodes6(n)
+	}
+	return nil
+}
+
 func (r responder) Respond(_ context.Context, msg dht.RecvMsg) (ret dht.Return, err error) {
 	args := msg.Msg.A
 	if args == nil {
@@ -53,7 +89,8 @@ func (r responder) Respond(_ context.Context, msg dht.RecvMsg) (ret dht.Return, 
 		return
 	}
 
-	ret.ID = r.nodeID
+	ret.ID = r.nodeIDFor(msg.From.Addr())
+	wantV4, wantV6 := wantFamilies(args.Want, msg.From.Addr())
 
 	switch msg.Msg.Q {
 	case dht.QPing:
@@ -63,8 +100,12 @@ func (r responder) Respond(_ context.Context, msg dht.RecvMsg) (ret dht.Return, 
 			return
 		}
 
-		closestNodes := r.kTable.GetClosestNodes(args.Target)
-		ret.Nodes = nodeInfosFromNodes(closestNodes...)
+		if wantV4 {
+			ret.Nodes = nodeInfosFromNodesForFamily(false, r.kTable.GetClosestNodes(args.Target)...)
+		}
+		if wantV6 {
+			ret.Nodes6 = nodeInfosFromNodesForFamily(true, r.closestNodes6(args.Target)...)
+		}
 	case dht.QGetPeers:
 		if args.InfoHash == [20]byte{} {
 			err = ErrMissingArguments
@@ -76,25 +117,39 @@ func (r responder) Respond(_ context.Context, msg dht.RecvMsg) (ret dht.Return, 
 
 		if result.Found {
 			hashPeers := result.Hash.Peers()
-			if len(hashPeers) > maxPeersPerReply {
-				hashPeers = hashPeers[:maxPeersPerReply]
-			}
-
-			values := make([]dht.NodeAddr, 0, len(hashPeers))
+			values := make([]dht.NodeAddr, 0, min(len(hashPeers), maxPeersPerReply))
 
 			for _, p := range hashPeers {
-				values = append(values, dht.NewNodeAddrFromAddrPort(p.Addr))
+				a := p.Addr.Addr().Unmap()
+				if (a.Is4() && !wantV4) || (a.Is6() && !wantV6) {
+					continue
+				}
+				values = append(values, dht.NewNodeAddrFromAddrPort(netip.AddrPortFrom(a, p.Addr.Port())))
+				if len(values) >= maxPeersPerReply {
+					break
+				}
 			}
 
-			ret.Values = values
-
-			// A hash whose peers have all expired answers like an unknown one.
-			if len(values) == 0 {
-				closestNodes = r.kTable.GetClosestNodes(args.InfoHash)
+			if len(values) > 0 {
+				ret.Values = values
+			} else {
+				// A hash whose matching-family peers have expired (or only exist in the
+				// other family) answers with closest nodes per BEP 5 / BEP 32.
+				if wantV4 {
+					closestNodes = r.kTable.GetClosestNodes(args.InfoHash)
+				}
 			}
 		}
 
-		ret.Nodes = nodeInfosFromNodes(closestNodes...)
+		if len(ret.Values) == 0 {
+			if wantV4 {
+				ret.Nodes = nodeInfosFromNodesForFamily(false, closestNodes...)
+			}
+			if wantV6 {
+				ret.Nodes6 = nodeInfosFromNodesForFamily(true, r.closestNodes6(args.InfoHash)...)
+			}
+		}
+
 		token := r.announceToken(args.InfoHash, args.ID, msg.From.Addr())
 		ret.Token = &token
 	case dht.QAnnouncePeer:
@@ -109,7 +164,7 @@ func (r responder) Respond(_ context.Context, msg dht.RecvMsg) (ret dht.Return, 
 		}
 
 		r.kTable.BatchCommand(ktable.PutHash{ID: args.InfoHash, Peers: []ktable.HashPeer{{
-			Addr: netip.AddrPortFrom(msg.From.Addr(), msg.AnnouncePort()),
+			Addr: netip.AddrPortFrom(msg.From.Addr().Unmap(), msg.AnnouncePort()),
 		}}})
 	case dht.QSampleInfohashes:
 		result := r.kTable.SampleHashesAndNodes()
@@ -120,7 +175,12 @@ func (r responder) Respond(_ context.Context, msg dht.RecvMsg) (ret dht.Return, 
 		}
 
 		ret.Samples = &samples
-		ret.Nodes = nodeInfosFromNodes(result.Nodes...)
+		if wantV4 {
+			ret.Nodes = nodeInfosFromNodesForFamily(false, result.Nodes...)
+		}
+		if wantV6 {
+			ret.Nodes6 = nodeInfosFromNodesForFamily(true, r.sampleNodes6(len(result.Nodes))...)
+		}
 		numInt64 := int64(result.TotalHashes)
 		ret.Num = &numInt64
 		ret.Interval = &r.sampleInfoHashesInterval
@@ -132,41 +192,40 @@ func (r responder) Respond(_ context.Context, msg dht.RecvMsg) (ret dht.Return, 
 	return
 }
 
-// announceToken returns the token for an announce_peer request.
-// A "token" key is included in the get_peers return value.
-// The token value is a required argument for a future announce_peer query.
-// The token value should be a short binary string.
-// The queried node must verify that the token was previously sent to the same IP address as the querying node.
-// Then the queried node should store the IP address of the querying node and the supplied port number
-// under the infohash in its store of peer contact information.
-// https://www.bittorrent.org/beps/bep_0005.html
 func (r responder) announceToken(infoHash protocol.ID, nodeID protocol.ID, nodeAddr netip.Addr) string {
-	bytes := r.tokenSecret
-	bytes = append(bytes, r.nodeID[:]...)
+	id := r.nodeIDFor(nodeAddr)
+	bytes := append([]byte(nil), r.tokenSecret...)
+	bytes = append(bytes, id[:]...)
 	bytes = append(bytes, infoHash[:]...)
 	bytes = append(bytes, nodeID[:]...)
-	bytes = append(bytes, []byte(nodeAddr.String())...)
+	bytes = append(bytes, []byte(nodeAddr.Unmap().String())...)
 	tokenHash := md5.Sum(bytes)
 
 	return hex.EncodeToString(tokenHash[:])
 }
 
-func nodeInfosFromNodes(ns ...ktable.Node) []dht.NodeInfo {
+func nodeInfosFromNodesForFamily(ipv6 bool, ns ...ktable.Node) []dht.NodeInfo {
 	if len(ns) == 0 {
 		return nil
 	}
 
 	nodes := make([]dht.NodeInfo, 0, len(ns))
 	for _, n := range ns {
-		nodes = append(nodes, nodeInfoFromNode(n))
+		a := n.Addr().Addr().Unmap()
+		if ipv6 && !a.Is6() {
+			continue
+		}
+		if !ipv6 && !a.Is4() {
+			continue
+		}
+		nodes = append(nodes, dht.NodeInfo{
+			ID:   n.ID(),
+			Addr: dht.NewNodeAddrFromAddrPort(netip.AddrPortFrom(a, n.Addr().Port())),
+		})
+	}
+	if len(nodes) == 0 {
+		return nil
 	}
 
 	return nodes
-}
-
-func nodeInfoFromNode(n ktable.Node) dht.NodeInfo {
-	return dht.NodeInfo{
-		ID:   n.ID(),
-		Addr: dht.NewNodeAddrFromAddrPort(n.Addr()),
-	}
 }

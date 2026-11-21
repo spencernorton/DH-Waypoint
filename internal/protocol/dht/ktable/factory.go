@@ -46,7 +46,7 @@ func New(p Params) Result {
 		if err != nil {
 			return nil, err
 		}
-		return newTable(identity.ID, nodesCollector, hashesCollector), nil
+		return newDualTable(identity.ID, identity.EffectiveIDv6(), nodesCollector, hashesCollector), nil
 	})
 
 	return Result{
@@ -61,24 +61,31 @@ func New(p Params) Result {
 }
 
 func newTable(nodeID ID, nodesCollector, hashesCollector btree.PrometheusCollector) Table {
+	return newDualTable(nodeID, nodeID, nodesCollector, hashesCollector)
+}
+
+func newDualTable(nodeID, nodeIDv6 ID, nodesCollector, hashesCollector btree.PrometheusCollector) Table {
+	if nodeIDv6 == (ID{}) {
+		nodeIDv6 = nodeID
+	}
 	rm := &reverseMap{addrs: make(map[string]*infoForAddr)}
-	nodes := nodeKeyspace{
-		keyspace: newKeyspace[netip.AddrPort, NodeOption, Node, *node](
-			nodeID,
-			nodesK,
-			func(id ID, addr netip.AddrPort) *node {
-				return &node{
-					nodeBase: nodeBase{
-						id:   id,
-						addr: addr,
-					},
-					discoveredAt: time.Now(),
-					reverseMap:   rm,
-				}
+	makeNode := func(id ID, addr netip.AddrPort) *node {
+		return &node{
+			nodeBase: nodeBase{
+				id:   id,
+				addr: addr,
 			},
-		),
+			discoveredAt: time.Now(),
+			reverseMap:   rm,
+		}
+	}
+	nodes := nodeKeyspace{
+		keyspace: newKeyspace[netip.AddrPort, NodeOption, Node, *node](nodeID, nodesK, makeNode),
 	}
 	patchPrometheusCollector(nodesCollector, &nodes.keyspace)
+	nodes6 := nodeKeyspace{
+		keyspace: newKeyspace[netip.AddrPort, NodeOption, Node, *node](nodeIDv6, nodesK, makeNode),
+	}
 	hashes := hashKeyspace{
 		keyspace: newKeyspace[[]HashPeer, HashOption, Hash, *hash](
 			nodeID,
@@ -100,9 +107,11 @@ func newTable(nodeID ID, nodesCollector, hashesCollector btree.PrometheusCollect
 
 	return &table{
 		origin:  nodeID,
+		origin6: nodeIDv6,
 		nodesK:  nodesK,
 		hashesK: hashesK,
 		nodes:   nodes,
+		nodes6:  nodes6,
 		hashes:  hashes,
 		addrs:   rm,
 	}

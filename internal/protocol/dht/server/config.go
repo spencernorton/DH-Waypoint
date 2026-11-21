@@ -6,29 +6,21 @@ type Config struct {
 	Port         uint16
 	QueryTimeout time.Duration
 
+	// EnableIPv6 enables opt-in dual-stack BEP-32 IPv6 DHT discovery alongside
+	// IPv4 on a separate IPV6_V6ONLY UDP socket. Off by default so IPv4-only
+	// environments never fail startup or emit unreachable IPv6 probes.
+	EnableIPv6 bool
+
+	// IPv6Port overrides the UDP port bound for the IPv6 DHT socket when
+	// EnableIPv6 is true. Zero reuses Port (safe because IPV6_V6ONLY is set).
+	IPv6Port uint16
+
 	// QueryLimiterRatePerSec is the sustained outbound-query rate per
-	// remote peer (keyed by IP) in tokens/second. The token bucket
-	// keeps us a polite DHT citizen when we discover a chatty peer
-	// that'd happily answer everything we can throw at it.
-	//
-	// Default 1.0 matches upstream bitmagnet's original tuning.
+	// remote peer (keyed by IP) in tokens/second.
 	QueryLimiterRatePerSec float64
 
 	// QueryLimiterBurst is the burst capacity of the per-remote-peer
-	// token bucket. Matters more than the sustained rate for a DHT
-	// crawler: after a successful sample_infohashes reveals N new
-	// infohashes from one peer we typically fan out N get_peers back
-	// at that same peer, and the burst governs how much of that fan
-	// goes out before we queue.
-	//
-	// Default raised from upstream's 4 to 16 after observing
-	// outbound get_peers p50 latency sitting ~4x above ping p50
-	// (827ms vs 150ms, 2026-04-24). Evidence the burst was the
-	// bottleneck: ping traffic is sparse (no fan-in cluster), so
-	// ping queries rarely exhaust a bucket; get_peers clusters on
-	// productive peers and queues 4-8 deep at 1/sec drain =
-	// 500-1000ms added wait. 16 gives a 4x headroom without raising
-	// sustained per-peer send rate.
+	// token bucket.
 	QueryLimiterBurst int
 }
 

@@ -27,8 +27,11 @@ func (c PutNode) execReturn(t *table) btree.PutResult {
 	if !c.Addr.IsValid() {
 		return btree.PutRejected
 	}
-
-	return t.nodes.put(c.ID, c.Addr, c.Options...)
+	clean := netip.AddrPortFrom(c.Addr.Addr().Unmap(), c.Addr.Port())
+	if clean.Addr().Is6() {
+		return t.nodes6.put(c.ID, clean, c.Options...)
+	}
+	return t.nodes.put(c.ID, clean, c.Options...)
 }
 
 func (c PutNode) exec(t *table) {
@@ -43,7 +46,9 @@ type DropNode struct {
 }
 
 func (c DropNode) execReturn(t *table) bool {
-	return t.nodes.drop(c.ID, c.Reason)
+	d4 := t.nodes.drop(c.ID, c.Reason)
+	d6 := t.nodes6.drop(c.ID, c.Reason)
+	return d4 || d6
 }
 
 func (c DropNode) exec(t *table) {
@@ -58,11 +63,14 @@ type DropAddr struct {
 }
 
 func (c DropAddr) execReturn(t *table) bool {
-	id, ok := t.addrs.getPeerIDForAddr(c.Addr)
+	clean := c.Addr.Unmap()
+	id, ok := t.addrs.getPeerIDForAddr(clean)
 	if !ok {
 		return false
 	}
-
+	if clean.Is6() {
+		return t.nodes6.drop(id, c.Reason)
+	}
 	return t.nodes.drop(id, c.Reason)
 }
 

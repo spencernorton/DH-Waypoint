@@ -70,11 +70,12 @@ func provideExternalIPMetrics() externalIPMetricsResult {
 type identityParams struct {
 	fx.In
 
-	Config     externalip.FxConfig
-	Resolver   externalip.Resolver
-	Metrics    *externalip.WatcherMetrics
-	Shutdowner fx.Shutdowner
-	Logger     *zap.SugaredLogger
+	Config       externalip.FxConfig
+	ServerConfig server.Config
+	Resolver     externalip.Resolver
+	Metrics      *externalip.WatcherMetrics
+	Shutdowner   fx.Shutdowner
+	Logger       *zap.SugaredLogger
 }
 
 type identityResult struct {
@@ -114,6 +115,9 @@ func provideNodeIdentity(p identityParams) identityResult {
 
 	identity := lazy.New(func() (protocol.NodeIdentity, error) {
 		id := resolveNodeIdentity(p.Config, p.Resolver, p.Metrics, p.Logger)
+		if p.ServerConfig.EnableIPv6 {
+			resolveIPv6Identity(&id, p.Config, p.Logger)
+		}
 		watcher := externalip.NewWatcher(
 			p.Resolver,
 			id.ID,
@@ -226,4 +230,38 @@ func resolveNodeIdentity(
 		ID:         id,
 		ExternalIP: ip,
 	}
+}
+
+func resolveIPv6Identity(id *protocol.NodeIdentity, cfg externalip.FxConfig, logger *zap.SugaredLogger) {
+	log := logger.Named("dht_node_id_v6")
+	resolver6, err := externalip.New(externalip.Config{
+		Override: cfg.OverrideV6,
+		Timeout:  cfg.PerCheckTimeout,
+		Family:   externalip.FamilyIPv6,
+	}, logger.Named("externalip.v6"))
+	if err != nil {
+		log.Warnw("IPv6 external IP resolver init failed; using random IPv6 node ID", "err", err.Error())
+		id.IDv6 = protocol.RandomNodeIDWithClientSuffix()
+		id.RandomFallbackV6 = true
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), cfg.StartupTimeout)
+	defer cancel()
+	ip6, err := resolver6.Resolve(ctx)
+	if err != nil {
+		log.Warnw("IPv6 external IP resolution failed; falling back to random IPv6 node ID", "err", err.Error())
+		id.IDv6 = protocol.RandomNodeIDWithClientSuffix()
+		id.RandomFallbackV6 = true
+		return
+	}
+	id6, err := protocol.SecureNodeID(ip6)
+	if err != nil {
+		log.Warnw("BEP-42 IPv6 node ID derivation failed; falling back to random IPv6 node ID", "external_ipv6", ip6.String(), "err", err.Error())
+		id.IDv6 = protocol.RandomNodeIDWithClientSuffix()
+		id.RandomFallbackV6 = true
+		return
+	}
+	log.Infow("DHT IPv6 node ID derived from external IPv6 (BEP-42 compliant)", "external_ipv6", ip6.String())
+	id.IDv6 = id6
+	id.ExternalIPv6 = ip6
 }

@@ -28,6 +28,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/spencernorton/DH-Waypoint/internal/protocol"
 	"go.uber.org/zap"
 )
 
@@ -50,6 +51,19 @@ var defaultSources = []string{
 	"https://ifconfig.me/ip",
 }
 
+// Family identifies which IP address family a Resolver validates and queries.
+type Family uint8
+
+const (
+	FamilyIPv4 Family = iota
+	FamilyIPv6
+)
+
+var defaultIPv6Sources = []string{
+	"https://api6.ipify.org",
+	"https://ipv6.icanhazip.com",
+}
+
 // cgnatPrefix is BCP 153 / RFC 6598 shared address space. Go's
 // netip.Addr doesn't surface a dedicated predicate for it, but a
 // BEP-42 ID derived from a CGNAT address is useless — our egress
@@ -69,6 +83,8 @@ type Config struct {
 	// always returns this IP. Used for break-glass and offline tests.
 	// The override is still validated — you can't pin to 127.0.0.1.
 	Override string
+	// Family selects IPv4 (default) or IPv6 resolution and validation.
+	Family Family
 }
 
 // ErrInvalidAddress is returned when a resolver result fails
@@ -88,7 +104,7 @@ func New(cfg Config, logger *zap.SugaredLogger) (Resolver, error) {
 		if err != nil {
 			return nil, fmt.Errorf("externalip: override %q is not a valid IP: %w", cfg.Override, err)
 		}
-		if err := validateAddr(addr); err != nil {
+		if err := validateAddrForFamily(addr, cfg.Family); err != nil {
 			return nil, fmt.Errorf("externalip: override %q is not usable: %w", cfg.Override, err)
 		}
 
@@ -99,7 +115,11 @@ func New(cfg Config, logger *zap.SugaredLogger) (Resolver, error) {
 
 	sources := cfg.Sources
 	if len(sources) == 0 {
-		sources = defaultSources
+		if cfg.Family == FamilyIPv6 {
+			sources = defaultIPv6Sources
+		} else {
+			sources = defaultSources
+		}
 	}
 
 	timeout := cfg.Timeout
@@ -109,6 +129,7 @@ func New(cfg Config, logger *zap.SugaredLogger) (Resolver, error) {
 
 	return &multiSourceResolver{
 		sources: sources,
+		family:  cfg.Family,
 		client:  &http.Client{Timeout: timeout},
 		logger:  logger,
 	}, nil
@@ -158,8 +179,25 @@ type staticResolver struct {
 
 func (s staticResolver) Resolve(context.Context) (netip.Addr, error) { return s.addr, nil }
 
+func validateAddrForFamily(addr netip.Addr, family Family) error {
+	if family == FamilyIPv6 {
+		if !addr.IsValid() {
+			return fmt.Errorf("%w: invalid zero addr", ErrInvalidAddress)
+		}
+		if addr.Is4() || addr.Is4In6() || !addr.Is6() {
+			return fmt.Errorf("%w: not IPv6 (%s)", ErrInvalidAddress, addr.String())
+		}
+		if !protocol.IsPublicAddr(addr) {
+			return fmt.Errorf("%w: non-public IPv6 (%s)", ErrInvalidAddress, addr.String())
+		}
+		return nil
+	}
+	return validateAddr(addr)
+}
+
 type multiSourceResolver struct {
 	sources []string
+	family  Family
 	client  *http.Client
 	logger  *zap.SugaredLogger
 }
@@ -173,7 +211,7 @@ func (m *multiSourceResolver) Resolve(ctx context.Context) (netip.Addr, error) {
 			errs = append(errs, fmt.Errorf("%s: %w", url, err))
 			continue
 		}
-		if verr := validateAddr(addr); verr != nil {
+		if verr := validateAddrForFamily(addr, m.family); verr != nil {
 			// A source that returned a bad-shaped address doesn't
 			// poison the whole resolve — try the next source. This
 			// is a common Happy-Eyeballs-at-the-CDN pattern where one

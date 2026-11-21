@@ -16,6 +16,7 @@ import (
 	"github.com/spencernorton/DH-Waypoint/internal/protocol"
 	"github.com/spencernorton/DH-Waypoint/internal/protocol/dht/client"
 	"github.com/spencernorton/DH-Waypoint/internal/protocol/dht/ktable"
+	"github.com/spencernorton/DH-Waypoint/internal/protocol/dht/server"
 	"github.com/spencernorton/DH-Waypoint/internal/protocol/metainfo/banning"
 	"github.com/spencernorton/DH-Waypoint/internal/protocol/metainfo/metainforequester"
 	"github.com/spencernorton/DH-Waypoint/internal/telemetry/dualemit"
@@ -30,7 +31,8 @@ import (
 
 type Params struct {
 	fx.In
-	Config     Config
+	Config       Config
+	ServerConfig server.Config
 	NamePolicy *namepolicy.Policy `optional:"true"`
 	// ContentFilter + ContentFilterMetrics are now provided by
 	// contentfilterfx so the SAME *contentfilter.Filter (and its
@@ -174,6 +176,7 @@ func New(params Params) Result {
 						metainfoRequester:            params.MetainfoRequester,
 						banningChecker:               params.BanningChecker,
 						bootstrapNodes:               bootstrapNodes,
+						enableIPv6:                   params.ServerConfig.EnableIPv6,
 						reseedBootstrapNodesInterval: time.Minute * 10,
 						getOldestNodesInterval:       time.Second * 10,
 						oldPeerThreshold:             time.Minute * 15,
