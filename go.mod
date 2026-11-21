@@ -9,6 +9,7 @@ require (
 	github.com/adrg/xdg v0.5.3
 	github.com/agnivade/levenshtein v1.2.1
 	github.com/anacrolix/dht/v2 v2.23.1-0.20260525063928-ec3a9bd99456
+	github.com/anacrolix/go-utp v0.0.0-20260908033909-9f1664acf866
 	github.com/anacrolix/missinggo/v2 v2.11.0
 	github.com/anacrolix/torrent v1.61.1-0.20260911233437-76452a2c8a2f
 	github.com/bits-and-blooms/bloom/v3 v3.7.0
@@ -56,6 +57,8 @@ require (
 )
 
 require (
+	github.com/anacrolix/go-libutp v1.5.2-0.20260908013213-836dd42cdde6 // indirect
+	github.com/anacrolix/mmsg v1.0.1 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-task/slim-sprig/v3 v3.0.0 // indirect
 	github.com/google/pprof v0.0.0-20241210010833-40e02aabc2ad // indirect
