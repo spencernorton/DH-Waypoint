@@ -2,6 +2,8 @@ package cli
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"os/signal"
 	"sort"
@@ -77,6 +79,14 @@ func New(p Params) (Result, error) {
 					args = []string{args[0]}
 				}
 				if err := app.RunContext(ctx, args); err != nil {
+					var exitCoder cli.ExitCoder
+					if errors.As(err, &exitCoder) {
+						if msg := strings.TrimSpace(exitCoder.Error()); msg != "" {
+							_, _ = fmt.Fprintln(os.Stderr, msg)
+						}
+						cli.OsExiter(exitCoder.ExitCode())
+						return
+					}
 					panic(err)
 				}
 			})()

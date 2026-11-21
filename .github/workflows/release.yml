@@ -16,22 +16,68 @@ jobs:
     uses: ./.github/workflows/privacy.yml
     permissions:
       contents: read
+  image_arm64:
+    name: Native linux/arm64 container qualification
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build and qualify linux/arm64 container
+        env:
+          BUILD_SOURCE: https://github.com/${{ github.repository }}
+        run: |
+          VERSION="v$(cat VERSION)"
+          printf '%s\n' "$VERSION" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
+          COMMIT=$(git rev-parse HEAD)
+          BUILD_DATE=$(git show -s --format=%cI HEAD)
+          docker build --platform linux/arm64 --build-arg VERSION="$VERSION" \
+            --build-arg COMMIT="$COMMIT" --build-arg BUILD_DATE="$BUILD_DATE" \
+            --build-arg SOURCE="$BUILD_SOURCE" --tag dh-waypoint:ci-arm64 .
+          test "$(docker image inspect dh-waypoint:ci-arm64 --format '{{.Os}}/{{.Architecture}}')" = 'linux/arm64'
+          test "$(docker image inspect dh-waypoint:ci-arm64 --format '{{index .Config.Labels "org.opencontainers.image.version"}}')" = "$VERSION"
+          test "$(docker image inspect dh-waypoint:ci-arm64 --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "$COMMIT"
+          test "$(docker image inspect dh-waypoint:ci-arm64 --format '{{index .Config.Labels "org.opencontainers.image.created"}}')" = "$BUILD_DATE"
+          test "$(docker image inspect dh-waypoint:ci-arm64 --format '{{index .Config.Labels "org.opencontainers.image.source"}}')" = "$BUILD_SOURCE"
+          sh scripts/check_backend_image.sh dh-waypoint:ci-arm64 "$VERSION"
+      - name: Prove linux/arm64 runtime persistence
+        run: python3 scripts/check_runtime.py --image dh-waypoint:ci-arm64 --evidence out/runtime-arm64
+      - name: Export runtime-qualified linux/arm64 image
+        env:
+          BUILD_SOURCE: https://github.com/${{ github.repository }}
+        run: |
+          python3 scripts/tested_image.py export --image dh-waypoint:ci-arm64 \
+            --runtime out/runtime-arm64/runtime.json --dir out/tested-image-arm64 \
+            --source "$BUILD_SOURCE" --revision "$(git rev-parse HEAD)" \
+            --version "v$(cat VERSION)" --platform linux/arm64
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dh-waypoint-tested-image-arm64
+          path: out/tested-image-arm64/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
   publish:
-    needs: [checks, privacy]
+    needs: [checks, privacy, image_arm64]
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     permissions:
       contents: write
       packages: write
+      id-token: write
+      attestations: write
     env:
       GH_TOKEN: ${{ github.token }}
       RELEASE_TAG: ${{ github.ref_name }}
       RELEASE_REPOSITORY: ${{ github.repository }}
+      PROMOTE_V6_LATEST: ${{ vars.RELEASE_PROMOTE_V6_LATEST }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - name: Prove stable tag and source
         run: |
           printf '%s\n' "$RELEASE_TAG" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
@@ -43,8 +89,13 @@ jobs:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: dh-waypoint-tested-image
-          path: tested-image
-      - name: Publish the runtime-qualified container
+          path: tested-image-amd64
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: dh-waypoint-tested-image-arm64
+          path: tested-image-arm64
+      - name: Publish multi-arch runtime-qualified containers and channel tags
+        id: push
         env:
           REGISTRY_TOKEN: ${{ github.token }}
         run: |
@@ -52,21 +103,66 @@ jobs:
           IMAGE=$(printf 'ghcr.io/%s' "$RELEASE_REPOSITORY" | tr '[:upper:]' '[:lower:]')
           BUILD_DATE=$(git show -s --format=%cI HEAD)
           BUILD_SOURCE="https://github.com/$RELEASE_REPOSITORY"
-          TESTED_ID=$(python3 scripts/tested_image.py load --dir tested-image \
-            --source "$BUILD_SOURCE" --revision "$GITHUB_SHA" --version "$RELEASE_TAG")
-          docker tag "$TESTED_ID" "$IMAGE:$RELEASE_TAG"
-          test "$(docker image inspect "$IMAGE:$RELEASE_TAG" --format '{{.Os}}/{{.Architecture}}')" = 'linux/amd64'
-          test "$(docker image inspect "$IMAGE:$RELEASE_TAG" --format '{{index .Config.Labels "org.opencontainers.image.version"}}')" = "$RELEASE_TAG"
-          test "$(docker image inspect "$IMAGE:$RELEASE_TAG" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "$GITHUB_SHA"
-          test "$(docker image inspect "$IMAGE:$RELEASE_TAG" --format '{{index .Config.Labels "org.opencontainers.image.created"}}')" = "$BUILD_DATE"
-          test "$(docker image inspect "$IMAGE:$RELEASE_TAG" --format '{{index .Config.Labels "org.opencontainers.image.source"}}')" = "$BUILD_SOURCE"
-          sh scripts/check_backend_image.sh "$IMAGE:$RELEASE_TAG" "$RELEASE_TAG"
-          docker push "$IMAGE:$RELEASE_TAG"
-          docker tag "$IMAGE:$RELEASE_TAG" "$IMAGE:latest"
-          docker push "$IMAGE:latest"
-          docker image inspect "$IMAGE:$RELEASE_TAG" --format '{{index .RepoDigests 0}}' > release-assets/IMAGE_DIGEST.txt
-          cp tested-image/receipt.json release-assets/TESTED_IMAGE.json
-          docker logout ghcr.io
+          VERSION=$(tr -d '[:space:]' < VERSION)
+          MAJOR_NUM=${VERSION%%.*}
+          MINOR_NUM=$(printf '%s' "$VERSION" | cut -d. -f1-2)
+          MAJOR_TAG="v${MAJOR_NUM}"
+          MINOR_TAG="v${MINOR_NUM}"
+
+          AMD64_ID=$(python3 scripts/tested_image.py load --dir tested-image-amd64 \
+            --source "$BUILD_SOURCE" --revision "$GITHUB_SHA" --version "$RELEASE_TAG" --platform linux/amd64)
+          docker tag "$AMD64_ID" "$IMAGE:$RELEASE_TAG-amd64"
+          test "$(docker image inspect "$IMAGE:$RELEASE_TAG-amd64" --format '{{.Os}}/{{.Architecture}}')" = 'linux/amd64'
+          test "$(docker image inspect "$IMAGE:$RELEASE_TAG-amd64" --format '{{index .Config.Labels "org.opencontainers.image.version"}}')" = "$RELEASE_TAG"
+          test "$(docker image inspect "$IMAGE:$RELEASE_TAG-amd64" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "$GITHUB_SHA"
+          test "$(docker image inspect "$IMAGE:$RELEASE_TAG-amd64" --format '{{index .Config.Labels "org.opencontainers.image.created"}}')" = "$BUILD_DATE"
+          test "$(docker image inspect "$IMAGE:$RELEASE_TAG-amd64" --format '{{index .Config.Labels "org.opencontainers.image.source"}}')" = "$BUILD_SOURCE"
+          sh scripts/check_backend_image.sh "$IMAGE:$RELEASE_TAG-amd64" "$RELEASE_TAG"
+          docker push "$IMAGE:$RELEASE_TAG-amd64"
+          AMD64_DIGEST=$(docker image inspect "$IMAGE:$RELEASE_TAG-amd64" --format '{{index .RepoDigests 0}}')
+
+          ARM64_ID=$(python3 scripts/tested_image.py load --dir tested-image-arm64 \
+            --source "$BUILD_SOURCE" --revision "$GITHUB_SHA" --version "$RELEASE_TAG" --platform linux/arm64)
+          docker tag "$ARM64_ID" "$IMAGE:$RELEASE_TAG-arm64"
+          test "$(docker image inspect "$IMAGE:$RELEASE_TAG-arm64" --format '{{.Os}}/{{.Architecture}}')" = 'linux/arm64'
+          docker push "$IMAGE:$RELEASE_TAG-arm64"
+          ARM64_DIGEST=$(docker image inspect "$IMAGE:$RELEASE_TAG-arm64" --format '{{index .RepoDigests 0}}')
+
+          TAG_ARGS=(-t "$IMAGE:$RELEASE_TAG" -t "$IMAGE:$MINOR_TAG" -t "$IMAGE:$MAJOR_TAG")
+          # Protect existing v5 :latest users from an automatic major-version jump:
+          # v5.x tags update :latest normally; v6+ tags hold :latest until
+          # repository variable RELEASE_PROMOTE_V6_LATEST is explicitly set to true.
+          if [ "$MAJOR_NUM" = "5" ] || [ "$PROMOTE_V6_LATEST" = "true" ]; then
+            TAG_ARGS+=(-t "$IMAGE:latest")
+          fi
+          docker buildx imagetools create "${TAG_ARGS[@]}" "$AMD64_DIGEST" "$ARM64_DIGEST"
+          INDEX_DIGEST=$(docker buildx imagetools inspect "$IMAGE:$RELEASE_TAG" --format '{{.Manifest.Digest}}')
+          printf '%s@%s\n' "$IMAGE" "$INDEX_DIGEST" > release-assets/IMAGE_DIGEST.txt
+          printf '%s\n' "$AMD64_DIGEST" > release-assets/IMAGE_DIGEST_AMD64.txt
+          printf '%s\n' "$ARM64_DIGEST" > release-assets/IMAGE_DIGEST_ARM64.txt
+          cp tested-image-amd64/receipt.json release-assets/TESTED_IMAGE.json
+          cp tested-image-arm64/receipt.json release-assets/TESTED_IMAGE_ARM64.json
+
+          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+          echo "index_digest=$INDEX_DIGEST" >> "$GITHUB_OUTPUT"
+          echo "local_amd64_tag=$IMAGE:$RELEASE_TAG-amd64" >> "$GITHUB_OUTPUT"
+      - name: Generate CycloneDX SBOM from runtime-qualified image
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        with:
+          image: ${{ steps.push.outputs.local_amd64_tag }}
+          format: cyclonedx-json
+          output-file: release-assets/SBOM.cdx.json
+          upload-artifact: "false"
+          upload-release-assets: "false"
+      - name: Attest build provenance for multi-arch release index
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ steps.push.outputs.image }}
+          subject-digest: ${{ steps.push.outputs.index_digest }}
+          push-to-registry: true
+      - name: Logout of GHCR
+        if: always()
+        run: docker logout ghcr.io || true
       - name: Package the exact public source
         run: |
           git archive --format=tar.gz --prefix=source/ HEAD > release-assets/source.tar.gz

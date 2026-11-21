@@ -1,12 +1,13 @@
 // Package setupcmd provides `dh-waypoint init` and `dh-waypoint doctor`:
 // first-run scaffolding (config file, environment file with generated
 // secrets, plugins directory) and a read-only installation check.
-// Neither command needs a database; doctor only probes TCP
-// reachability and reports it as such.
+// By default doctor only probes TCP reachability; `--check-v6` runs a
+// strictly read-only PostgreSQL catalog check for v6.0.0 upgrade readiness.
 package setupcmd
 
 import (
 	"crypto/rand"
+	"database/sql"
 	"encoding/hex"
 	"fmt"
 	"net"
@@ -14,7 +15,9 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/spencernorton/DH-Waypoint/internal/database/migrations"
 	"github.com/spencernorton/DH-Waypoint/internal/database/postgres"
+	"github.com/spencernorton/DH-Waypoint/internal/lazy"
 	"github.com/spencernorton/DH-Waypoint/internal/processor"
 	"github.com/spencernorton/DH-Waypoint/internal/processors"
 	"github.com/urfave/cli/v2"
@@ -26,6 +29,7 @@ type Params struct {
 	Processing processor.Config
 	Processors processors.Config
 	Postgres   postgres.Config
+	SQLDB      lazy.Lazy[*sql.DB] `optional:"true"`
 }
 
 type Result struct {
@@ -140,7 +144,13 @@ func New(p Params) (Result, error) {
 
 	doctorCmd := &cli.Command{
 		Name:  "doctor",
-		Usage: "Check configuration, database reachability, and plugin files",
+		Usage: "Check configuration, database reachability, plugin files, and optional v6 upgrade readiness",
+		Flags: []cli.Flag{
+			&cli.BoolFlag{
+				Name:  "check-v6",
+				Usage: "run a read-only PostgreSQL inspection for v6.0.0 major upgrade readiness",
+			},
+		},
 		Action: func(ctx *cli.Context) error {
 			out := ctx.App.Writer
 			failed := 0
@@ -181,6 +191,35 @@ func New(p Params) (Result, error) {
 				}
 				for _, s := range specs {
 					fmt.Fprintf(out, "        %s (%s)\n", s.ID, s.Path)
+				}
+			}
+
+			if ctx.Bool("check-v6") {
+				if p.SQLDB == nil {
+					report(false, "v6 readiness", "database handle unavailable")
+				} else {
+					db, err := p.SQLDB.Get()
+					if err != nil {
+						report(false, "v6 readiness", fmt.Sprintf("connect postgres: %v", err))
+					} else {
+						rep, err := migrations.InspectV6Readiness(ctx.Context, db)
+						if err != nil {
+							report(false, "v6 readiness", err.Error())
+						} else {
+							report(rep.Ready, "v6 readiness", fmt.Sprintf(
+								"postgres=%s (major=%d, direct PG 16/18 supported), goose=%d, est_torrents=%d, fingerprint=%s",
+								rep.PostgresVersion, rep.PostgresMajor, rep.GooseVersion, rep.EstimatedTorrents, rep.Fingerprint,
+							))
+							for _, b := range rep.Blockers {
+								fmt.Fprintf(out, "        BLOCKER:  %s\n", b)
+							}
+							for _, a := range rep.Advisories {
+								fmt.Fprintf(out, "        ADVISORY: %s\n", a)
+							}
+							fmt.Fprintf(out, "        BACKUP:   %s\n", rep.BackupCommand)
+							fmt.Fprintf(out, "        CONFIRM:  %s\n", rep.ConfirmEnvAssignment)
+						}
+					}
 				}
 			}
 

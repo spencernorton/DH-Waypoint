@@ -4,8 +4,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"regexp"
-	"sort"
-	"strings"
 )
 
 const ReleaseAttributesParser = "release-attributes-v1"
@@ -24,29 +22,72 @@ type ReleaseAttributes struct {
 	Encoder          *string  `json:"encoder,omitempty"`
 }
 
+const (
+	hdrBitDolbyVision uint8 = 1 << iota
+	hdrBitHDR
+	hdrBitHDR10
+	hdrBitHDR10Plus
+)
+
+const (
+	audioBitAAC uint8 = 1 << iota
+	audioBitAC3
+	audioBitDTS
+	audioBitEAC3
+	audioBitFLAC
+	audioBitOpus
+	audioBitTrueHD
+)
+
+const (
+	featureBitAtmos uint8 = 1 << iota
+	featureBitDTSX
+)
+
+const (
+	revBitInternal uint8 = 1 << iota
+	revBitProper
+	revBitReadNFO
+	revBitRepack
+)
+
+const (
+	claimFieldHDR uint8 = iota
+	claimFieldAudio
+	claimFieldFeature
+	claimFieldRevision
+)
+
 var releaseAttributeClaims = []struct {
 	pattern *regexp.Regexp
-	field   string
-	value   string
+	field   uint8
+	bit     uint8
 }{
-	{claimRegex(`hdr10(?:\+|[ ._-]?plus)`), "hdr", "HDR10_PLUS"},
-	{claimRegex(`hdr10`), "hdr", "HDR10"},
-	{claimRegex(`hdr`), "hdr", "HDR"},
-	{claimRegex(`dv|dovi|dolby[ ._-]?vision`), "hdr", "DOLBY_VISION"},
-	{audioClaimRegex(`true[ ._-]?hd`), "audio", "TRUEHD"},
-	{audioClaimRegex(`dts(?:[ ._-]?(?:hd|ma|hres|es|x))*`), "audio", "DTS"},
-	{audioClaimRegex(`e[ ._-]?ac[ ._-]?3|ddp|dd\+`), "audio", "EAC3"},
-	{audioClaimRegex(`ac[ ._-]?3|dd`), "audio", "AC3"},
-	{audioClaimRegex(`aac`), "audio", "AAC"},
-	{audioClaimRegex(`flac`), "audio", "FLAC"},
-	{audioClaimRegex(`opus`), "audio", "OPUS"},
-	{claimRegex(`atmos`), "feature", "ATMOS"},
-	{claimRegex(`dts[ ._-]?x`), "feature", "DTS_X"},
-	{claimRegex(`proper`), "revision", "PROPER"},
-	{claimRegex(`repack`), "revision", "REPACK"},
-	{claimRegex(`readnfo`), "revision", "READNFO"},
-	{claimRegex(`internal`), "revision", "INTERNAL"},
+	{claimRegex(`hdr10(?:\+|[ ._-]?plus)`), claimFieldHDR, hdrBitHDR10Plus},
+	{claimRegex(`hdr10`), claimFieldHDR, hdrBitHDR10},
+	{claimRegex(`hdr`), claimFieldHDR, hdrBitHDR},
+	{claimRegex(`dv|dovi|dolby[ ._-]?vision`), claimFieldHDR, hdrBitDolbyVision},
+	{audioClaimRegex(`true[ ._-]?hd`), claimFieldAudio, audioBitTrueHD},
+	{audioClaimRegex(`dts(?:[ ._-]?(?:hd|ma|hres|es|x))*`), claimFieldAudio, audioBitDTS},
+	{audioClaimRegex(`e[ ._-]?ac[ ._-]?3|ddp|dd\+`), claimFieldAudio, audioBitEAC3},
+	{audioClaimRegex(`ac[ ._-]?3|dd`), claimFieldAudio, audioBitAC3},
+	{audioClaimRegex(`aac`), claimFieldAudio, audioBitAAC},
+	{audioClaimRegex(`flac`), claimFieldAudio, audioBitFLAC},
+	{audioClaimRegex(`opus`), claimFieldAudio, audioBitOpus},
+	{claimRegex(`atmos`), claimFieldFeature, featureBitAtmos},
+	{claimRegex(`dts[ ._-]?x`), claimFieldFeature, featureBitDTSX},
+	{claimRegex(`proper`), claimFieldRevision, revBitProper},
+	{claimRegex(`repack`), claimFieldRevision, revBitRepack},
+	{claimRegex(`readnfo`), claimFieldRevision, revBitReadNFO},
+	{claimRegex(`internal`), claimFieldRevision, revBitInternal},
 }
+
+// Precompiled encoder claim patterns (must stay hoisted at package scope to
+// avoid per-call regexp.MustCompile heap churn on the classifier hot path).
+var (
+	encoderX264Claim = claimRegex(`x264`)
+	encoderX265Claim = claimRegex(`x265`)
+)
 
 var audioChannelClaim = regexp.MustCompile(`(?i)(?:^|[^\pL\pN])(?:true[ ._-]?hd|dts(?:[ ._-]?(?:hd|ma|hres|es|x))*|e?[ ._-]?ac[ ._-]?3|ddp?|aac|flac|opus)[ ._-]*([1-9][ ._][01]|[1-9]ch)(?:$|[^\pL\pN])`)
 
@@ -58,38 +99,105 @@ func audioClaimRegex(token string) *regexp.Regexp {
 	return claimRegex(`(?:` + token + `)(?:[ ._-]?[1-9](?:[ ._][01])?(?:[ ._]?ch)?)?`)
 }
 
+// Ordered slices matching sort.Strings order for each bitmask.
+var (
+	hdrOrder = []struct {
+		bit   uint8
+		value string
+	}{
+		{hdrBitDolbyVision, "DOLBY_VISION"},
+		{hdrBitHDR, "HDR"},
+		{hdrBitHDR10, "HDR10"},
+		{hdrBitHDR10Plus, "HDR10_PLUS"},
+	}
+	audioOrder = []struct {
+		bit   uint8
+		value string
+	}{
+		{audioBitAAC, "AAC"},
+		{audioBitAC3, "AC3"},
+		{audioBitDTS, "DTS"},
+		{audioBitEAC3, "EAC3"},
+		{audioBitFLAC, "FLAC"},
+		{audioBitOpus, "OPUS"},
+		{audioBitTrueHD, "TRUEHD"},
+	}
+	featureOrder = []struct {
+		bit   uint8
+		value string
+	}{
+		{featureBitAtmos, "ATMOS"},
+		{featureBitDTSX, "DTS_X"},
+	}
+	revOrder = []struct {
+		bit   uint8
+		value string
+	}{
+		{revBitInternal, "INTERNAL"},
+		{revBitProper, "PROPER"},
+		{revBitReadNFO, "READNFO"},
+		{revBitRepack, "REPACK"},
+	}
+)
+
+func collectMask(mask uint8, order []struct {
+	bit   uint8
+	value string
+}) []string {
+	if mask == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(order))
+	for _, entry := range order {
+		if mask&entry.bit != 0 {
+			out = append(out, entry.value)
+		}
+	}
+	return out
+}
+
+func normalizeChannel(raw string) string {
+	b := []byte(raw)
+	for i, c := range b {
+		switch {
+		case c >= 'A' && c <= 'Z':
+			b[i] = c + ('a' - 'A')
+		case c == ' ' || c == '_':
+			b[i] = '.'
+		}
+	}
+	return string(b)
+}
+
 // InferReleaseAttributes reads only a technical suffix. sourceName is retained
 // as a digest so subsequent repairs can compare the exact release input.
 func InferReleaseAttributes(sourceName, technicalSuffix string) *ReleaseAttributes {
-	sets := map[string]map[string]bool{"hdr": {}, "audio": {}, "feature": {}, "revision": {}}
+	var hdrMask, audioMask, featMask, revMask uint8
 	for _, claim := range releaseAttributeClaims {
 		if claim.pattern.MatchString(technicalSuffix) {
-			sets[claim.field][claim.value] = true
+			switch claim.field {
+			case claimFieldHDR:
+				hdrMask |= claim.bit
+			case claimFieldAudio:
+				audioMask |= claim.bit
+			case claimFieldFeature:
+				featMask |= claim.bit
+			case claimFieldRevision:
+				revMask |= claim.bit
+			}
 		}
 	}
 	// More specific claims subsume the generic family label.
-	if sets["hdr"]["HDR10_PLUS"] {
-		delete(sets["hdr"], "HDR10")
+	if hdrMask&hdrBitHDR10Plus != 0 {
+		hdrMask &^= hdrBitHDR10
 	}
-	if sets["hdr"]["HDR10"] || sets["hdr"]["HDR10_PLUS"] {
-		delete(sets["hdr"], "HDR")
+	if hdrMask&(hdrBitHDR10|hdrBitHDR10Plus) != 0 {
+		hdrMask &^= hdrBitHDR
 	}
-	if sets["audio"]["EAC3"] {
-		delete(sets["audio"], "AC3")
+	if audioMask&audioBitEAC3 != 0 {
+		audioMask &^= audioBitAC3
 	}
-	attrs := &ReleaseAttributes{Version: 1, Parser: ReleaseAttributesParser}
-	digest := sha256.Sum256([]byte(sourceName))
-	attrs.SourceNameSHA256 = hex.EncodeToString(digest[:])
-	values := func(field string) []string {
-		var out []string
-		for value := range sets[field] {
-			out = append(out, value)
-		}
-		sort.Strings(out)
-		return out
-	}
-	attrs.HDRFormats, attrs.AudioFormats = values("hdr"), values("audio")
-	attrs.AudioFeatures, attrs.Revisions = values("feature"), values("revision")
+
 	var channel string
 	ambiguousChannels := false
 	for offset := 0; offset < len(technicalSuffix); {
@@ -97,32 +205,47 @@ func InferReleaseAttributes(sourceName, technicalSuffix string) *ReleaseAttribut
 		if match == nil {
 			break
 		}
-		value := strings.ToLower(technicalSuffix[offset+match[2] : offset+match[3]])
-		value = strings.NewReplacer(" ", ".", "_", ".").Replace(value)
+		value := normalizeChannel(technicalSuffix[offset+match[2] : offset+match[3]])
 		if channel != "" && channel != value {
 			ambiguousChannels = true
 		}
 		channel = value
 		offset += match[3]
 	}
+
+	hasX264 := encoderX264Claim.MatchString(technicalSuffix)
+	hasX265 := encoderX265Claim.MatchString(technicalSuffix)
+	var encoder *string
+	if hasX264 != hasX265 {
+		v := "x264"
+		if hasX265 {
+			v = "x265"
+		}
+		encoder = &v
+	}
+
+	var audioChannels *string
 	if channel != "" && !ambiguousChannels {
-		attrs.AudioChannels = &channel
+		v := channel
+		audioChannels = &v
 	}
-	encoders := make(map[string]bool)
-	for _, encoder := range []string{"x264", "x265"} {
-		if claimRegex(encoder).MatchString(technicalSuffix) {
-			encoders[encoder] = true
-		}
-	}
-	if len(encoders) == 1 {
-		for encoder := range encoders {
-			value := encoder
-			attrs.Encoder = &value
-		}
-	}
-	if len(attrs.HDRFormats)+len(attrs.AudioFormats)+len(attrs.AudioFeatures)+len(attrs.Revisions) == 0 &&
-		attrs.AudioChannels == nil && attrs.Encoder == nil {
+
+	if hdrMask == 0 && audioMask == 0 && featMask == 0 && revMask == 0 &&
+		audioChannels == nil && encoder == nil {
 		return nil
 	}
-	return attrs
+
+	digest := sha256.Sum256([]byte(sourceName))
+	return &ReleaseAttributes{
+		Version:          1,
+		Parser:           ReleaseAttributesParser,
+		SourceNameSHA256: hex.EncodeToString(digest[:]),
+		HDRFormats:       collectMask(hdrMask, hdrOrder),
+		AudioFormats:     collectMask(audioMask, audioOrder),
+		AudioChannels:    audioChannels,
+		AudioFeatures:    collectMask(featMask, featureOrder),
+		Revisions:        collectMask(revMask, revOrder),
+		Encoder:          encoder,
+	}
 }
+

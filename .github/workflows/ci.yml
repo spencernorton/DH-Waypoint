@@ -1,4 +1,4 @@
-# Public Go race tests, PostgreSQL integration, headless boundary and image build.
+# Public Go race tests, PostgreSQL 16 & 18 integration, headless boundary and image build.
 # Read-only tokens, disposable databases and commit-pinned GitHub actions.
 name: CI
 on:
@@ -55,7 +55,29 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
         with:
           go-version-file: go.mod
-      - run: go test -race -p 1 -count=1 -timeout=15m ./migrations ./internal/dhtcrawler ./internal/junkpurge ./internal/processors ./processorapi/v1 ./internal/classifier/contentfilter ./internal/llmcapture ./internal/database/search ./internal/torznab/adapter ./internal/serving ./internal/seeds ./internal/evidence ./internal/evidence/sources/qbpoller ./internal/processor ./internal/namepolicy ./internal/importer ./internal/llmwork ./internal/releasefields ./internal/cataloguepolicy ./internal/tracker ./internal/restapi ./internal/eventprune ./internal/leanmode ./internal/cataloguerecovery/... ./internal/csamblocklist/...
+      - run: go test -race -p 1 -count=1 -timeout=15m ./migrations ./internal/database/migrations ./internal/dhtcrawler ./internal/junkpurge ./internal/processors ./processorapi/v1 ./internal/classifier/contentfilter ./internal/llmcapture ./internal/database/search ./internal/torznab/adapter ./internal/serving ./internal/seeds ./internal/evidence ./internal/evidence/sources/qbpoller ./internal/processor ./internal/namepolicy ./internal/importer ./internal/llmwork ./internal/releasefields ./internal/cataloguepolicy ./internal/tracker ./internal/restapi ./internal/eventprune ./internal/leanmode ./internal/cataloguerecovery/... ./internal/csamblocklist/...
+  integration_pg18:
+    name: PostgreSQL 18 integration
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_PASSWORD: test-only
+          POSTGRES_DB: dh_waypoint_test
+        ports: ['5432:5432']
+        options: --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 3s --health-retries 10
+    env:
+      DH_WAYPOINT_TEST_POSTGRES_DSN: postgres://postgres:test-only@127.0.0.1:5432/dh_waypoint_test?sslmode=disable
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version-file: go.mod
+      - run: go test -race -p 1 -count=1 -timeout=15m ./migrations ./internal/database/migrations ./internal/database/search ./internal/torznab/adapter ./internal/serving ./internal/namepolicy ./internal/restapi ./internal/leanmode ./internal/cataloguerecovery/... ./internal/csamblocklist/...
   image:
     name: Public container build
     runs-on: ubuntu-24.04
@@ -81,16 +103,14 @@ jobs:
           test "$(docker image inspect dh-waypoint:ci --format '{{index .Config.Labels "org.opencontainers.image.created"}}')" = "$BUILD_DATE"
           test "$(docker image inspect dh-waypoint:ci --format '{{index .Config.Labels "org.opencontainers.image.source"}}')" = "$BUILD_SOURCE"
           sh scripts/check_backend_image.sh dh-waypoint:ci "$VERSION"
-      - name: Build independent LLM processor image
+      - name: Build and smoke-test all independent adapter images
         run: |
-          docker build --platform linux/amd64 -f adapters/llm/Dockerfile --tag dh-waypoint-llm:ci .
-          docker run --rm --network none --read-only --cap-drop ALL \
-            --security-opt no-new-privileges dh-waypoint-llm:ci --help
-      - name: Build independent Armiger processor image
-        run: |
-          docker build --platform linux/amd64 -f adapters/armiger/Dockerfile --tag dh-waypoint-armiger:ci .
-          docker run --rm --network none --read-only --cap-drop ALL \
-            --security-opt no-new-privileges dh-waypoint-armiger:ci --help
+          for adapter in llm armiger match stremio prowlarr-sync; do
+            echo "=== Building adapter: $adapter ==="
+            docker build --platform linux/amd64 -f "adapters/$adapter/Dockerfile" --tag "dh-waypoint-$adapter:ci" .
+            docker run --rm --network none --read-only --cap-drop ALL \
+              --security-opt no-new-privileges "dh-waypoint-$adapter:ci" --help
+          done
       - name: Prove import, processing, public search and restart persistence
         run: python3 scripts/check_runtime.py --image dh-waypoint:ci --evidence out/runtime
       - name: Export the exact runtime-qualified image
