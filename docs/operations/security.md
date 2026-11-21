@@ -48,7 +48,9 @@ Browsers are held back separately: a page on another website cannot read the API
 
 ### Tier 2 — API key
 
-- `HTTP_SERVER_API_KEY` — gates `/graphql`, `/import`, `/metrics`, `/debug/pprof/*`, `/api/v1/*`, `/api/v2/*` and `/api/quarantine` (`Authorization: Bearer` or `X-API-Key`, constant-time compare). Surfaces with their own credentials (Torznab, tracker, processors, payload verifier, name-policy check, private API, evidence) are not double-gated; `/status` stays public.
+- `HTTP_SERVER_API_KEY` — full-admin key gating `/graphql`, `/import`, `/metrics`, `/debug/pprof/*`, `/api/v1/*`, `/api/v2/*` and `/api/quarantine` (`Authorization: Bearer` or `X-API-Key`, constant-time compare). Surfaces with their own credentials (Torznab, tracker, processors, payload verifier, name-policy check, private API, evidence) are not double-gated; `/status` stays public.
+- `HTTP_SERVER_SCOPED_API_KEYS` — optional comma- or newline-separated `name:scope:secret` least-privilege keys (`admin`, `read`, `search`, `metrics`, `import`). `metrics` allows only `GET`/`HEAD /metrics`; `search` allows `GET`/`HEAD /api/v1/*`, `/api/v2/*`, and AST-verified read-only GraphQL queries on `POST /graphql` (rejecting mutations, subscriptions, and blind APQ hashes); `read` combines `metrics` and `search`; `import` allows only `POST /import*`. All keys are compared in constant time without short-circuiting and redacted in configuration output.
+- `HTTP_SERVER_CROSS_ORIGIN_PROTECTION` — enabled (`true`) by default via Go's `net/http.CrossOriginProtection` (`Sec-Fetch-Site` / `Origin` enforcement on non-safe methods), blocking browser cross-site `POST`/`PUT`/`PATCH`/`DELETE` requests unless the origin is explicitly trusted in `HTTP_SERVER_CORS_ALLOWED_ORIGINS`.
 - `TORZNAB_API_KEY` — gates `/torznab/api` (constant-time compare; timing-safe). Required when the `*arr` clients are on a different host or network than DH-Waypoint.
 - `EVIDENCE_WEBHOOK_SECRET` — gates `/evidence/arr/*` (compared against the `X-Evidence-Token` header on each webhook).
 

@@ -8,9 +8,19 @@ type Config struct {
 	Cors         CorsConfig
 	Options      []string
 	// APIKey optionally gates the otherwise unauthenticated
-	// surfaces (GraphQL, import, metrics, REST). Empty = open
-	// (trusted-network posture; see APIKeyAuth).
+	// surfaces (GraphQL, import, metrics, REST) with full admin scope.
+	// Empty = open unless ScopedAPIKeys is configured (see ScopedAPIKeyAuth).
 	APIKey namepolicy.SecretToken
+	// ScopedAPIKeys optionally defines comma- or newline-separated named,
+	// least-privilege API keys in `name:scope:secret` format. Supported
+	// scopes are `admin`, `read`, `search`, `metrics`, and `import`.
+	// When either APIKey or ScopedAPIKeys is configured, all non-exempt
+	// routes require a valid credential with an allowed scope.
+	ScopedAPIKeys namepolicy.SecretToken
+	// CrossOriginProtection enables Go's standard net/http.CrossOriginProtection
+	// middleware (Sec-Fetch-Site / Origin checks) on non-safe methods. Trusted
+	// origins from Cors.AllowedOrigins are automatically allowed. Default true.
+	CrossOriginProtection bool
 }
 
 type CorsConfig struct {
@@ -63,6 +73,7 @@ func NewDefaultConfig() Config {
 		Cors: CorsConfig{
 			AllowedHeaders: []string{"*"},
 		},
-		Options: []string{"*"},
+		Options:               []string{"*"},
+		CrossOriginProtection: true,
 	}
 }
