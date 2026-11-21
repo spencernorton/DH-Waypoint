@@ -140,6 +140,10 @@ func TestRESTSearchFilterValidation(t *testing.T) {
 		"/api/v1/search?order_by=bogus",
 		"/api/v1/search?order_dir=sideways",
 		"/api/v1/search?order_by=relevance",
+		"/api/v1/search?include_total=maybe",
+		"/api/v1/search?cursor=not-valid-base64!!!",
+		"/api/v1/search?cursor=e30&offset=10",
+		"/api/v1/search?q=matrix&order_by=relevance&cursor=e30",
 	} {
 		rec := httptest.NewRecorder()
 		engine.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, bad, nil))
@@ -151,6 +155,7 @@ func TestRESTSearchFilterValidation(t *testing.T) {
 		"/api/v1/search?type=tv_show&tmdb=12345&season=1&episode=2&order_by=seeders&order_dir=desc",
 		"/api/v1/search?q=matrix&order_by=relevance",
 		"/api/v1/search?imdb=tt0133093",
+		"/api/v1/search?include_total=false&limit=10",
 	} {
 		rec := httptest.NewRecorder()
 		engine.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, good, nil))

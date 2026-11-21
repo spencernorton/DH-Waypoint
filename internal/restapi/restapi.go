@@ -132,8 +132,16 @@ func toItem(tc model.TorrentContent) Item {
 type searchResponse struct {
 	TotalCount           uint   `json:"total_count"`
 	TotalCountIsEstimate bool   `json:"total_count_is_estimate"`
+	TotalCountOmitted    bool   `json:"total_count_omitted,omitempty"`
 	HasNextPage          bool   `json:"has_next_page"`
+	NextCursor           string `json:"next_cursor,omitempty"`
 	Items                []Item `json:"items"`
+}
+
+type searchMeta struct {
+	orderName    string
+	dirName      string
+	totalOmitted bool
 }
 
 func paging(c *gin.Context) (limit, offset uint, errMsg string) {
@@ -176,21 +184,35 @@ func parseResolutionParam(raw string) (model.VideoResolution, error) {
 	return "", model.ErrInvalidVideoResolution
 }
 
-func (a *API) runSearch(c *gin.Context, extra ...query.Option) (search.TorrentContentResult, bool) {
+func (a *API) runSearch(c *gin.Context, extra ...query.Option) (search.TorrentContentResult, searchMeta, bool) {
 	s, err := a.search.Get()
 	if err != nil {
 		a.fail(c, err)
-		return search.TorrentContentResult{}, false
+		return search.TorrentContentResult{}, searchMeta{}, false
 	}
 	limit, offset, errMsg := paging(c)
 	if errMsg != "" {
 		c.JSON(400, gin.H{"error": errMsg})
-		return search.TorrentContentResult{}, false
+		return search.TorrentContentResult{}, searchMeta{}, false
+	}
+	includeTotal := true
+	if rawInclude := strings.TrimSpace(c.Query("include_total")); rawInclude != "" {
+		parsedBool, parseErr := strconv.ParseBool(rawInclude)
+		if parseErr != nil {
+			c.JSON(400, gin.H{"error": "include_total must be true or false"})
+			return search.TorrentContentResult{}, searchMeta{}, false
+		}
+		includeTotal = parsedBool
+	}
+	cursorRaw := strings.TrimSpace(c.Query("cursor"))
+	if cursorRaw != "" && offset > 0 {
+		c.JSON(400, gin.H{"error": "cursor cannot be combined with non-zero offset"})
+		return search.TorrentContentResult{}, searchMeta{}, false
 	}
 	params := query.SearchParams{
 		Limit:       model.NewNullUint(limit),
 		Offset:      model.NewNullUint(offset),
-		TotalCount:  model.NewNullBool(true),
+		TotalCount:  model.NewNullBool(includeTotal),
 		HasNextPage: model.NewNullBool(true),
 	}
 	qStr := strings.TrimSpace(c.Query("q"))
@@ -203,7 +225,7 @@ func (a *API) runSearch(c *gin.Context, extra ...query.Option) (search.TorrentCo
 		ct, err := model.ParseContentType(typeParam)
 		if err != nil {
 			c.JSON(400, gin.H{"error": "unknown content type"})
-			return search.TorrentContentResult{}, false
+			return search.TorrentContentResult{}, searchMeta{}, false
 		}
 		contentTypeFilter = &ct
 		options = append(options, query.Where(search.TorrentContentTypeCriteria(ct)))
@@ -212,7 +234,7 @@ func (a *API) runSearch(c *gin.Context, extra ...query.Option) (search.TorrentCo
 		res, err := parseResolutionParam(resParam)
 		if err != nil {
 			c.JSON(400, gin.H{"error": "unknown video resolution"})
-			return search.TorrentContentResult{}, false
+			return search.TorrentContentResult{}, searchMeta{}, false
 		}
 		options = append(options, query.Where(query.DBCriteria{
 			SQL:  "torrent_contents.video_resolution = ?",
@@ -223,7 +245,7 @@ func (a *API) runSearch(c *gin.Context, extra ...query.Option) (search.TorrentCo
 		vs, err := model.ParseVideoSource(srcParam)
 		if err != nil {
 			c.JSON(400, gin.H{"error": "unknown video source"})
-			return search.TorrentContentResult{}, false
+			return search.TorrentContentResult{}, searchMeta{}, false
 		}
 		options = append(options, query.Where(query.DBCriteria{
 			SQL:  "torrent_contents.video_source = ?",
@@ -234,7 +256,7 @@ func (a *API) runSearch(c *gin.Context, extra ...query.Option) (search.TorrentCo
 		vc, err := model.ParseVideoCodec(codecParam)
 		if err != nil {
 			c.JSON(400, gin.H{"error": "unknown video codec"})
-			return search.TorrentContentResult{}, false
+			return search.TorrentContentResult{}, searchMeta{}, false
 		}
 		options = append(options, query.Where(query.DBCriteria{
 			SQL:  "torrent_contents.video_codec = ?",
@@ -244,7 +266,7 @@ func (a *API) runSearch(c *gin.Context, extra ...query.Option) (search.TorrentCo
 	if hdrParam := strings.ToUpper(strings.TrimSpace(c.Query("hdr"))); hdrParam != "" {
 		if !validHDR[hdrParam] {
 			c.JSON(400, gin.H{"error": "unknown hdr format"})
-			return search.TorrentContentResult{}, false
+			return search.TorrentContentResult{}, searchMeta{}, false
 		}
 		options = append(options, query.Where(search.TorrentContentReleaseAttributeCriteria("hdrFormats", hdrParam)))
 	}
@@ -252,7 +274,7 @@ func (a *API) runSearch(c *gin.Context, extra ...query.Option) (search.TorrentCo
 		n, err := strconv.ParseUint(minSeedersParam, 10, 32)
 		if err != nil {
 			c.JSON(400, gin.H{"error": "min_seeders must be a non-negative integer"})
-			return search.TorrentContentResult{}, false
+			return search.TorrentContentResult{}, searchMeta{}, false
 		}
 		options = append(options, query.Where(query.DBCriteria{
 			SQL:  "torrent_contents.seeders >= ?",
@@ -264,20 +286,20 @@ func (a *API) runSearch(c *gin.Context, extra ...query.Option) (search.TorrentCo
 	episodeRaw := strings.TrimSpace(c.Query("episode"))
 	if episodeRaw != "" && seasonRaw == "" {
 		c.JSON(400, gin.H{"error": "episode requires season"})
-		return search.TorrentContentResult{}, false
+		return search.TorrentContentResult{}, searchMeta{}, false
 	}
 	if seasonRaw != "" {
 		seasonNum, err := strconv.Atoi(seasonRaw)
 		if err != nil || seasonNum < 0 || seasonNum > 1000 {
 			c.JSON(400, gin.H{"error": "season must be an integer between 0 and 1000"})
-			return search.TorrentContentResult{}, false
+			return search.TorrentContentResult{}, searchMeta{}, false
 		}
 		eps := model.Episodes{}
 		if episodeRaw != "" {
 			epNum, err := strconv.Atoi(episodeRaw)
 			if err != nil || epNum < 0 || epNum > 10000 {
 				c.JSON(400, gin.H{"error": "episode must be an integer between 0 and 10000"})
-				return search.TorrentContentResult{}, false
+				return search.TorrentContentResult{}, searchMeta{}, false
 			}
 			eps = eps.AddEpisode(seasonNum, epNum)
 		} else {
@@ -290,7 +312,7 @@ func (a *API) runSearch(c *gin.Context, extra ...query.Option) (search.TorrentCo
 	if imdbParam := strings.TrimSpace(c.Query("imdb")); imdbParam != "" {
 		if !imdbIDPattern.MatchString(imdbParam) {
 			c.JSON(400, gin.H{"error": "invalid imdb id"})
-			return search.TorrentContentResult{}, false
+			return search.TorrentContentResult{}, searchMeta{}, false
 		}
 		if contentTypeFilter != nil {
 			idRefs = append(idRefs, model.ContentRef{Type: *contentTypeFilter, Source: model.SourceImdb, ID: imdbParam})
@@ -304,7 +326,7 @@ func (a *API) runSearch(c *gin.Context, extra ...query.Option) (search.TorrentCo
 	if tmdbParam := strings.TrimSpace(c.Query("tmdb")); tmdbParam != "" {
 		if !tmdbIDPattern.MatchString(tmdbParam) {
 			c.JSON(400, gin.H{"error": "invalid tmdb id"})
-			return search.TorrentContentResult{}, false
+			return search.TorrentContentResult{}, searchMeta{}, false
 		}
 		if contentTypeFilter != nil {
 			idRefs = append(idRefs, model.ContentRef{Type: *contentTypeFilter, Source: model.SourceTmdb, ID: tmdbParam})
@@ -317,38 +339,15 @@ func (a *API) runSearch(c *gin.Context, extra ...query.Option) (search.TorrentCo
 	}
 	orderByRaw := strings.TrimSpace(c.Query("order_by"))
 	orderDirRaw := strings.ToLower(strings.TrimSpace(c.Query("order_dir")))
-	if orderByRaw != "" || orderDirRaw != "" {
-		dir := search.OrderDirectionDescending
-		switch orderDirRaw {
-		case "", "desc":
-			dir = search.OrderDirectionDescending
-		case "asc":
-			dir = search.OrderDirectionAscending
-		default:
-			c.JSON(400, gin.H{"error": "order_dir must be asc or desc"})
-			return search.TorrentContentResult{}, false
-		}
-		var order search.TorrentContentOrderBy
-		switch orderByRaw {
-		case "", "published_at":
-			order = search.TorrentContentOrderByPublishedAt
-		case "seeders":
-			order = search.TorrentContentOrderBySeeders
-		case "leechers":
-			order = search.TorrentContentOrderByLeechers
-		case "size":
-			order = search.TorrentContentOrderBySize
-		case "files_count":
-			order = search.TorrentContentOrderByFilesCount
-		case "relevance":
-			if qStr == "" {
-				c.JSON(400, gin.H{"error": "order_by=relevance requires q"})
-				return search.TorrentContentResult{}, false
-			}
-			order = search.TorrentContentOrderByRelevance
-		default:
-			c.JSON(400, gin.H{"error": "unknown order_by"})
-			return search.TorrentContentResult{}, false
+	order, orderName, dir, dirName, explicitOrder, orderErr := resolveOrderSpec(orderByRaw, orderDirRaw, qStr)
+	if orderErr != "" {
+		c.JSON(400, gin.H{"error": orderErr})
+		return search.TorrentContentResult{}, searchMeta{}, false
+	}
+	if explicitOrder || cursorRaw != "" {
+		if cursorRaw != "" && orderName == "relevance" {
+			c.JSON(400, gin.H{"error": "cursor pagination requires a deterministic order_by (not relevance)"})
+			return search.TorrentContentResult{}, searchMeta{}, false
 		}
 		options = append(options, query.OrderBy(order.Clauses(dir)...))
 	}
@@ -357,18 +356,26 @@ func (a *API) runSearch(c *gin.Context, extra ...query.Option) (search.TorrentCo
 		nonVidPol := strings.TrimSpace(c.Query("lean_non_video"))
 		if unlinkedPol != "" && unlinkedPol != leanmode.UnlinkedPassThrough && unlinkedPol != leanmode.UnlinkedExcludeFromServe {
 			c.JSON(400, gin.H{"error": "invalid lean_unlinked policy"})
-			return search.TorrentContentResult{}, false
+			return search.TorrentContentResult{}, searchMeta{}, false
 		}
 		if nonVidPol != "" && nonVidPol != leanmode.NonVideoPassThrough && nonVidPol != leanmode.NonVideoExcludeFromServe {
 			c.JSON(400, gin.H{"error": "invalid lean_non_video policy"})
-			return search.TorrentContentResult{}, false
+			return search.TorrentContentResult{}, searchMeta{}, false
 		}
 		crit, critErr := leanmode.ServingWinnersCriteria(leanProf, unlinkedPol, nonVidPol)
 		if critErr != nil {
 			c.JSON(400, gin.H{"error": "invalid lean_profile"})
-			return search.TorrentContentResult{}, false
+			return search.TorrentContentResult{}, searchMeta{}, false
 		}
 		options = append(options, query.Where(crit))
+	}
+	if cursorRaw != "" {
+		cursorCrit, cErr := decodeV1Cursor(cursorRaw, orderName, dirName)
+		if cErr != nil {
+			c.JSON(400, gin.H{"error": cErr.Error()})
+			return search.TorrentContentResult{}, searchMeta{}, false
+		}
+		options = append(options, query.Where(cursorCrit))
 	}
 	options = append(options, extra...)
 	var result search.TorrentContentResult
@@ -384,9 +391,13 @@ func (a *API) runSearch(c *gin.Context, extra ...query.Option) (search.TorrentCo
 	}
 	if err != nil {
 		a.fail(c, err)
-		return search.TorrentContentResult{}, false
+		return search.TorrentContentResult{}, searchMeta{}, false
 	}
-	return result, true
+	return result, searchMeta{
+		orderName:    orderName,
+		dirName:      dirName,
+		totalOmitted: !includeTotal,
+	}, true
 }
 
 func (a *API) fail(c *gin.Context, err error) {
@@ -397,7 +408,7 @@ func (a *API) fail(c *gin.Context, err error) {
 }
 
 func (a *API) handleSearch(c *gin.Context) {
-	result, ok := a.runSearch(c)
+	result, meta, ok := a.runSearch(c)
 	if !ok {
 		return
 	}
@@ -405,10 +416,16 @@ func (a *API) handleSearch(c *gin.Context) {
 	for _, row := range result.Items {
 		items = append(items, toItem(row.TorrentContent))
 	}
+	var nextCursor string
+	if result.HasNextPage && len(result.Items) > 0 && meta.orderName != "relevance" {
+		nextCursor = encodeV1Cursor(meta.orderName, meta.dirName, result.Items[len(result.Items)-1].TorrentContent)
+	}
 	c.JSON(200, searchResponse{
 		TotalCount:           result.TotalCount,
 		TotalCountIsEstimate: result.TotalCountIsEstimate,
+		TotalCountOmitted:    meta.totalOmitted,
 		HasNextPage:          result.HasNextPage,
+		NextCursor:           nextCursor,
 		Items:                items,
 	})
 }
@@ -427,7 +444,7 @@ func (a *API) handleDetail(c *gin.Context) {
 	if !ok {
 		return
 	}
-	result, ok := a.runSearch(c, query.Where(search.TorrentContentInfoHashCriteria(hash)))
+	result, _, ok := a.runSearch(c, query.Where(search.TorrentContentInfoHashCriteria(hash)))
 	if !ok {
 		return
 	}

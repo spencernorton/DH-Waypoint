@@ -355,3 +355,87 @@ func TestRESTSearchRichFiltersAndEpisodeLookup(t *testing.T) {
 	require.Equal(t, []string{h2.String(), h1.String()}, queryHashes("/api/v1/search?type=tv_show&tmdb=4242&season=1&episode=2&min_seeders=10&order_by=seeders&order_dir=desc"))
 	require.Equal(t, []string{h1.String()}, queryHashes("/api/v1/search?video_source=WEBDL&video_codec=x265&min_seeders=10"))
 }
+
+
+func TestRESTCursorPaginationAndOptionalTotalCount(t *testing.T) {
+	engine, pool := restEngine(t)
+	ctx := context.Background()
+
+	// Seed 7 torrents including equal timestamps, equal seeders, and NULL seeders.
+	baseTime := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+	type rowSeed struct {
+		b       byte
+		ts      time.Time
+		seeders *int
+		size    int64
+	}
+	s50, s10 := 50, 10
+	seeds := []rowSeed{
+		{0x01, baseTime.Add(3 * time.Second), &s50, 1000},
+		{0x02, baseTime.Add(3 * time.Second), &s50, 2000},
+		{0x03, baseTime.Add(2 * time.Second), &s10, 3000},
+		{0x04, baseTime.Add(2 * time.Second), nil, 4000},
+		{0x05, baseTime.Add(1 * time.Second), nil, 5000},
+		{0x06, baseTime, &s10, 6000},
+		{0x07, baseTime, &s50, 7000},
+	}
+	for i, s := range seeds {
+		h := protocol.InfoHash{s.b}
+		_, err := pool.Exec(ctx, `INSERT INTO torrents(info_hash, name, size, private, files_status, created_at, updated_at)
+			VALUES($1,$2,$3,false,'single',$4,$4)`, h.Bytes(), fmt.Sprintf("Cursor Film %d", i), s.size, s.ts)
+		require.NoError(t, err)
+		_, err = pool.Exec(ctx, `INSERT INTO torrent_contents(info_hash, content_type, size, seeders, published_at, created_at, updated_at)
+			VALUES($1,'movie',$2,$3,$4,$4,$4)`, h.Bytes(), s.size, s.seeders, s.ts)
+		require.NoError(t, err)
+	}
+
+	for _, sortCase := range []string{
+		"order_by=published_at&order_dir=desc",
+		"order_by=published_at&order_dir=asc",
+		"order_by=seeders&order_dir=desc",
+		"order_by=size&order_dir=desc",
+	} {
+		t.Run(sortCase, func(t *testing.T) {
+			// Collect reference ordering in one request.
+			refRec := httptest.NewRecorder()
+			engine.ServeHTTP(refRec, httptest.NewRequest(http.MethodGet, "/api/v1/search?limit=20&"+sortCase, nil))
+			require.Equal(t, http.StatusOK, refRec.Code)
+			var refResp searchResponse
+			require.NoError(t, json.Unmarshal(refRec.Body.Bytes(), &refResp))
+			require.Len(t, refResp.Items, 7)
+			require.Equal(t, uint(7), refResp.TotalCount)
+			require.False(t, refResp.TotalCountOmitted)
+
+			// Walk pages of 2 using cursor + include_total=false.
+			var walked []string
+			cursor := ""
+			for page := 0; page < 10; page++ {
+				u := "/api/v1/search?limit=2&include_total=false&" + sortCase
+				if cursor != "" {
+					u += "&cursor=" + cursor
+				}
+				rec := httptest.NewRecorder()
+				engine.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, u, nil))
+				require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+				var resp searchResponse
+				require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+				require.True(t, resp.TotalCountOmitted)
+				require.Equal(t, uint(0), resp.TotalCount)
+				for _, it := range resp.Items {
+					walked = append(walked, it.InfoHash)
+				}
+				if !resp.HasNextPage {
+					require.Empty(t, resp.NextCursor)
+					break
+				}
+				require.NotEmpty(t, resp.NextCursor)
+				cursor = resp.NextCursor
+			}
+			refHashes := make([]string, len(refResp.Items))
+			for i, it := range refResp.Items {
+				refHashes[i] = it.InfoHash
+			}
+			require.Equal(t, refHashes, walked, "cursor walk must match exact full ordering without duplicates or gaps")
+		})
+	}
+}

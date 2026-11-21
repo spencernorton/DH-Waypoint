@@ -44,6 +44,7 @@ func TestAppQueryToTsquery(t *testing.T) {
 		{"season inside quoted wildcard phrase", "\"s51 shrek\"*", "(s51 | s51e:*) <-> shrek:*"},
 		{"full episode unchanged", "Shrek s51e01", "shrek & s51e01"},
 		{"season word unchanged", "season s", "season & s"},
+
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -51,4 +52,31 @@ func TestAppQueryToTsquery(t *testing.T) {
 			assert.Equal(t, tt.want, fts.AppQueryToTsquery(tt.input))
 		})
 	}
+}
+
+func TestAppQueryToCompoundExpandedTsqueryAndBM25Groups(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"hyphenated compound expands split and glued", "Spider-Man", "((spider & man) | spiderman)"},
+		{"hyphenated compound with year", "Spider-Man 2002", "((spider & man) | spiderman) & 2002"},
+		{"hyphenated compound wildcard", "blu-ray*", "((blu & ray:*) | bluray:*)"},
+		{"negated hyphenated compound", "!x-men", "! ((x & men) | xmen)"},
+		{"three-part hyphenated compound", "one-two-three", "((one & two & three) | onetwothree)"},
+		{"trailing hyphen safe without panic", "spider-", "spider"},
+		{"hyphen before CJK safe without panic", "spider-中文", "spider & Zhong <-> Wen"},
+		{"space-separated words unchanged", "foo Bar", "foo & bar"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tc.want, fts.AppQueryToCompoundExpandedTsquery(tc.input))
+		})
+	}
+	groups, ok := fts.AppQueryToBM25TermGroups("spider-man 1080p")
+	assert.True(t, ok)
+	assert.Equal(t, [][]string{{"spider", "man", "1080p"}, {"spiderman", "1080p"}}, groups)
 }

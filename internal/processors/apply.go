@@ -198,9 +198,35 @@ func (s *Store) apply(ctx context.Context, tx pgx.Tx, l Lease, src source) error
 			tc.ContentType = model.NewNullContentType(model.ContentType(p.ContentType))
 			changed = true
 			appliedAny = true
-			cl, e := classifier.EnrichTypeLocally(ctx, tc.Torrent, classification.Result{ContentAttributes: classification.ContentAttributes{ContentType: tc.ContentType}}, nil, classifier.LocalTypeEnrichmentOptions{ParseNoiseV2: s.noiseV2, SingleEpisodeMaxBytes: s.singleEpisodeMax})
+			enrichOpts := classifier.LocalTypeEnrichmentOptions{
+				ParseNoiseV2:          s.noiseV2,
+				SingleEpisodeMaxBytes: s.singleEpisodeMax,
+				LocalSearchEnabled:    true,
+				AltTitleMatch:         s.altTitleMatch,
+			}
+			baseRes := classification.Result{ContentAttributes: classification.ContentAttributes{ContentType: tc.ContentType}}
+			cl, e := classifier.EnrichTypeLocally(ctx, tc.Torrent, baseRes, txLocalSearch{tx: tx}, enrichOpts)
 			if e == nil {
+				if cl.Content != nil && !tc.ContentID.Valid {
+					// Recheck local uniqueness under a short share lock so concurrent
+					// catalogue inserts cannot introduce an indistinguishable twin.
+					if _, lockErr := tx.Exec(ctx, `LOCK TABLE content,content_attributes IN SHARE MODE`); lockErr != nil {
+						return lockErr
+					}
+					if recheck, recheckErr := classifier.EnrichTypeLocally(ctx, tc.Torrent, baseRes, txLocalSearch{tx: tx}, enrichOpts); recheckErr == nil {
+						cl = recheck
+					} else {
+						cl.Content = nil
+					}
+				}
 				copyEnrichment(&tc, cl)
+				for tag := range cl.Tags {
+					if norm := normalizeDBTag(tag); norm != "" {
+						if _, tagErr := tx.Exec(ctx, `INSERT INTO torrent_tags(info_hash,name,created_at,updated_at) VALUES($1,$2,clock_timestamp(),clock_timestamp()) ON CONFLICT DO NOTHING`, l.Hash, norm); tagErr != nil {
+							return tagErr
+						}
+					}
+				}
 			}
 		}
 		if p.Extraction != nil {
@@ -489,4 +515,118 @@ func copyEnrichment(tc *model.TorrentContent, cl classification.Result) {
 	if !tc.ReleaseGranularity.Valid {
 		tc.ReleaseGranularity = model.DeriveReleaseGranularity(tc.ContentType, tc.Episodes, tc.Torrent.Name)
 	}
+	if cl.Content != nil && !tc.ContentID.Valid && cl.Content.Source != "" && cl.Content.ID != "" {
+		tc.Content = *cl.Content
+		tc.ContentSource = model.NewNullString(cl.Content.Source)
+		tc.ContentID = model.NewNullString(cl.Content.ID)
+	}
+}
+
+// txLocalSearch executes bounded, read-only local catalogue lookups inside an
+// active apply transaction so plugin-typed rows can continue to exact local
+// movie/TV identity linking without external metadata calls.
+type txLocalSearch struct {
+	tx pgx.Tx
+}
+
+func (l txLocalSearch) ContentByID(context.Context, model.ContentRef) (model.Content, error) {
+	return model.Content{}, classification.ErrUnmatched
+}
+
+func (l txLocalSearch) ContentBySearch(context.Context, model.ContentType, string, model.Year) (model.Content, error) {
+	return model.Content{}, classification.ErrUnmatched
+}
+
+func (l txLocalSearch) ContentCandidatesBySearch(
+	ctx context.Context,
+	ct model.ContentType,
+	baseTitle string,
+	year model.Year,
+	limit int,
+) ([]model.Content, error) {
+	if l.tx == nil || strings.TrimSpace(baseTitle) == "" || limit <= 0 {
+		return nil, nil
+	}
+	var (
+		rows pgx.Rows
+		err  error
+	)
+	if ct == model.ContentTypeMovie && !year.IsNil() {
+		rows, err = l.tx.Query(ctx, `
+SELECT c.type, c.source, c.id, c.title, c.original_title, COALESCE(c.release_year, 0), COALESCE(c.tsv::text, ''),
+  COALESCE(ARRAY(
+    SELECT a.key || E'\x1f' || a.value
+    FROM content_attributes a
+    WHERE a.content_type = c.type AND a.content_source = c.source AND a.content_id = c.id
+      AND a.key LIKE 'alt_title:%'
+    ORDER BY a.key
+    LIMIT 16
+  ), '{}'::text[])
+FROM content c
+WHERE c.type = $1
+  AND c.tsv @@ plainto_tsquery('simple', $2)
+  AND c.release_year BETWEEN $3 AND $4
+ORDER BY ts_rank(c.tsv, plainto_tsquery('simple', $2)) DESC, c.source, c.id
+LIMIT $5`, ct.String(), baseTitle, int(year)-1, int(year)+1, limit)
+	} else {
+		rows, err = l.tx.Query(ctx, `
+SELECT c.type, c.source, c.id, c.title, c.original_title, COALESCE(c.release_year, 0), COALESCE(c.tsv::text, ''),
+  COALESCE(ARRAY(
+    SELECT a.key || E'\x1f' || a.value
+    FROM content_attributes a
+    WHERE a.content_type = c.type AND a.content_source = c.source AND a.content_id = c.id
+      AND a.key LIKE 'alt_title:%'
+    ORDER BY a.key
+    LIMIT 16
+  ), '{}'::text[])
+FROM content c
+WHERE c.type = $1
+  AND c.tsv @@ plainto_tsquery('simple', $2)
+ORDER BY ts_rank(c.tsv, plainto_tsquery('simple', $2)) DESC, c.source, c.id
+LIMIT $3`, ct.String(), baseTitle, limit)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]model.Content, 0, limit)
+	for rows.Next() {
+		var (
+			cType, cSource, cID, title, tsvStr string
+			orig                               *string
+			relYear                            int
+			rawAttrs                           []string
+		)
+		if err := rows.Scan(&cType, &cSource, &cID, &title, &orig, &relYear, &tsvStr, &rawAttrs); err != nil {
+			return nil, err
+		}
+		mc := model.Content{
+			Type:        model.ContentType(cType),
+			Source:      cSource,
+			ID:          cID,
+			Title:       title,
+			ReleaseYear: model.Year(relYear),
+		}
+		if orig != nil && *orig != "" {
+			mc.OriginalTitle = model.NewNullString(*orig)
+		}
+		if tsvStr != "" {
+			if parsedTsv, parseErr := fts.ParseTsvector(tsvStr); parseErr == nil {
+				mc.Tsv = parsedTsv
+			}
+		}
+		for _, pair := range rawAttrs {
+			if k, v, ok := strings.Cut(pair, ""); ok {
+				mc.Attributes = append(mc.Attributes, model.ContentAttribute{
+					ContentType:   mc.Type,
+					ContentSource: mc.Source,
+					ContentID:     mc.ID,
+					Key:           k,
+					Value:         v,
+				})
+			}
+		}
+		out = append(out, mc)
+	}
+	return out, rows.Err()
 }

@@ -20,6 +20,7 @@ func NewConfiguredStore(c Config, p lazy.Lazy[*pgxpool.Pool], cc classifier.Conf
 		return nil, e
 	}
 	s.noiseV2 = cc.ParseNoiseV2
+	s.altTitleMatch = cc.AltTitleMatch
 	s.singleEpisodeMax = cc.SingleEpisodeMaxBytes
 	s.names = n
 	s.filter = contentfilter.New(cf)

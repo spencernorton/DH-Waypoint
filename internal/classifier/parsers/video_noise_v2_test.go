@@ -193,3 +193,32 @@ func TestLatinTitleAfterCJK(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "South Park", attrs.BaseTitle.String)
 }
+
+
+func TestNoiseV2BracketSiteDashAndSingleWordBilingualCJK(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name      string
+		wantTitle string
+	}{
+		{"[ www.Speed.Cd ] - Body.of.Proof.S02E14.720p.HDTV.X264-DIMENSION", "Body of Proof"},
+		{"超女.Supergirl.S04E20.中英字幕.WEB.1080P-人人影视.mp4", "Supergirl"},
+		{"스크럽스 시즌6.Scrubs.S06E01-E22.완결.2006.1080p.한글자막", "Scrubs"},
+		{"超级少女.Supergirl.S05E16.720p.HDTV.x264.双语字幕-深影字幕组版.mp4", "Supergirl"},
+	}
+	for _, tc := range cases {
+		attrs, err := ParseVideoContentWithOptions(model.Torrent{Name: tc.name}, classification.Result{
+			ContentAttributes: classification.ContentAttributes{ContentType: model.NewNullContentType(model.ContentTypeTvShow)},
+		}, ParseOptions{NoiseV2: true})
+		if err != nil {
+			t.Fatalf("%q: unexpected error %v", tc.name, err)
+		}
+		if attrs.BaseTitle.String != tc.wantTitle {
+			t.Fatalf("%q: got BaseTitle %q, want %q", tc.name, attrs.BaseTitle.String, tc.wantTitle)
+		}
+	}
+	// Ensure non-title single Latin technical tokens are NOT extracted as titles.
+	if got := latinTitleAfterCJK("中文片名 HDTV"); got != "中文片名 HDTV" {
+		t.Fatalf("expected technical token HDTV to stay untouched, got %q", got)
+	}
+}
