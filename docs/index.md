@@ -9,7 +9,8 @@ The public distribution is MIT-licensed and runs independently of a browser site
 
 - [Quickstart](quickstart.md): standalone backend and PostgreSQL
 - [API guide](api-guide.md): working GraphQL, REST, Torznab and plugin calls in minutes
-- [Plugins](../plugins/README.md): regex classifier, Armiger Ultra and OpenRouter templates; [plugin files](processors/plugin-files.md) for writing your own; [connecting an LLM](processors/llm.md); [integrating Armiger & Armiger Ultra](armiger-integration.md)
+- [Plugins](../plugins/README.md):
+- [LEAN MODE plugin](lean-mode.md): opt-in single-best-release curation and disk compaction for RAM/disk-constrained hosts regex classifier, Armiger Ultra and OpenRouter templates; [plugin files](processors/plugin-files.md) for writing your own; [connecting an LLM](processors/llm.md); [integrating Armiger & Armiger Ultra](armiger-integration.md)
 - [Private torrents and tracker](private-tracker.md): create, upload, personalised downloads, built-in tracker
 - [Configuration](configuration.md): environment settings and safe opt-in
 - [Operations](OPERATIONS.md): health, capacity, backups and upgrades

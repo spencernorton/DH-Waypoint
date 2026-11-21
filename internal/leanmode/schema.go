@@ -44,14 +44,14 @@ const (
 	SizeEffPreferSmaller = "prefer_smaller"
 	SizeEffPreferLarger  = "prefer_larger"
 
-	TieBreakRepackProper          = "repack_proper"
-	TieBreakPreferredGroup        = "preferred_group"
-	TieBreakHighestSeeders        = "highest_seeders"
-	TieBreakCleanSingleMediaFile  = "clean_single_media_file"
-	TieBreakEmbeddedSubtitles     = "embedded_subtitles"
-	TieBreakNewestVerified        = "newest_verified"
-	TieBreakSmallestSizeInBand    = "smallest_size_in_band"
-	TieBreakLargestSizeInBand     = "largest_size_in_band"
+	TieBreakRepackProper         = "repack_proper"
+	TieBreakPreferredGroup       = "preferred_group"
+	TieBreakHighestSeeders       = "highest_seeders"
+	TieBreakCleanSingleMediaFile = "clean_single_media_file"
+	TieBreakEmbeddedSubtitles    = "embedded_subtitles"
+	TieBreakNewestVerified       = "newest_verified"
+	TieBreakSmallestSizeInBand   = "smallest_size_in_band"
+	TieBreakLargestSizeInBand    = "largest_size_in_band"
 )
 
 var (
@@ -245,16 +245,16 @@ type RequiredConfig struct {
 
 // PreferredConfig defines Tier 2 (Ordered Ranking) rules.
 type PreferredConfig struct {
-	RankingMode     string                `yaml:"ranking_mode" json:"ranking_mode"`
-	EquivalenceBand float64               `yaml:"equivalence_band" json:"equivalence_band"`
-	ResolutionOrder []string              `yaml:"resolution_order,omitempty" json:"resolution_order,omitempty"`
-	SourceOrder     []string              `yaml:"source_order,omitempty" json:"source_order,omitempty"`
-	CodecOrder      []string              `yaml:"codec_order,omitempty" json:"codec_order,omitempty"`
-	HDROrder        []string              `yaml:"hdr_order,omitempty" json:"hdr_order,omitempty"`
-	AudioOrder      []string              `yaml:"audio_order,omitempty" json:"audio_order,omitempty"`
-	PreferredGroups []string              `yaml:"preferred_groups,omitempty" json:"preferred_groups,omitempty"`
-	Weights         PreferredWeights      `yaml:"weights" json:"weights"`
-	SizeEfficiency  SizeEfficiencyConfig  `yaml:"size_efficiency" json:"size_efficiency"`
+	RankingMode     string               `yaml:"ranking_mode" json:"ranking_mode"`
+	EquivalenceBand float64              `yaml:"equivalence_band" json:"equivalence_band"`
+	ResolutionOrder []string             `yaml:"resolution_order,omitempty" json:"resolution_order,omitempty"`
+	SourceOrder     []string             `yaml:"source_order,omitempty" json:"source_order,omitempty"`
+	CodecOrder      []string             `yaml:"codec_order,omitempty" json:"codec_order,omitempty"`
+	HDROrder        []string             `yaml:"hdr_order,omitempty" json:"hdr_order,omitempty"`
+	AudioOrder      []string             `yaml:"audio_order,omitempty" json:"audio_order,omitempty"`
+	PreferredGroups []string             `yaml:"preferred_groups,omitempty" json:"preferred_groups,omitempty"`
+	Weights         PreferredWeights     `yaml:"weights" json:"weights"`
+	SizeEfficiency  SizeEfficiencyConfig `yaml:"size_efficiency" json:"size_efficiency"`
 }
 
 type PreferredWeights struct {

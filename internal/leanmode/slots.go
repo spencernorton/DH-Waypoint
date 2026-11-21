@@ -22,11 +22,11 @@ const (
 
 // SlotAssignment maps one candidate release to its canonical slot key and metadata.
 type SlotAssignment struct {
-	SlotKey    string
-	Kind       SlotKind
-	Season     int
-	Episodes   []int
-	IsPack     bool
+	SlotKey  string
+	Kind     SlotKind
+	Season   int
+	Episodes []int
+	IsPack   bool
 }
 
 // DeriveSlot computes the canonical slot key for a linked movie or TV candidate.
