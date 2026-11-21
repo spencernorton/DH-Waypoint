@@ -14,6 +14,8 @@ if printf '%s\n' "$workers" | grep -E '^(ui|llm_work|junk_purge)$' >/dev/null; t
   exit 1
 fi
 docker run --rm --network none --read-only --entrypoint /bin/sh "$image" -ec '
+  test "$(id -u)" = "1000"
+  test "$(id -g)" = "1000"
   test ! -e /app/ui
   test ! -e /data/dh-waypoint-ui.db
   for command in python python3 uvicorn pip node npm go; do

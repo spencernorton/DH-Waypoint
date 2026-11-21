@@ -13,7 +13,7 @@
 services:
 
   dh-waypoint:
-    image: ghcr.io/spencernorton/dh-waypoint:${DH_WAYPOINT_VERSION:-v5.15.0}
+    image: ghcr.io/spencernorton/dh-waypoint:${DH_WAYPOINT_VERSION:-v6.0.0}
     container_name: dh-waypoint
     restart: unless-stopped
     depends_on:
@@ -72,6 +72,10 @@ services:
       LEAN_MODE_ENABLED: "${LEAN_MODE_ENABLED:-false}"
       LEAN_MODE_CONFIG_FILE: "${LEAN_MODE_CONFIG_FILE:-}"
       LEAN_MODE_SERVE_GLOBALLY: "${LEAN_MODE_SERVE_GLOBALLY:-false}"
+      METAINFO_REQUESTER_ENABLE_MSE: "${METAINFO_REQUESTER_ENABLE_MSE:-true}"
+      VERDICTS_READERS_ENABLED: "${VERDICTS_READERS_ENABLED:-true}"
+      # One-time backup acknowledgement when upgrading an existing v5.12-v5.15 DB (see docs/migration-v6.md)
+      UPGRADE_CONFIRM_V6_BACKUP: "${UPGRADE_CONFIRM_V6_BACKUP:-}"
       DHT_CRAWLER_SCALING_FACTOR: "${DHT_SCALING_FACTOR:-1}"
       LOG_LEVEL: ${LOG_LEVEL:-info}
     ports:
@@ -81,8 +85,9 @@ services:
       - "${DH_WAYPOINT_PEER_PORT:-3334}:3334/tcp"
       - "${DH_WAYPOINT_PEER_PORT:-3334}:3334/udp"
     volumes:
-      - dh-waypoint-config:/root/.config/bitmagnet
-      - dh-waypoint-data:/root/.local/share/bitmagnet
+      - dh-waypoint-config:/var/lib/dh-waypoint/config
+      - dh-waypoint-data:/var/lib/dh-waypoint/data
+      - dh-waypoint-tms:/var/lib/dh-waypoint/tms
       - ./plugins:/plugins:ro
     logging:
       driver: json-file
@@ -99,7 +104,7 @@ services:
       start_period: 90s
 
   postgres:
-    image: postgres:16-alpine
+    image: postgres:18-alpine
     container_name: dh-waypoint-postgres
     restart: unless-stopped
     shm_size: 512m
@@ -109,7 +114,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (run dh-waypoint init)}
       PGUSER: bitmagnet
     volumes:
-      - dh-waypoint-postgres:/var/lib/postgresql/data
+      - dh-waypoint-postgres:/var/lib/postgresql
     command:
       - postgres
       - -c
@@ -214,4 +219,5 @@ services:
 volumes:
   dh-waypoint-config:
   dh-waypoint-data:
+  dh-waypoint-tms:
   dh-waypoint-postgres:

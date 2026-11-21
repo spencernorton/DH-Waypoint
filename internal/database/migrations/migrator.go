@@ -56,6 +56,7 @@ func initGoose(logger *zap.SugaredLogger) {
 
 type Migrator interface {
 	Up(ctx context.Context) error
+	UpWithConfirm(ctx context.Context, confirmToken string) (*PreFlightOutcome, error)
 	UpTo(ctx context.Context, version int64) error
 	Down(ctx context.Context) error
 	DownTo(ctx context.Context, version int64) error
@@ -67,15 +68,33 @@ type migrator struct {
 }
 
 func (m *migrator) Up(ctx context.Context) error {
-	if err := CheckV5Compatibility(ctx, m.db); err != nil {
-		return err
+	_, err := m.UpWithConfirm(ctx, "")
+	return err
+}
+
+func (m *migrator) UpWithConfirm(ctx context.Context, confirmToken string) (*PreFlightOutcome, error) {
+	outcome, err := CheckV6PreFlight(ctx, m.db, confirmToken)
+	if err != nil {
+		return nil, err
+	}
+	if outcome.Case == "v5_auto_upgrade" {
+		m.logger.Infow("v6 pre-flight backup acknowledgement verified; running automatic v5 -> v6 upgrade",
+			"pre_upgrade_goose_version", outcome.PreUpgradeGooseVer,
+			"fingerprint", outcome.PreUpgradeFingerprint,
+		)
 	}
 	m.logger.Info("checking and applying migrations...")
-	return goose.UpContext(ctx, m.db, ".")
+	if err := goose.UpContext(ctx, m.db, "."); err != nil {
+		return nil, err
+	}
+	if err := RecordUpgradeReceipt(ctx, m.db, outcome); err != nil {
+		return nil, err
+	}
+	return outcome, nil
 }
 
 func (m *migrator) UpTo(ctx context.Context, version int64) error {
-	if err := CheckV5Compatibility(ctx, m.db); err != nil {
+	if _, err := CheckV6PreFlight(ctx, m.db, ""); err != nil {
 		return err
 	}
 	return goose.UpToContext(ctx, m.db, ".", version)

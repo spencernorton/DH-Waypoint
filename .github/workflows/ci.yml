@@ -1,5 +1,5 @@
-# Public Go race tests, PostgreSQL 16 & 18 integration, headless boundary and image build.
-# Read-only tokens, disposable databases and commit-pinned GitHub actions.
+# Public Go race tests, sharded PostgreSQL 16 & 18 integration, headless boundary,
+# container build, and v5 -> v6 hard-stop & auto-upgrade drill.
 name: CI
 on:
   workflow_call:
@@ -34,10 +34,11 @@ jobs:
         run: go test -race -count=1 -timeout=2m ./...
       - name: Scan called Go dependencies
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
+
   integration:
     name: PostgreSQL integration
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: 15
     services:
       postgres:
         image: postgres:16-alpine
@@ -55,11 +56,43 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
         with:
           go-version-file: go.mod
-      - run: go test -race -p 1 -count=1 -timeout=15m ./migrations ./internal/database/migrations ./internal/dhtcrawler ./internal/junkpurge ./internal/processors ./processorapi/v1 ./internal/classifier/contentfilter ./internal/llmcapture ./internal/database/search ./internal/torznab/adapter ./internal/serving ./internal/seeds ./internal/evidence ./internal/evidence/sources/qbpoller ./internal/processor ./internal/namepolicy ./internal/importer ./internal/llmwork ./internal/releasefields ./internal/cataloguepolicy ./internal/tracker ./internal/restapi ./internal/eventprune ./internal/leanmode ./internal/cataloguerecovery/... ./internal/csamblocklist/...
+      - name: Run auto-discovered PG 16 Shard 1/2
+        run: |
+          PKGS=$(python3 scripts/list_pg_test_packages.py --shards 2 --index 0)
+          echo "Shard 1/2 packages: $PKGS"
+          go test -race -p 1 -count=1 -timeout=12m $PKGS
+
+  integration_pg16_shard2:
+    name: PostgreSQL 16 integration (shard 2)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: test-only
+          POSTGRES_DB: dh_waypoint_test
+        ports: ['5432:5432']
+        options: --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 3s --health-retries 10
+    env:
+      DH_WAYPOINT_TEST_POSTGRES_DSN: postgres://postgres:test-only@127.0.0.1:5432/dh_waypoint_test?sslmode=disable
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version-file: go.mod
+      - name: Run auto-discovered PG 16 Shard 2/2
+        run: |
+          PKGS=$(python3 scripts/list_pg_test_packages.py --shards 2 --index 1)
+          echo "Shard 2/2 packages: $PKGS"
+          go test -race -p 1 -count=1 -timeout=12m $PKGS
+
   integration_pg18:
     name: PostgreSQL 18 integration
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 15
     services:
       postgres:
         image: postgres:18-alpine
@@ -77,7 +110,9 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
         with:
           go-version-file: go.mod
-      - run: go test -race -p 1 -count=1 -timeout=15m ./migrations ./internal/database/migrations ./internal/database/search ./internal/torznab/adapter ./internal/serving ./internal/namepolicy ./internal/restapi ./internal/leanmode ./internal/cataloguerecovery/... ./internal/csamblocklist/...
+      - name: Run PG 18 core & preflight integration suite
+        run: go test -race -p 1 -count=1 -timeout=12m ./migrations ./internal/database/migrations ./internal/database/search ./internal/database/filebundles ./internal/torznab/adapter ./internal/serving ./internal/namepolicy ./internal/restapi ./internal/leanmode ./internal/cataloguerecovery/... ./internal/csamblocklist/...
+
   image:
     name: Public container build
     runs-on: ubuntu-24.04
@@ -113,6 +148,12 @@ jobs:
           done
       - name: Prove import, processing, public search and restart persistence
         run: python3 scripts/check_runtime.py --image dh-waypoint:ci --evidence out/runtime
+      - name: Prove v5.15 -> v6.0 hard-stop, automatic upgrade & downgrade refusal
+        run: |
+          python3 scripts/test_v6_upgrade_drill.py \
+            --v5-image ghcr.io/spencernorton/dh-waypoint:v5.15.0 \
+            --v6-image dh-waypoint:ci \
+            --pg-image postgres:16-alpine
       - name: Export the exact runtime-qualified image
         env:
           BUILD_SOURCE: https://github.com/${{ github.repository }}

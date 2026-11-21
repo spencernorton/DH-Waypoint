@@ -3,27 +3,19 @@ package appfx
 import (
 	"github.com/spencernorton/DH-Waypoint/internal/animedb/animedbfx"
 	"github.com/spencernorton/DH-Waypoint/internal/app/cli"
-	"github.com/spencernorton/DH-Waypoint/internal/app/cmd/animebackfillcmd"
 	"github.com/spencernorton/DH-Waypoint/internal/app/cmd/attributioncmd"
-	"github.com/spencernorton/DH-Waypoint/internal/app/cmd/backloglocalclassifycmd"
 	"github.com/spencernorton/DH-Waypoint/internal/app/cmd/classifiercmd"
 	"github.com/spencernorton/DH-Waypoint/internal/app/cmd/configcmd"
-	"github.com/spencernorton/DH-Waypoint/internal/app/cmd/episodesbackfillcmd"
-	"github.com/spencernorton/DH-Waypoint/internal/app/cmd/granularitybackfillcmd"
 	"github.com/spencernorton/DH-Waypoint/internal/app/cmd/leancmd"
 	"github.com/spencernorton/DH-Waypoint/internal/app/cmd/plugincmd"
-	"github.com/spencernorton/DH-Waypoint/internal/app/cmd/policyshadowcmd"
 	"github.com/spencernorton/DH-Waypoint/internal/app/cmd/processcmd"
-	"github.com/spencernorton/DH-Waypoint/internal/app/cmd/purgecontenttypescmd"
-	"github.com/spencernorton/DH-Waypoint/internal/app/cmd/refreshalttitlescmd"
-	"github.com/spencernorton/DH-Waypoint/internal/app/cmd/refreshanimetitlescmd"
 	"github.com/spencernorton/DH-Waypoint/internal/app/cmd/refreshseedscmd"
-	"github.com/spencernorton/DH-Waypoint/internal/app/cmd/releasefieldsrepaircmd"
 	"github.com/spencernorton/DH-Waypoint/internal/app/cmd/reprocesscmd"
 	"github.com/spencernorton/DH-Waypoint/internal/app/cmd/searchcmd"
 	"github.com/spencernorton/DH-Waypoint/internal/app/cmd/setupcmd"
 	"github.com/spencernorton/DH-Waypoint/internal/app/cmd/storagecmd"
 	"github.com/spencernorton/DH-Waypoint/internal/app/cmd/torrentcmd"
+	"github.com/spencernorton/DH-Waypoint/internal/app/cmd/upgradecmd"
 	"github.com/spencernorton/DH-Waypoint/internal/app/cmd/workercmd"
 	"github.com/spencernorton/DH-Waypoint/internal/attribution"
 	"github.com/spencernorton/DH-Waypoint/internal/blocking"
@@ -132,17 +124,9 @@ func New() fx.Option {
 			cli.New,
 			cli.AttachHooks,
 			// cli commands:
-			animebackfillcmd.New,
 			attributioncmd.New,
-			backloglocalclassifycmd.New,
 			classifiercmd.New,
-			episodesbackfillcmd.New,
-			releasefieldsrepaircmd.New,
-			granularitybackfillcmd.New,
 			configcmd.New,
-			purgecontenttypescmd.New,
-			refreshalttitlescmd.New,
-			refreshanimetitlescmd.New,
 			refreshseedscmd.New,
 			reprocesscmd.New,
 			plugincmd.New,
@@ -152,7 +136,7 @@ func New() fx.Option {
 			storagecmd.New,
 			leancmd.New,
 			torrentcmd.New,
-			policyshadowcmd.New,
+			upgradecmd.New,
 			workercmd.New,
 		),
 		fx.Decorate(migrations.NewDecorator),

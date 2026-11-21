@@ -117,6 +117,9 @@ services:
       LEAN_MODE_CONFIG_FILE: "${LEAN_MODE_CONFIG_FILE:-}"
       LEAN_MODE_SERVE_GLOBALLY: "${LEAN_MODE_SERVE_GLOBALLY:-false}"
 
+      METAINFO_REQUESTER_ENABLE_MSE: "${METAINFO_REQUESTER_ENABLE_MSE:-true}"
+      VERDICTS_READERS_ENABLED: "${VERDICTS_READERS_ENABLED:-true}"
+      UPGRADE_CONFIRM_V6_BACKUP: "${UPGRADE_CONFIRM_V6_BACKUP:-}"
       LOG_LEVEL: ${LOG_LEVEL:-info}
 
     ports:
@@ -132,8 +135,9 @@ services:
       - "${DH_WAYPOINT_PEER_PORT:-3334}:3334/tcp"
       - "${DH_WAYPOINT_PEER_PORT:-3334}:3334/udp"
     volumes:
-      - dh-waypoint-config:/root/.config/bitmagnet
-      - dh-waypoint-data:/root/.local/share/bitmagnet
+      - dh-waypoint-config:/var/lib/dh-waypoint/config
+      - dh-waypoint-data:/var/lib/dh-waypoint/data
+      - dh-waypoint-tms:/var/lib/dh-waypoint/tms
       - ./plugins:/plugins:ro
     logging:
       driver: json-file
@@ -150,7 +154,7 @@ services:
       start_period: 90s
 
   postgres:
-    image: postgres:16-alpine
+    image: postgres:18-alpine
     container_name: dh-waypoint-postgres
     restart: unless-stopped
     shm_size: 512m
@@ -160,7 +164,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env.public}
       PGUSER: bitmagnet
     volumes:
-      - dh-waypoint-postgres:/var/lib/postgresql/data
+      - dh-waypoint-postgres:/var/lib/postgresql
     # Modest tuning suitable for a 4-8 GB host. Larger deployments
     # should bump shared_buffers and effective_cache_size to ~25% /
     # ~75% of available RAM respectively.
@@ -197,4 +201,5 @@ services:
 volumes:
   dh-waypoint-config:
   dh-waypoint-data:
+  dh-waypoint-tms:
   dh-waypoint-postgres:
