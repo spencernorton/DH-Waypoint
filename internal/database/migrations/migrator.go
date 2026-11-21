@@ -67,11 +67,17 @@ type migrator struct {
 }
 
 func (m *migrator) Up(ctx context.Context) error {
+	if err := CheckV5Compatibility(ctx, m.db); err != nil {
+		return err
+	}
 	m.logger.Info("checking and applying migrations...")
 	return goose.UpContext(ctx, m.db, ".")
 }
 
 func (m *migrator) UpTo(ctx context.Context, version int64) error {
+	if err := CheckV5Compatibility(ctx, m.db); err != nil {
+		return err
+	}
 	return goose.UpToContext(ctx, m.db, ".", version)
 }
 

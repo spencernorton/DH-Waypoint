@@ -137,3 +137,146 @@ func TestResolvedCredentialRetainsValueWithoutCLIOrDebugDisclosure(t *testing.T)
 	require.NotContains(t, string(body), secret)
 	require.NotContains(t, fmt.Sprintf("%+v", r.Resolved), secret)
 }
+
+// evaluateReference is the verbatim unoptimized specification evaluator used
+// to prove 100% parity for the single-pass anchor-prefilter optimization.
+func evaluateReference(p *Policy, h protocol.InfoHash, name string) Decision {
+	d := Decision{Eligible: true, Reason: ReasonAllowed, Version: Version}
+	if !p.Enabled() {
+		d.Reason = ReasonDisabled
+		return d
+	}
+	if p.ExcludesHash(h) {
+		d.Eligible = false
+		d.Reason = ReasonOwnerHash
+		return d
+	}
+	if strings.TrimSpace(name) == "" {
+		d.Eligible = false
+		d.Reason = ReasonMissingName
+		return d
+	}
+	for _, r := range name {
+		if unicode.Is(unicode.Han, r) {
+			d.Eligible = false
+			d.Reason = ReasonHan
+			return d
+		}
+	}
+	for _, r := range name {
+		if unicode.Is(unicode.Cyrillic, r) {
+			d.Eligible = false
+			d.Reason = ReasonCyrillic
+			return d
+		}
+	}
+	count, strong := 0, false
+	matched := map[string]bool{}
+	for i, t := range p.terms {
+		if t.MatchString(name) {
+			count++
+			strong = strong || p.strong[i]
+			matched[p.termNames[i]] = true
+		}
+	}
+	explicitPair := false
+	for _, pair := range p.explicitPairs {
+		explicitPair = explicitPair || (matched[pair[0]] && matched[pair[1]])
+	}
+	if (count >= 2 && strong) || explicitPair {
+		d.Eligible = false
+		d.Reason = ReasonAdultComposite
+	}
+	return d
+}
+
+func TestPrefilterExactParityWithSpecification(t *testing.T) {
+	p, err := New(Config{Enabled: true})
+	require.NoError(t, err)
+	require.LessOrEqual(t, len(p.terms), 64, "bitmask requires <= 64 terms")
+
+	// Verify TagWhitespace matches unicode.IsSpace across the entire Unicode range.
+	wsSet := make(map[rune]bool)
+	for _, r := range specification().Whitespace {
+		wsSet[r] = true
+	}
+	for r := rune(0); r <= unicode.MaxRune; r++ {
+		if wsSet[r] != unicode.IsSpace(r) {
+			t.Fatalf("TagWhitespace disagrees with unicode.IsSpace at U+%04X", r)
+		}
+	}
+
+	corpus := []string{
+		"", "   ", "\t\n\r\u00a0\u3000",
+		"The.Matrix.1999.1080p.BluRay.x264-GROUP.mkv",
+		strings.Repeat("Long.Benign.Release.Title.", 20) + "2024.1080p.mkv",
+		strings.Repeat("Long.Prefix.", 25) + "F.e.t.i.s.h.X_X_X.2024.mkv",
+		"Cyrillic.Фильм.and.Han.电影.mkv", // Han must take precedence over Cyrillic!
+		"Han.电影.and.Cyrillic.Фильм.mkv",
+		"Only.Cyrillic.Фильм.mkv",
+		"Fetish.XXX.2024.mkv",
+		"f.e.t.i.s.h.x-x-x.mkv",
+		"F\u3000e\u00a0t_i-s+h.p\u00a00\u00a0r\u00a0n.mkv",
+		"FETISH+S3X.mkv",
+		"Fetish\u00a0Porn.mkv",
+		"Fetish.p0rn.mkv",
+		"FetishXXX.mkv",
+		"FetishPorn.mkv",
+		"FetishPorno.mkv",
+		"PornXXX.mkv",
+		"Porno.XXX.mkv",
+		"PornoXXX.mkv",
+		"P0rn.X.X.X.mkv",
+		"pr0n.xxx.mkv",
+		"Gaping.Anal.XXX.mkv",
+		"g-a-p-i-n-g+a_n.a.l.hardcore.mkv",
+		"Blowjob.Hentai.2024.mkv",
+		"B.l.o.w.j.o.b.MILF.mkv",
+		"Gangbang.NSFW.mkv",
+		"Bukkake.Adult.mkv",
+		"Cumshot.Sex.mkv",
+		"Cum.Shot.S3x.mkv",
+		"F\u00e9tish.XXX.mkv",
+		"Fet\u00e9ish.XXX.mkv",
+		"Caf\u00e9fetish.xxx.mkv",
+		"Fetish.xxx\u00e9.mkv",
+		"xXx.Return.of.Xander.Cage.2017.1080p.mkv",
+		"Sex.Education.S01E01.1080p.mkv",
+		"Hardcore.Henry.2015.BluRay.mkv",
+		"MILF.2018.adult.comedy.mkv",
+		"Porno.2019.Adult.Comedy.mkv",
+		"Hentai.Documentary.XXX.mkv",
+		"South.Park.Cartman.Gets.an.Anal.Probe.Season.XXX.mkv",
+		"Fetish.2024.Documentary.mkv",
+		"Blowjob.Single.Term.Only.mkv",
+		"Cumshot.Alone.mkv",
+	}
+	for _, name := range corpus {
+		want := evaluateReference(p, protocol.InfoHash{}, name)
+		got := p.Evaluate(protocol.InfoHash{}, name)
+		require.Equal(t, want, got, "mismatch for %q", name)
+	}
+}
+
+func BenchmarkPolicyEvaluate(b *testing.B) {
+	p, err := New(Config{Enabled: true})
+	require.NoError(b, err)
+	b.Run("benign_ascii", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			_ = p.Evaluate(protocol.InfoHash{}, "The.Matrix.1999.1080p.BluRay.REMUX.TrueHD.7.1.x265-GROUP.mkv")
+		}
+	})
+	b.Run("benign_reference", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			_ = evaluateReference(p, protocol.InfoHash{}, "The.Matrix.1999.1080p.BluRay.REMUX.TrueHD.7.1.x265-GROUP.mkv")
+		}
+	})
+	b.Run("adult_match", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			_ = p.Evaluate(protocol.InfoHash{}, "F.e.t.i.s.h.X-X-X.2024.1080p.mkv")
+		}
+	})
+}

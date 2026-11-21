@@ -4,6 +4,7 @@
 package namepolicy
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -12,6 +13,7 @@ import (
 	"sort"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/spencernorton/DH-Waypoint/internal/catalogueguard"
 	"github.com/spencernorton/DH-Waypoint/internal/protocol"
@@ -41,22 +43,46 @@ type Decision struct {
 }
 
 type Policy struct {
-	enabled        bool
-	excluded       map[protocol.InfoHash]struct{}
-	excludedHashes []protocol.InfoHash
-	internalToken  SecretToken
-	terms          []*regexp.Regexp
-	strong         []bool
-	termNames      []string
-	explicitPairs  [][2]string
-	denied         *dualemit.CounterVec
+	enabled             bool
+	excluded            map[protocol.InfoHash]struct{}
+	excludedHashes      []protocol.InfoHash
+	internalToken       SecretToken
+	terms               []*regexp.Regexp
+	strong              []bool
+	termNames           []string
+	explicitPairs       [][2]string
+	explicitPairIndices [][2]int
+	anchorNeedles       [][]byte
+	denied              *dualemit.CounterVec
+}
+
+// anchorNeedlesForSpec returns sound lowercased ASCII byte needles: at least
+// one needle must appear in the separator-stripped ASCII-lowercased release
+// name for any strong term or explicit adult pair to match. Because every
+// termPattern only allows ASCII letters/digits interleaved with separators
+// (TagWhitespace + "._-+"), absence of every needle guarantees ReasonAllowed
+// without running the full regex set.
+var defaultAnchorNeedles = [][]byte{
+	[]byte("fetish"),
+	[]byte("blowjob"),
+	[]byte("gangbang"),
+	[]byte("bukkake"),
+	[]byte("cumshot"),
+	[]byte("gapinganal"),
+	[]byte("xxx"),
 }
 
 func New(c Config) (*Policy, error) {
 	if err := c.Validate(); err != nil {
 		return nil, err
 	}
-	p := &Policy{enabled: c.Enabled, excluded: map[protocol.InfoHash]struct{}{}, internalToken: c.InternalCheckToken, denied: newDeniedMetric()}
+	p := &Policy{
+		enabled:       c.Enabled,
+		excluded:      map[protocol.InfoHash]struct{}{},
+		internalToken: c.InternalCheckToken,
+		anchorNeedles: defaultAnchorNeedles,
+		denied:        newDeniedMetric(),
+	}
 	for _, value := range c.ExcludedInfoHashes {
 		h, _ := protocol.ParseInfoHash(value)
 		p.excluded[h] = struct{}{}
@@ -67,10 +93,19 @@ func New(c Config) (*Policy, error) {
 	sort.Slice(p.excludedHashes, func(i, j int) bool { return p.excludedHashes[i].String() < p.excludedHashes[j].String() })
 	spec := specification()
 	p.explicitPairs = spec.ExplicitAdultPairs
-	for _, t := range spec.AdultTerms {
+	nameToIndex := make(map[string]int, len(spec.AdultTerms))
+	for i, t := range spec.AdultTerms {
 		p.terms = append(p.terms, regexp.MustCompile(t.Pattern))
 		p.strong = append(p.strong, t.Strong)
 		p.termNames = append(p.termNames, t.Name)
+		nameToIndex[t.Name] = i
+	}
+	for _, pair := range spec.ExplicitAdultPairs {
+		a, okA := nameToIndex[pair[0]]
+		b, okB := nameToIndex[pair[1]]
+		if okA && okB {
+			p.explicitPairIndices = append(p.explicitPairIndices, [2]int{a, b})
+		}
 	}
 	return p, nil
 }
@@ -108,6 +143,73 @@ func (p *Policy) Fingerprint() string {
 	return hex.EncodeToString(h[:])
 }
 
+func isASCIISpace(b byte) bool {
+	return b == ' ' || b == '\t' || b == '\n' || b == '\r' || b == '\v' || b == '\f'
+}
+
+func isASCIISeparator(b byte) bool {
+	return isASCIISpace(b) || b == '.' || b == '_' || b == '-' || b == '+'
+}
+
+// prefilterAndCheckScripts scans name once to enforce missing-name, Han, and
+// Cyrillic rules (preserving exact Han-before-Cyrillic precedence) while
+// building a separator-stripped ASCII-lowercased buffer on the stack for
+// zero-allocation anchor prefiltering.
+func prefilterAndCheckScripts(name string, stackBuf *[256]byte) (stopReason string, stripped []byte) {
+	buf := stackBuf[:0]
+	if len(name) > len(stackBuf) {
+		buf = make([]byte, 0, len(name))
+	}
+	nonSpace := false
+	hasCyrillic := false
+	for i := 0; i < len(name); {
+		b := name[i]
+		if b < utf8.RuneSelf {
+			if !isASCIISpace(b) {
+				nonSpace = true
+			}
+			if !isASCIISeparator(b) {
+				if b >= 'A' && b <= 'Z' {
+					b += 'a' - 'A'
+				}
+				buf = append(buf, b)
+			}
+			i++
+			continue
+		}
+		r, size := utf8.DecodeRuneInString(name[i:])
+		i += size
+		if unicode.Is(unicode.Han, r) {
+			return ReasonHan, nil
+		}
+		if unicode.Is(unicode.Cyrillic, r) {
+			hasCyrillic = true
+		}
+		if !unicode.IsSpace(r) {
+			nonSpace = true
+			// Non-ASCII non-separator rune cannot appear inside any ASCII term
+			// word; emit a NUL barrier so surrounding letters never coalesce.
+			buf = append(buf, 0)
+		}
+	}
+	if !nonSpace {
+		return ReasonMissingName, nil
+	}
+	if hasCyrillic {
+		return ReasonCyrillic, nil
+	}
+	return "", buf
+}
+
+func (p *Policy) hasAnchorNeedle(stripped []byte) bool {
+	for _, needle := range p.anchorNeedles {
+		if bytes.Contains(stripped, needle) {
+			return true
+		}
+	}
+	return false
+}
+
 func (p *Policy) Evaluate(h protocol.InfoHash, name string) Decision {
 	d := Decision{Eligible: true, Reason: ReasonAllowed, Version: Version}
 	if !p.Enabled() {
@@ -119,37 +221,33 @@ func (p *Policy) Evaluate(h protocol.InfoHash, name string) Decision {
 		d.Reason = ReasonOwnerHash
 		return d
 	}
-	if strings.TrimSpace(name) == "" {
+	var stackBuf [256]byte
+	stopReason, stripped := prefilterAndCheckScripts(name, &stackBuf)
+	if stopReason != "" {
 		d.Eligible = false
-		d.Reason = ReasonMissingName
+		d.Reason = stopReason
 		return d
 	}
-	for _, r := range name {
-		if unicode.Is(unicode.Han, r) {
-			d.Eligible = false
-			d.Reason = ReasonHan
-			return d
-		}
-	}
-	for _, r := range name {
-		if unicode.Is(unicode.Cyrillic, r) {
-			d.Eligible = false
-			d.Reason = ReasonCyrillic
-			return d
-		}
+	if !p.hasAnchorNeedle(stripped) {
+		return d
 	}
 	count, strong := 0, false
-	matched := map[string]bool{}
+	var matchedMask uint64
 	for i, t := range p.terms {
 		if t.MatchString(name) {
 			count++
 			strong = strong || p.strong[i]
-			matched[p.termNames[i]] = true
+			matchedMask |= 1 << uint(i)
 		}
 	}
 	explicitPair := false
-	for _, pair := range p.explicitPairs {
-		explicitPair = explicitPair || (matched[pair[0]] && matched[pair[1]])
+	for _, pair := range p.explicitPairIndices {
+		bitA := uint64(1) << uint(pair[0])
+		bitB := uint64(1) << uint(pair[1])
+		if matchedMask&bitA != 0 && matchedMask&bitB != 0 {
+			explicitPair = true
+			break
+		}
 	}
 	if (count >= 2 && strong) || explicitPair {
 		d.Eligible = false

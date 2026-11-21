@@ -3,6 +3,7 @@ package regex
 import (
 	"regexp"
 	"strings"
+	"sync"
 	"unicode"
 
 	"github.com/hedhyw/rex/pkg/dialect/base"
@@ -57,19 +58,35 @@ func WordTokenRegex() *regexp.Regexp {
 	return wordTokenRegex
 }
 
-func NormalizeString(input string) string {
-	input = strings.ToLower(input)
-	input, _, _ = transform.String(transform.Chain(norm.NFD, norm.NFC), input)
+var nfdNFCPool = sync.Pool{
+	New: func() any {
+		return transform.Chain(norm.NFD, norm.NFC)
+	},
+}
 
-	var tokens []string
-
-	for _, match := range WordTokenRegex().FindAllStringSubmatch(input, -1) {
-		if len(match) >= 1 && len(match[0]) >= 1 {
-			tokens = append(tokens, match[0])
+func isASCII(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] >= 0x80 {
+			return false
 		}
 	}
+	return true
+}
 
-	return strings.Join(tokens, " ")
+func NormalizeString(input string) string {
+	input = strings.ToLower(input)
+	if !isASCII(input) {
+		t := nfdNFCPool.Get().(transform.Transformer)
+		t.Reset()
+		input, _, _ = transform.String(t, input)
+		nfdNFCPool.Put(t)
+	}
+
+	matches := wordTokenRegex.FindAllString(input, -1)
+	if len(matches) == 0 {
+		return ""
+	}
+	return strings.Join(matches, " ")
 }
 
 func QuotedStringToken(quoteCharToken base.ClassToken) base.GroupToken {
