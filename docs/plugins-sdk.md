@@ -50,6 +50,7 @@ auth_token_env: MY_PLUGIN_TOKEN
 
 Consumer bridges and ingestion syncers talk solely to DH-Waypoint's public HTTP APIs and import zero internal Go packages:
 
+- **Reference Metadata Match Adapter (`adapters/match`)**: Pure Go `dh-waypoint.processor.v1` `extract`+`match` plugin supporting `anilist` (anime + MAL cross-refs), `musicbrainz` (music release groups), `igdb` (video games), and `openlibrary` (books/audiobooks). Verify with `dh-waypoint plugin verify` before registering in `plugins/*.plugin.yml`.
 - **Stremio Addon Bridge (`adapters/stremio`)**: Pure Go standard-library Stremio Addon Protocol v1 server querying `/torznab/api`. Enable in Docker Compose with `COMPOSE_PROFILES=stremio`.
 - **Prowlarr / Torznab Sync (`adapters/prowlarr-sync`)**: Polls external Torznab RSS feeds and pushes batches to `POST /import?on_error=skip` (`X-Import-On-Error: skip`) so one malformed item never aborts a chunk. Enable with `COMPOSE_PROFILES=prowlarr-sync`.
 - **REST API (`/api/v1/search`, `/api/v2/search`)**: Supports full-text search, IMDb/TMDb ID lookups, season/episode filtering, `resolution`, `video_source`, `video_codec`, `hdr`, `min_seeders`, and `order_by` sorting (`docs/reference/openapi.yaml` and `docs/reference/openapi-v2.yaml`).
