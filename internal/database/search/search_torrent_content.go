@@ -6,6 +6,7 @@ import (
 
 	"github.com/spencernorton/DH-Waypoint/internal/database/dao"
 	"github.com/spencernorton/DH-Waypoint/internal/database/query"
+	"github.com/spencernorton/DH-Waypoint/internal/leanmode"
 	"github.com/spencernorton/DH-Waypoint/internal/model"
 	"gorm.io/gen"
 	"gorm.io/gen/field"
@@ -83,6 +84,13 @@ func (s search) torrentContent(ctx context.Context, serial bool, options ...quer
 	options = append(prefixOptions, options...)
 	if s.adultPolicy != nil && s.adultPolicy.ExcludesAdult() {
 		options = append(options, query.WithFacetExcludedValues(TorrentContentTypeFacetKey, "xxx"))
+	}
+	if s.leanStore != nil {
+		if lp, ul, nv, active := s.leanStore.ActiveServingProfile(); active {
+			if crit, critErr := leanmode.ServingWinnersCriteria(lp, ul, nv); critErr == nil {
+				options = append(options, query.Where(crit))
+			}
+		}
 	}
 	execute := query.GenericQuery[TorrentContentResultItem]
 	if serial {

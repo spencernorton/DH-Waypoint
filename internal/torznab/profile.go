@@ -9,6 +9,9 @@ type Profile struct {
 	DefaultLimit            uint
 	MaxLimit                uint
 	Tags                    []string
+	LeanProfile             string `yaml:"lean_profile"`
+	LeanUnlinkedPolicy      string `yaml:"lean_unlinked_policy"`
+	LeanNonVideoPolicy      string `yaml:"lean_non_video_policy"`
 }
 
 var ProfileDefault = Profile{

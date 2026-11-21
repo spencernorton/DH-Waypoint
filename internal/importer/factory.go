@@ -7,6 +7,7 @@ import (
 	"github.com/spencernorton/DH-Waypoint/internal/csamblocklist"
 	"github.com/spencernorton/DH-Waypoint/internal/database/dao"
 	"github.com/spencernorton/DH-Waypoint/internal/lazy"
+	"github.com/spencernorton/DH-Waypoint/internal/leanmode"
 	"github.com/spencernorton/DH-Waypoint/internal/namepolicy"
 	"go.uber.org/fx"
 )
@@ -23,6 +24,8 @@ type Params struct {
 	CsamBlocklist   csamblocklist.Manager
 	BlockingManager lazy.Lazy[blocking.Manager]
 	Metrics         *Metrics
+	LeanStore       *leanmode.Store   `optional:"true"`
+	LeanMetrics     *leanmode.Metrics `optional:"true"`
 }
 
 type Result struct {
@@ -49,6 +52,8 @@ func New(p Params) Result {
 				csamBlocklist:   p.CsamBlocklist,
 				blockingManager: bm,
 				metrics:         p.Metrics,
+				leanStore:       p.LeanStore,
+				leanMetrics:     p.LeanMetrics,
 			}, nil
 		}),
 	}

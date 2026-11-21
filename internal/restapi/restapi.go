@@ -21,6 +21,7 @@ import (
 	"github.com/spencernorton/DH-Waypoint/internal/database/search"
 	"github.com/spencernorton/DH-Waypoint/internal/httpserver"
 	"github.com/spencernorton/DH-Waypoint/internal/lazy"
+	"github.com/spencernorton/DH-Waypoint/internal/leanmode"
 	"github.com/spencernorton/DH-Waypoint/internal/model"
 	"github.com/spencernorton/DH-Waypoint/internal/protocol"
 	"go.uber.org/zap"
@@ -350,6 +351,24 @@ func (a *API) runSearch(c *gin.Context, extra ...query.Option) (search.TorrentCo
 			return search.TorrentContentResult{}, false
 		}
 		options = append(options, query.OrderBy(order.Clauses(dir)...))
+	}
+	if leanProf := strings.TrimSpace(c.Query("lean_profile")); leanProf != "" {
+		unlinkedPol := strings.TrimSpace(c.Query("lean_unlinked"))
+		nonVidPol := strings.TrimSpace(c.Query("lean_non_video"))
+		if unlinkedPol != "" && unlinkedPol != leanmode.UnlinkedPassThrough && unlinkedPol != leanmode.UnlinkedExcludeFromServe {
+			c.JSON(400, gin.H{"error": "invalid lean_unlinked policy"})
+			return search.TorrentContentResult{}, false
+		}
+		if nonVidPol != "" && nonVidPol != leanmode.NonVideoPassThrough && nonVidPol != leanmode.NonVideoExcludeFromServe {
+			c.JSON(400, gin.H{"error": "invalid lean_non_video policy"})
+			return search.TorrentContentResult{}, false
+		}
+		crit, critErr := leanmode.ServingWinnersCriteria(leanProf, unlinkedPol, nonVidPol)
+		if critErr != nil {
+			c.JSON(400, gin.H{"error": "invalid lean_profile"})
+			return search.TorrentContentResult{}, false
+		}
+		options = append(options, query.Where(crit))
 	}
 	options = append(options, extra...)
 	var result search.TorrentContentResult

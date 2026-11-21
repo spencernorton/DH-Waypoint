@@ -20,6 +20,7 @@ import (
 	"github.com/spencernorton/DH-Waypoint/internal/protocol/metainfo/banning"
 	"github.com/spencernorton/DH-Waypoint/internal/protocol/metainfo/metainforequester"
 	"github.com/spencernorton/DH-Waypoint/internal/telemetry/dualemit"
+	"github.com/spencernorton/DH-Waypoint/internal/leanmode"
 	"github.com/spencernorton/DH-Waypoint/internal/verdicts"
 	"github.com/spencernorton/DH-Waypoint/internal/wantbridge"
 	boom "github.com/tylertreat/BoomFilters"
@@ -109,6 +110,8 @@ type crawler struct {
 	verdicts        *verdicts.Store
 	verdictsLive    bool
 	verdictsMetrics *verdicts.Metrics
+	leanStore       *leanmode.Store
+	leanMetrics     *leanmode.Metrics
 	logger          *zap.SugaredLogger
 }
 

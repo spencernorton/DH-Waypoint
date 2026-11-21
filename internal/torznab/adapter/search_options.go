@@ -8,6 +8,7 @@ import (
 
 	"github.com/spencernorton/DH-Waypoint/internal/database/query"
 	"github.com/spencernorton/DH-Waypoint/internal/database/search"
+	"github.com/spencernorton/DH-Waypoint/internal/leanmode"
 	"github.com/spencernorton/DH-Waypoint/internal/model"
 	"github.com/spencernorton/DH-Waypoint/internal/torznab"
 )
@@ -234,6 +235,13 @@ func searchRequestToQueryOptionsWithIdentifiers(r torznab.SearchRequest, include
 
 	if len(r.Profile.Tags) > 0 {
 		options = append(options, query.Where(search.TorrentTagCriteria(r.Profile.Tags...)))
+	}
+	if lp := strings.TrimSpace(r.Profile.LeanProfile); lp != "" {
+		crit, critErr := leanmode.ServingWinnersCriteria(lp, r.Profile.LeanUnlinkedPolicy, r.Profile.LeanNonVideoPolicy)
+		if critErr != nil {
+			return nil, critErr
+		}
+		options = append(options, query.Where(crit))
 	}
 
 	return options, nil

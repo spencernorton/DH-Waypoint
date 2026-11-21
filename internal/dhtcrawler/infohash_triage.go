@@ -113,6 +113,27 @@ func (c *crawler) runInfoHashTriage(ctx context.Context) {
 				}
 			}
 
+			if c.leanStore != nil {
+				raw := make([][]byte, 0, len(filteredHashes))
+				for _, h := range filteredHashes {
+					raw = append(raw, h.Bytes())
+				}
+				if tombstoned, terr := c.leanStore.TombstonedSet(ctx, raw); terr == nil && len(tombstoned) > 0 {
+					kept := make([]protocol.InfoHash, 0, len(filteredHashes))
+					for _, h := range filteredHashes {
+						if _, skip := tombstoned[h.String()]; skip {
+							continue
+						}
+						kept = append(kept, h)
+					}
+					c.leanMetrics.TombstoneSkipped("crawler", len(filteredHashes)-len(kept))
+					filteredHashes = kept
+					if len(filteredHashes) == 0 {
+						break
+					}
+				}
+			}
+
 			filteredHashMap := make(map[protocol.InfoHash]struct{}, len(filteredHashes))
 			valuers := make([]driver.Valuer, 0, len(filteredHashes))
 

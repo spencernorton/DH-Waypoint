@@ -13,6 +13,7 @@ import (
 	"github.com/spencernorton/DH-Waypoint/internal/csamblocklist"
 	"github.com/spencernorton/DH-Waypoint/internal/database/dao"
 	"github.com/spencernorton/DH-Waypoint/internal/database/filebundles"
+	"github.com/spencernorton/DH-Waypoint/internal/leanmode"
 	"github.com/spencernorton/DH-Waypoint/internal/model"
 	"github.com/spencernorton/DH-Waypoint/internal/namepolicy"
 	"github.com/spencernorton/DH-Waypoint/internal/processor"
@@ -67,6 +68,8 @@ type importer struct {
 	csamBlocklist   csamblocklist.Manager
 	blockingManager blocking.Manager
 	metrics         *Metrics
+	leanStore       *leanmode.Store
+	leanMetrics     *leanmode.Metrics
 }
 
 var ErrImportClosed = errors.New("import closed")
@@ -254,6 +257,24 @@ func (i *activeImport) gateItems(items []Item) ([]Item, error) {
 		hashes = kept
 		if dropped := afterCsam - len(hashes); dropped > 0 {
 			i.metrics.Gated("blocking", dropped)
+		}
+	}
+
+	if i.leanStore != nil && len(hashes) > 0 {
+		raw := make([][]byte, 0, len(hashes))
+		for _, h := range hashes {
+			raw = append(raw, h.Bytes())
+		}
+		if tombstoned, terr := i.leanStore.TombstonedSet(i.ctx, raw); terr == nil && len(tombstoned) > 0 {
+			kept := make([]protocol.InfoHash, 0, len(hashes))
+			for _, h := range hashes {
+				if _, skip := tombstoned[h.String()]; skip {
+					continue
+				}
+				kept = append(kept, h)
+			}
+			i.leanMetrics.TombstoneSkipped("importer", len(hashes)-len(kept))
+			hashes = kept
 		}
 	}
 
