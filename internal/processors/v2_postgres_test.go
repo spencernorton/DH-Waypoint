@@ -110,7 +110,8 @@ func TestPostgresV2ProcessorNegotiationPreservesStrictV1Services(t *testing.T) {
 func TestPostgresIdentityMigrationPreservesV1AndGuardsDowngrade(t *testing.T) {
 	_, p, provider := fixtureAt(t, 69)
 	h := seedTorrent(t, p, 94, nil)
-	_, err := provider.Up(testContext)
+	// Exercises the v5 identity downgrade boundary (69 -> 83 -> 69) before v6 epoch 100.
+	_, err := provider.UpTo(testContext, 83)
 	require.NoError(t, err)
 	var length int
 	var alias []byte
@@ -122,7 +123,7 @@ func TestPostgresIdentityMigrationPreservesV1AndGuardsDowngrade(t *testing.T) {
 	require.NoError(t, err) // identity schema, v1-only data
 	require.NoError(t, p.QueryRow(testContext, "SELECT octet_length(info_hash) FROM torrents WHERE info_hash=$1", h).Scan(&length))
 	require.Equal(t, 20, length)
-	_, err = provider.Up(testContext)
+	_, err = provider.UpTo(testContext, 83)
 	require.NoError(t, err)
 	v2hash := protocol.InfoHashV2(sha256.Sum256([]byte("synthetic hybrid alias")))
 	_, err = p.Exec(testContext, "UPDATE torrents SET info_hash_v2=$2 WHERE info_hash=$1", h, v2hash.Bytes())

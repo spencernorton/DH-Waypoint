@@ -5,21 +5,29 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const (
 	// ExitCodeIncompatibleSchema matches BSD sysexits EX_CONFIG (78) so
-	// container orchestrators and scripts distinguish a deliberate major-version
-	// hard stop from a transient runtime crash.
+	// orchestrators and scripts distinguish a deliberate major-version hard
+	// stop from a transient runtime failure.
 	ExitCodeIncompatibleSchema = 78
 
 	// SchemaMajorKey stores the active major schema epoch in key_values.
 	SchemaMajorKey = "schema_major"
+
+	// UpgradeReceiptKey stores the durable v6 upgrade receipt JSON in key_values.
+	UpgradeReceiptKey = "v6_upgrade_receipt"
+
+	// CurrentSchemaMajor is the major schema epoch enforced by v6.x binaries.
+	CurrentSchemaMajor = 6
 
 	// MaxV5SchemaVersion is the highest Goose migration shipped by the v5.x line.
 	MaxV5SchemaVersion int64 = 83
@@ -28,8 +36,8 @@ const (
 	// zero-manual-step automatic in-binary upgrade into v6.0.0.
 	MinV6DirectUpgradeSchema int64 = 81
 
-	// UpgradeConfirmEnvVar is the environment variable v6.0.0 checks before
-	// mutating a compatible v5.x database.
+	// UpgradeConfirmEnvVar is the DB-fingerprint-bound acknowledgement v6.0.0
+	// requires once before mutating a compatible v5.12-v5.15 database.
 	UpgradeConfirmEnvVar = "UPGRADE_CONFIRM_V6_BACKUP"
 )
 
@@ -39,13 +47,14 @@ const (
 type IncompatibleSchemaError struct {
 	DetectedMajor        int
 	DetectedGooseVersion int64
+	Fingerprint          string
 	Reason               string
 	Guidance             string
 }
 
 func (e *IncompatibleSchemaError) Error() string {
 	var b strings.Builder
-	b.WriteString("INCOMPATIBLE DATABASE SCHEMA (exit 78): ")
+	b.WriteString("INCOMPATIBLE DATABASE SCHEMA — HARD STOP (exit 78): ")
 	b.WriteString(e.Reason)
 	if e.Guidance != "" {
 		b.WriteString("\n")
@@ -108,37 +117,14 @@ func readGooseVersion(ctx context.Context, db *sql.DB) (int64, bool, error) {
 	return v, true, nil
 }
 
-// CheckV5Compatibility runs strictly read-only BEFORE Goose applies any DDL so
-// a v5.x binary can never accidentally start against or corrupt a v6+ database.
-func CheckV5Compatibility(ctx context.Context, db *sql.DB) error {
-	major, hasMajor, err := readSchemaMajor(ctx, db)
-	if err != nil {
-		return &IncompatibleSchemaError{
-			Reason:   fmt.Sprintf("invalid %s metadata: %v", SchemaMajorKey, err),
-			Guidance: "Inspect key_values.schema_major before starting DH-Waypoint.",
-		}
-	}
-	if hasMajor && major > 5 {
-		return &IncompatibleSchemaError{
-			DetectedMajor: major,
-			Reason:        fmt.Sprintf("database is marked schema_major=%d, which cannot be opened by a v5.x binary", major),
-			Guidance:      "Run a matching v6.x binary (use DH_TMS_READ_MODE=off on v6 for instant PG read fallback), or restore a pre-v6 PostgreSQL backup to revert to v5.x.",
-		}
-	}
-
-	gooseVer, hasGoose, err := readGooseVersion(ctx, db)
-	if err != nil {
-		return err
-	}
-	if hasGoose && gooseVer > MaxV5SchemaVersion {
-		return &IncompatibleSchemaError{
-			DetectedMajor:        6,
-			DetectedGooseVersion: gooseVer,
-			Reason:               fmt.Sprintf("database Goose schema version %d exceeds v5.x maximum (%d)", gooseVer, MaxV5SchemaVersion),
-			Guidance:             "This database has already been upgraded past v5.x. Start a matching v6.x binary or restore a verified pre-upgrade PostgreSQL backup.",
-		}
-	}
-	return nil
+// PreFlightOutcome describes the read-only pre-flight classification before
+// Goose executes any DDL statement.
+type PreFlightOutcome struct {
+	Case                  string
+	NeedsUpgradeReceipt   bool
+	PreUpgradeGooseVer    int64
+	PreUpgradeFingerprint string
+	Report                *V6ReadinessReport
 }
 
 // V6ReadinessReport summarizes a read-only pre-flight inspection for upgrading
@@ -151,6 +137,7 @@ type V6ReadinessReport struct {
 	SchemaMajor                int
 	HasSchemaMajor             bool
 	GooseVersion               int64
+	HasGooseTable              bool
 	EstimatedTorrents          int64
 	HasLegacyTorrentFiles      bool
 	EstimatedLegacyFiles       int64
@@ -165,8 +152,7 @@ type V6ReadinessReport struct {
 	Ready                      bool
 }
 
-// InspectV6Readiness executes read-only PostgreSQL catalog probes to verify
-// whether an instance is ready for automatic in-binary v6.0.0 upgrade.
+// InspectV6Readiness executes strictly read-only PostgreSQL catalog probes.
 func InspectV6Readiness(ctx context.Context, db *sql.DB) (*V6ReadinessReport, error) {
 	rep := &V6ReadinessReport{}
 
@@ -177,8 +163,6 @@ func InspectV6Readiness(ctx context.Context, db *sql.DB) (*V6ReadinessReport, er
 	}
 	rep.PostgresMajor = verNum / 10000
 
-	// pg_control_system() is readable by default roles on PG 16+; fall back
-	// gracefully if a restricted role lacks permission.
 	var sysID sql.NullString
 	_ = db.QueryRowContext(ctx, "SELECT system_identifier::text FROM pg_control_system()").Scan(&sysID)
 	rep.SystemIdentifier = sysID.String
@@ -195,17 +179,20 @@ func InspectV6Readiness(ctx context.Context, db *sql.DB) (*V6ReadinessReport, er
 		return nil, fmt.Errorf("inspect goose_db_version: %w", err)
 	}
 	rep.GooseVersion = gooseVer
+	rep.HasGooseTable = hasGoose
 
-	if hasMajor && major >= 6 {
-		rep.Advisories = append(rep.Advisories, fmt.Sprintf("database is already upgraded to schema_major=%d", major))
+	if hasMajor && major == CurrentSchemaMajor {
+		rep.Advisories = append(rep.Advisories, "database is already on v6 schema epoch (schema_major=6)")
+	} else if hasMajor && major > CurrentSchemaMajor {
+		rep.Blockers = append(rep.Blockers, fmt.Sprintf("database is marked schema_major=%d, newer than this v6 binary", major))
 	} else if !hasGoose || gooseVer == 0 {
 		rep.Advisories = append(rep.Advisories, "empty database detected; v6.0.0 will initialize automatically with zero manual steps")
 	} else if gooseVer < MinV6DirectUpgradeSchema {
-		rep.Blockers = append(rep.Blockers, fmt.Sprintf("Goose schema version %d is below v6 direct-upgrade floor (%d); run v5.15.0 once to advance schema to %d first", gooseVer, MinV6DirectUpgradeSchema, MaxV5SchemaVersion))
+		rep.Blockers = append(rep.Blockers, fmt.Sprintf("Goose schema version %d is below v6 direct-upgrade floor (%d); back up and step through v5.15.0 (bridge LTS) first, or start fresh on v6.0.0 and stream NDJSON via `dh-waypoint import`", gooseVer, MinV6DirectUpgradeSchema))
 	}
 
 	if rep.PostgresMajor < 16 {
-		rep.Blockers = append(rep.Blockers, fmt.Sprintf("PostgreSQL %d is unsupported; v6.0.0 requires PostgreSQL 16 or 18 (either works directly with DH-TMS — no PG 16->18 dump/restore needed)", rep.PostgresMajor))
+		rep.Blockers = append(rep.Blockers, fmt.Sprintf("PostgreSQL %d is unsupported; v6.0.0 requires PostgreSQL 16 or 18 (either works directly — no manual PG 16->18 dump/restore needed)", rep.PostgresMajor))
 	}
 
 	if ok, err := tableExists(ctx, db, "public.torrents"); err == nil && ok {
@@ -224,7 +211,7 @@ func InspectV6Readiness(ctx context.Context, db *sql.DB) (*V6ReadinessReport, er
 				rep.EstimatedLegacyFiles = int64(est)
 			}
 			rep.Advisories = append(rep.Advisories,
-				fmt.Sprintf("legacy torrent_files rows remain (est. %d); optionally run `dh-waypoint storage compact-files --prune-legacy` online before v6 to shorten first-boot upgrade", rep.EstimatedLegacyFiles))
+				fmt.Sprintf("legacy torrent_files rows remain (est. %d); v6 reads them cleanly and `dh-waypoint storage compact-files --prune-legacy` compacts them online", rep.EstimatedLegacyFiles))
 		}
 	}
 
@@ -246,14 +233,9 @@ func InspectV6Readiness(ctx context.Context, db *sql.DB) (*V6ReadinessReport, er
 		}
 	}
 
-	for _, legacyPath := range []string{"/root/.config/bitmagnet", "/root/.local/share/bitmagnet"} {
-		if _, statErr := os.Stat(legacyPath); statErr == nil {
-			rep.LegacyRootMountDetected = true
-			break
-		}
-	}
+	rep.LegacyRootMountDetected = detectLegacyRootMount()
 	if rep.LegacyRootMountDetected {
-		rep.Advisories = append(rep.Advisories, "legacy /root/.*bitmagnet volume path detected; v6.0.0 runs non-root (UID 1000:1000) under /var/lib/dh-waypoint (check docs/migration-v6.md when updating Compose volumes)")
+		rep.Advisories = append(rep.Advisories, "legacy /root/.*bitmagnet volume mount detected; v6.0.0 runs non-root (UID 1000:1000) under /var/lib/dh-waypoint — update Compose volume targets per docs/migration-v6.md")
 	}
 
 	rep.Fingerprint = ComputeDBFingerprint(rep.SystemIdentifier, rep.DatabaseName, rep.GooseVersion)
@@ -261,4 +243,190 @@ func InspectV6Readiness(ctx context.Context, db *sql.DB) (*V6ReadinessReport, er
 	rep.BackupCommand = fmt.Sprintf("pg_dump -Fc -d %s > dh-waypoint-pre-v6-$(date +%%F).dump", rep.DatabaseName)
 	rep.Ready = len(rep.Blockers) == 0
 	return rep, nil
+}
+
+// CheckV6PreFlight enforces the five-case major-version hard-stop state machine
+// strictly read-only BEFORE Goose executes a single DDL statement.
+//
+//   - Case 1 (Empty DB): boots immediately with zero manual steps.
+//   - Case 2 (Existing v6 DB): boots normally (refuses major > 6 downgrade).
+//   - Case 3 (Compatible v5.12-v5.15, Goose 81..83): hard-stops (exit 78, zero
+//     writes) until UPGRADE_CONFIRM_V6_BACKUP matches this instance's DB
+//     fingerprint (or explicit confirmToken is supplied by `dh-waypoint upgrade`),
+//     then permits automatic in-binary upgrade on PG 16 or PG 18.
+//   - Case 4 (Old v3/v4/<v5.12, Goose 1..80): unconditional hard stop (exit 78,
+//     zero writes) even when a confirmation token is supplied.
+func CheckV6PreFlight(ctx context.Context, db *sql.DB, explicitConfirmToken string) (*PreFlightOutcome, error) {
+	rep, err := InspectV6Readiness(ctx, db)
+	if err != nil {
+		return nil, err
+	}
+
+	// Case 2b: Downgrade guard against future v7+ database.
+	if rep.HasSchemaMajor && rep.SchemaMajor > CurrentSchemaMajor {
+		return nil, &IncompatibleSchemaError{
+			DetectedMajor:        rep.SchemaMajor,
+			DetectedGooseVersion: rep.GooseVersion,
+			Fingerprint:          rep.Fingerprint,
+			Reason:               fmt.Sprintf("database is marked schema_major=%d, newer than this v6 binary", rep.SchemaMajor),
+			Guidance:             "Start a matching newer binary or restore a matched PostgreSQL backup.",
+		}
+	}
+
+	// Case 2a: Already initialized on v6 schema epoch.
+	if rep.HasSchemaMajor && rep.SchemaMajor == CurrentSchemaMajor {
+		if rep.PostgresMajor < 16 {
+			return nil, &IncompatibleSchemaError{
+				DetectedMajor:        rep.SchemaMajor,
+				DetectedGooseVersion: rep.GooseVersion,
+				Fingerprint:          rep.Fingerprint,
+				Reason:               fmt.Sprintf("PostgreSQL %d is unsupported by DH-Waypoint v6", rep.PostgresMajor),
+				Guidance:             "Upgrade PostgreSQL to 16 or 18.",
+			}
+		}
+		return &PreFlightOutcome{Case: "existing_v6", Report: rep}, nil
+	}
+
+	// Case 1: Fresh / empty database — zero friction, zero flags.
+	if !rep.HasGooseTable || rep.GooseVersion == 0 {
+		if rep.PostgresMajor < 16 {
+			return nil, &IncompatibleSchemaError{
+				DetectedMajor: 0,
+				Reason:        fmt.Sprintf("PostgreSQL %d is unsupported by DH-Waypoint v6", rep.PostgresMajor),
+				Guidance:      "Use PostgreSQL 16 or PostgreSQL 18 (recommended: postgres:18-alpine).",
+			}
+		}
+		return &PreFlightOutcome{Case: "empty_db", Report: rep}, nil
+	}
+
+	// Case 4: Old incompatible schema (< v5.12 / Goose < 81) — UNCONDITIONAL hard stop.
+	if rep.GooseVersion < MinV6DirectUpgradeSchema {
+		return nil, &IncompatibleSchemaError{
+			DetectedMajor:        5,
+			DetectedGooseVersion: rep.GooseVersion,
+			Fingerprint:          rep.Fingerprint,
+			Reason:               fmt.Sprintf("detected incompatible pre-v5.12 database (Goose version %d < minimum %d); zero database writes were performed", rep.GooseVersion, MinV6DirectUpgradeSchema),
+			Guidance: strings.Join([]string{
+				"Direct in-place upgrade from v3/v4/v5.0-v5.11 is intentionally blocked to protect your data.",
+				"Two safe paths:",
+				"  1. Back up PostgreSQL, upgrade to bridge release v5.15.0 (ghcr.io/spencernorton/dh-waypoint:v5.15.0),",
+				"     verify `dh-waypoint doctor --check-v6`, then upgrade to v6.0.0 (automatic, zero SQL).",
+				"  2. Start a fresh v6.0.0 stack and stream hashes via `dh-waypoint import` (NDJSON).",
+				"Reference: docs/migration-v6.md",
+			}, "\n"),
+		}
+	}
+
+	// If Goose already passed 100 without schema_major (unexpected manual edit), treat safely.
+	if rep.GooseVersion >= 100 {
+		return &PreFlightOutcome{Case: "existing_v6", Report: rep}, nil
+	}
+
+	// Case 3: Compatible v5.12-v5.15 database (Goose 81..83).
+	if len(rep.Blockers) > 0 {
+		var lines []string
+		lines = append(lines, "Resolve these blocking items before upgrading to v6.0.0 (zero database writes were performed):")
+		for _, b := range rep.Blockers {
+			lines = append(lines, "  - "+b)
+		}
+		lines = append(lines, "Reference: docs/migration-v6.md")
+		return nil, &IncompatibleSchemaError{
+			DetectedMajor:        5,
+			DetectedGooseVersion: rep.GooseVersion,
+			Fingerprint:          rep.Fingerprint,
+			Reason:               fmt.Sprintf("compatible v5.x database (Goose %d) has %d unresolved pre-upgrade blocker(s)", rep.GooseVersion, len(rep.Blockers)),
+			Guidance:             strings.Join(lines, "\n"),
+		}
+	}
+
+	token := strings.TrimSpace(explicitConfirmToken)
+	if token == "" {
+		token = strings.TrimSpace(os.Getenv(UpgradeConfirmEnvVar))
+	}
+	if token != rep.Fingerprint {
+		var lines []string
+		lines = append(lines, fmt.Sprintf("Detected existing v5.x database: postgres=%s (major=%d), goose=%d, est_torrents=%d, fingerprint=%s",
+			rep.PostgresVersion, rep.PostgresMajor, rep.GooseVersion, rep.EstimatedTorrents, rep.Fingerprint))
+		lines = append(lines, "DH-Waypoint v6.0.0 is a major release; downgrading back to v5.x requires restoring a PostgreSQL backup.")
+		lines = append(lines, "NO manual PostgreSQL 16 -> 18 migration or SQL scripts are required — once you confirm a backup, v6 upgrades automatically.")
+		for _, a := range rep.Advisories {
+			lines = append(lines, "  NOTE: "+a)
+		}
+		lines = append(lines, "")
+		lines = append(lines, "Step 1 — Create and verify a PostgreSQL backup:")
+		lines = append(lines, "  "+rep.BackupCommand)
+		lines = append(lines, "Step 2 — Acknowledge your backup once (either option):")
+		lines = append(lines, "  Option A (Compose / env): set "+rep.ConfirmEnvAssignment+" and restart")
+		lines = append(lines, "  Option B (CLI):           dh-waypoint upgrade --confirm-backup="+rep.Fingerprint)
+		lines = append(lines, "After upgrade completes, schema_major=6 is recorded and subsequent restarts never require this variable.")
+		lines = append(lines, "Reference: docs/migration-v6.md")
+		return nil, &IncompatibleSchemaError{
+			DetectedMajor:        5,
+			DetectedGooseVersion: rep.GooseVersion,
+			Fingerprint:          rep.Fingerprint,
+			Reason:               "existing v5.x database requires backup acknowledgement before automatic v6.0.0 upgrade (zero database writes were performed)",
+			Guidance:             strings.Join(lines, "\n"),
+		}
+	}
+
+	return &PreFlightOutcome{
+		Case:                  "v5_auto_upgrade",
+		NeedsUpgradeReceipt:   true,
+		PreUpgradeGooseVer:    rep.GooseVersion,
+		PreUpgradeFingerprint: rep.Fingerprint,
+		Report:                rep,
+	}, nil
+}
+
+// RecordUpgradeReceipt stores the completed v5 -> v6 upgrade provenance in key_values.
+func RecordUpgradeReceipt(ctx context.Context, db *sql.DB, outcome *PreFlightOutcome) error {
+	if outcome == nil || !outcome.NeedsUpgradeReceipt {
+		return nil
+	}
+	payload, err := json.Marshal(map[string]any{
+		"schema_major":              CurrentSchemaMajor,
+		"upgraded_from_major":       5,
+		"pre_upgrade_goose_version": outcome.PreUpgradeGooseVer,
+		"db_fingerprint":            outcome.PreUpgradeFingerprint,
+		"upgraded_at":               time.Now().UTC().Format(time.RFC3339),
+	})
+	if err != nil {
+		return err
+	}
+	_, err = db.ExecContext(ctx,
+		`INSERT INTO public.key_values (key, value, created_at, updated_at)
+		 VALUES ($1, $2, now(), now())
+		 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
+		UpgradeReceiptKey, string(payload),
+	)
+	return err
+}
+
+func detectLegacyRootMount() bool {
+	legacyPaths := []string{"/root/.config/bitmagnet", "/root/.local/share/bitmagnet"}
+	for _, legacyPath := range legacyPaths {
+		if _, err := os.Stat(legacyPath); err == nil {
+			return true
+		}
+	}
+	if raw, err := os.ReadFile("/proc/self/mountinfo"); err == nil {
+		return mountInfoHasLegacyRootMount(string(raw))
+	}
+	return false
+}
+
+// mountInfoHasLegacyRootMount detects Docker bind/volume mounts under /root/
+// even when running as non-root UID 1000 where /root (0700) returns EACCES.
+func mountInfoHasLegacyRootMount(mountInfo string) bool {
+	for _, line := range strings.Split(mountInfo, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 5 {
+			continue
+		}
+		mp := fields[4]
+		if mp == "/root/.config/bitmagnet" || mp == "/root/.local/share/bitmagnet" {
+			return true
+		}
+	}
+	return false
 }

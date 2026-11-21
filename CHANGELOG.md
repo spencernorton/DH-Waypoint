@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Breaking / Major (`v6.0.0` foundation)
+
+- **Fail-closed v5 -> v6 Pre-Flight Hard Stop & automatic in-binary upgrade (`internal/database/migrations/preflight.go`, `migrations/00100_v6_major_epoch.sql`, `dh-waypoint upgrade`, `docs/migration-v6.md`).** Fresh databases initialize automatically with zero flags; existing `v5.12–v5.15` databases (PostgreSQL 16 or 18 — no manual PG dump/restore required) stop read-only (`exit 78`, zero writes) until backed up and acknowledged with the instance DB fingerprint (`UPGRADE_CONFIRM_V6_BACKUP=<fp>` or `dh-waypoint upgrade --confirm-backup=<fp>`), then upgrade automatically; older incompatible databases (`Goose < 81`) hit an unconditional `exit 78` stop directing them through `v5.15.0` Bridge LTS; non-empty v6 down-migrations refuse destructive downgrade.
+- **Non-root container (`USER 1000:1000`) & PostgreSQL 18 default Compose stack (`Dockerfile`, `docker-compose.yml`, `examples/docker-compose.public.yml`).** Moves container state from `/root/.*bitmagnet` to `/var/lib/dh-waypoint/{config,data,tms}` owned by `1000:1000`, defaults fresh Compose stacks to `postgres:18-alpine`, and enables `METAINFO_REQUESTER_ENABLE_MSE=true` and `VERDICTS_READERS_ENABLED=true` by default.
+- **Codebase diet (`-100K+` LOC removed).** Removes frozen `_legacy/` archive (`90K` LOC, retained in Git history and `v5.x` tags), unreachable `internal/llmwork` and `internal/llmcapture` packages (`7.8K` LOC), and nine historical one-off backfill/repair CLIs (`2.7K` LOC) for a smaller, simpler operator CLI and faster builds/CI.
+- **Sharded auto-discovered PostgreSQL 16 & 18 CI and automated `v5.15 -> v6.0` E2E upgrade drill (`scripts/list_pg_test_packages.py`, `scripts/test_v6_upgrade_drill.py`, `.github/workflows/ci.yml`).** Replaces the serial manual 25-package PG 16 job with auto-discovered parallel shards across PG 16 and PG 18 and runs a live container upgrade/hard-stop/downgrade-refusal drill on every PR.
+
 ## 5.15.0 — 2026-11-21
 
 Bridge LTS release for the v5.x line carrying all post-5.14.0 protocol, security, plugin, and hot-path efficiency improvements plus v6.0.0 upgrade readiness tooling and symmetric downgrade protection.

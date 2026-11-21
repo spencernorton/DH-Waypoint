@@ -36,3 +36,12 @@ func TestIncompatibleSchemaErrorImplementsExitCode78(t *testing.T) {
 	require.Contains(t, err.Error(), "database already upgraded to v6")
 	require.Contains(t, err.Error(), "run v6 binary")
 }
+
+func TestMountInfoHasLegacyRootMount(t *testing.T) {
+	t.Parallel()
+	sample := "123 45 8:1 /vol/cfg /root/.config/bitmagnet rw,relatime - ext4 /dev/sda1 rw\n" +
+		"124 45 8:1 /vol/new /var/lib/dh-waypoint/data rw,relatime - ext4 /dev/sda1 rw\n"
+	require.True(t, mountInfoHasLegacyRootMount(sample))
+	clean := "124 45 8:1 /vol/new /var/lib/dh-waypoint/data rw,relatime - ext4 /dev/sda1 rw\n"
+	require.False(t, mountInfoHasLegacyRootMount(clean))
+}

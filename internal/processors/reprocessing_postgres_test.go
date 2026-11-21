@@ -48,7 +48,8 @@ func recordReprocessCore(t *testing.T, s *Store, p *pgxpool.Pool, h []byte, id, 
 }
 
 func TestPostgresAuditedReprocessingRequiresCorrelatedCoreReceipt(t *testing.T) {
-	s, p, m := fixture(t)
+	// Exercises the v5 reprocessing downgrade boundary (64 -> 63) before v6 epoch 100.
+	s, p, m := fixtureAt(t, 83)
 	origin, h := reprocessOrigin(t, s, p)
 	_, err := p.Exec(testContext, `INSERT INTO processor_exclusions(info_hash,job_id,processor_id,binding,reason) VALUES($1,$2,'retained-policy','{}','synthetic_restriction')`, h, origin)
 	require.NoError(t, err)
