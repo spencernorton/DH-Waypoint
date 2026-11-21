@@ -8,7 +8,19 @@ import (
 )
 
 func AppQueryToTsquery(str string) string {
-	l := queryLexer{newLexer(str)}
+	return appQueryToTsquery(str, false)
+}
+
+// AppQueryToCompoundExpandedTsquery parses str like AppQueryToTsquery and
+// additionally expands ASCII hyphenated compounds (e.g. "spider-man" ->
+// "((spider & man) | spiderman)") so queries match both split and glued
+// index lexemes without altering space-separated queries.
+func AppQueryToCompoundExpandedTsquery(str string) string {
+	return appQueryToTsquery(str, true)
+}
+
+func appQueryToTsquery(str string, expandCompounds bool) string {
+	l := queryLexer{ftsLexer: newLexer(str), expandCompounds: expandCompounds}
 
 	var tokens []TokenValue
 
@@ -24,8 +36,75 @@ func AppQueryToTsquery(str string) string {
 	return appQueryTokensToTsquery(tokens...)
 }
 
+// AppQueryToBM25TermGroups expands ASCII hyphenated compounds into a bounded
+// slice of BM25-compatible AND-term groups (e.g. "spider-man 1080p" ->
+// [["spider","man","1080p"], ["spiderman","1080p"]]) so callers can execute
+// compound expansion directly inside ParadeDB BM25 without falling back to GIN.
+func AppQueryToBM25TermGroups(str string) ([][]string, bool) {
+	baseTerms, ok := AppQueryToBM25Terms(str)
+	if !ok {
+		return nil, false
+	}
+	l := queryLexer{ftsLexer: newLexer(str), expandCompounds: true}
+	var groups [][]string
+	groups = append(groups, []string{})
+	hasCompound := false
+	for {
+		tok, ok := l.readQueryToken()
+		if !ok {
+			break
+		}
+		switch tok.Token {
+		case TokenOperator:
+			if Operator(tok.Value) != OperatorAnd {
+				return [][]string{baseTerms}, true
+			}
+		case TokenPhrase:
+			phrases := Tokenize(tok.Value)
+			if len(phrases) != 1 || len(phrases[0]) != 1 {
+				return [][]string{baseTerms}, true
+			}
+			w := phrases[0][0]
+			for i := range groups {
+				groups[i] = append(groups[i], w)
+			}
+		case TokenCompound:
+			hasCompound = true
+			rawSegs := strings.Split(tok.Value, "-")
+			split := make([]string, len(rawSegs))
+			var glued strings.Builder
+			for i, s := range rawSegs {
+				w := strings.ToLower(s)
+				split[i] = w
+				glued.WriteString(w)
+			}
+			// Cap combinatorial explosion at 4 alternative groups.
+			if len(groups) >= 4 {
+				for i := range groups {
+					groups[i] = append(groups[i], split...)
+				}
+				continue
+			}
+			next := make([][]string, 0, len(groups)*2)
+			for _, g := range groups {
+				gSplit := append(append([]string(nil), g...), split...)
+				gGlued := append(append([]string(nil), g...), glued.String())
+				next = append(next, gSplit, gGlued)
+			}
+			groups = next
+		default:
+			return [][]string{baseTerms}, true
+		}
+	}
+	if !hasCompound {
+		return [][]string{baseTerms}, true
+	}
+	return groups, true
+}
+
 type queryLexer struct {
 	ftsLexer
+	expandCompounds bool
 }
 
 type Token string
@@ -37,6 +116,7 @@ const (
 	TokenOperator    Token = "OPERATOR"
 	TokenNegation    Token = "NEGATION"
 	TokenPhrase      Token = "PHRASE"
+	TokenCompound    Token = "COMPOUND"
 	TokenWildcard    Token = "WILDCARD"
 )
 
@@ -96,6 +176,24 @@ func (l *queryLexer) readQueryToken() (TokenValue, bool) {
 		}
 
 		if phrase := l.ReadWhile(lexer.IsWordChar); phrase != "" {
+			if l.expandCompounds && isASCIIWord(phrase) {
+				segs := []string{phrase}
+				for len(segs) < 3 && l.ReadChar('-') {
+					r, ok := l.Read()
+					if !ok {
+						break
+					}
+					if !isASCIIWordRune(r) {
+						l.Backup()
+						break
+					}
+					rest := l.ReadWhile(isASCIIWordRune)
+					segs = append(segs, string(r)+rest)
+				}
+				if len(segs) > 1 {
+					return TokenValue{start, l.Pos() - start, TokenCompound, strings.Join(segs, "-")}, true
+				}
+			}
 			return TokenValue{start, l.Pos() - start, TokenPhrase, phrase}, true
 		}
 
@@ -178,6 +276,37 @@ outer:
 				if len(quotedWords) > 0 {
 					addExpr(strings.Join(quotedWords, " <-> "))
 				}
+			case TokenCompound:
+				rawSegs := strings.Split(token.Value, "-")
+				splitWords := make([]string, 0, len(rawSegs))
+				var glued strings.Builder
+				for j, seg := range rawSegs {
+					w := strings.ToLower(seg)
+					glued.WriteString(w)
+					splitWords = append(splitWords, queryLexeme(w, wildcard && j == len(rawSegs)-1))
+				}
+				gluedLex := quoteLexeme(glued.String(), false)
+				if wildcard {
+					splitWords[len(splitWords)-1] += ":*"
+					gluedLex += ":*"
+					i++
+				}
+				if len(parts) > 0 {
+					switch operator {
+					case OperatorOr:
+						parts = append(parts, "|")
+					case OperatorFollowedBy:
+						parts = append(parts, "<->")
+					default:
+						parts = append(parts, "&")
+					}
+				}
+				if negated {
+					parts = append(parts, "!")
+				}
+				parts = append(parts, "(("+strings.Join(splitWords, " & ")+") | "+gluedLex+")")
+				operator = ""
+				negated = false
 			case TokenPhrase:
 				tokenized := Tokenize(token.Value)
 				var phrases []string
@@ -200,24 +329,43 @@ outer:
 				for j := i + 1; j < len(tokens); j++ {
 					if tokens[j].Token == TokenOpenParens {
 						depth++
-					}
-					if tokens[j].Token == TokenCloseParens {
+					} else if tokens[j].Token == TokenCloseParens {
 						depth--
 						if depth == 0 {
+							i = j
 							break
 						}
 					}
 					parensTokens = append(parensTokens, tokens[j])
+					if j == len(tokens)-1 {
+						i = j
+					}
 				}
-				i += len(parensTokens)
-				parensExpr := appQueryTokensToTsquery(parensTokens...)
-				if len(parensExpr) > 0 {
-					addExpr("(" + parensExpr + ")")
+				if expr := appQueryTokensToTsquery(parensTokens...); expr != "" {
+					addExpr("(" + expr + ")")
 				}
+			case TokenCloseParens:
+			case TokenWildcard:
 			}
 			i++
 		}
 	}
 
 	return strings.Join(parts, " ")
+}
+
+func isASCIIWord(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if !isASCIIWordRune(rune(s[i])) {
+			return false
+		}
+	}
+	return true
+}
+
+func isASCIIWordRune(r rune) bool {
+	return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9')
 }

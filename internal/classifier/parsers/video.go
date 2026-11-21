@@ -96,8 +96,18 @@ func stripLeadingBracketTag(name string) string {
 	if numeric && inner != "" {
 		return name
 	}
-	if r, _ := utf8.DecodeRuneInString(name[loc[1]:]); unicode.IsLetter(r) {
-		return name[loc[1]:]
+	rest := name[loc[1]:]
+	// Also strip an explicit dash separator after a bracketed site tag, e.g.
+	// "[ www.Speed.Cd ] - Body.of.Proof.S02E14" -> "Body.of.Proof.S02E14".
+	trimmed := strings.TrimLeft(rest, " 	")
+	if strings.HasPrefix(trimmed, "-") {
+		afterDash := strings.TrimLeft(trimmed, "- 	")
+		if r, _ := utf8.DecodeRuneInString(afterDash); unicode.IsLetter(r) {
+			return afterDash
+		}
+	}
+	if r, _ := utf8.DecodeRuneInString(rest); unicode.IsLetter(r) {
+		return rest
 	}
 	return name
 }
@@ -239,10 +249,17 @@ func latinTitleAfterCJK(title string) string {
 			latinWords++
 		}
 	}
-	// Two words, at least one of them Latin: "2 Guns" and "Crime 101" are
-	// titles; a digits-only run ("中文 13 14") is not.
-	if len(words) < 2 || latinWords == 0 {
+	// Two words, at least one of them Latin ("2 Guns", "Crime 101"), OR a
+	// single clean Latin title word of >= 4 pure ASCII letters ("Supergirl",
+	// "Scrubs", "Sherlock") that is not a technical/release tag.
+	if latinWords == 0 {
 		return title
+	}
+	if len(words) == 1 {
+		if !isSingleWordBilingualTitle(words[0]) {
+			return title
+		}
+		return tail
 	}
 	return tail
 }
@@ -841,4 +858,33 @@ func ParseVideoContentWithOptions(
 	}
 
 	return attrs, nil
+}
+
+
+var nonTitleSingleLatinTokens = map[string]bool{
+	"hdtv": true, "webdl": true, "webrip": true, "bluray": true, "bdrip": true,
+	"dvdrip": true, "remux": true, "hevc": true, "h264": true, "h265": true,
+	"x264": true, "x265": true, "xvid": true, "divx": true, "avc": true,
+	"aac": true, "flac": true, "ac3": true, "dts": true, "atmos": true,
+	"sub": true, "subs": true, "dub": true, "dubbed": true, "multi": true,
+	"dual": true, "audio": true, "video": true, "complete": true, "season": true,
+	"part": true, "pack": true, "collection": true, "special": true, "extras": true,
+	"bonus": true, "sample": true, "trailer": true, "promo": true, "repack": true,
+	"proper": true, "internal": true, "limited": true, "uncut": true, "unrated": true,
+	"extended": true, "directors": true, "edition": true, "version": true,
+	"english": true, "chinese": true, "korean": true, "japanese": true, "spanish": true,
+	"french": true, "german": true, "italian": true, "russian": true, "hindi": true,
+}
+
+func isSingleWordBilingualTitle(w string) bool {
+	if len(w) < 6 {
+		return false
+	}
+	for i := 0; i < len(w); i++ {
+		c := w[i]
+		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')) {
+			return false
+		}
+	}
+	return !nonTitleSingleLatinTokens[strings.ToLower(w)]
 }

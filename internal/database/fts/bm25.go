@@ -17,7 +17,7 @@ import "strings"
 // season-episode lexemes) — is ineligible and the caller must keep the
 // existing tsv @@ tsquery path.
 func AppQueryToBM25Terms(str string) (terms []string, eligible bool) {
-	l := queryLexer{newLexer(str)}
+	l := queryLexer{ftsLexer: newLexer(str)}
 
 	var tokens []TokenValue
 

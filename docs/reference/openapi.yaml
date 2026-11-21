@@ -27,6 +27,14 @@ paths:
         - name: offset
           in: query
           schema: { type: integer, default: 0 }
+        - name: cursor
+          in: query
+          schema: { type: string }
+          description: Opaque keyset pagination cursor returned by next_cursor on deterministic sorts (cannot be combined with non-zero offset or order_by=relevance)
+        - name: include_total
+          in: query
+          schema: { type: boolean, default: true }
+          description: When false, skips the total-count query for lower-latency paging and sets total_count_omitted=true
         - name: resolution
           in: query
           schema: { type: string }
@@ -150,7 +158,13 @@ components:
         total_count_is_estimate:
           type: boolean
           description: True when the count budget was exceeded and total_count is an estimate. Always present, including false for exact counts.
+        total_count_omitted:
+          type: boolean
+          description: Present and true when include_total=false skipped the count query.
         has_next_page: { type: boolean }
+        next_cursor:
+          type: string
+          description: Opaque keyset cursor for fetching the next page on deterministic orderings.
         items:
           type: array
           items: { $ref: "#/components/schemas/Item" }

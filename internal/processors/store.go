@@ -80,6 +80,7 @@ type Store struct {
 	filter           *contentfilter.Filter
 	forbiddenTypes   map[string]bool
 	noiseV2          bool
+	altTitleMatch    bool
 	singleEpisodeMax int64
 	names            *namepolicy.Policy
 	active           atomic.Bool
