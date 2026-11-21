@@ -51,20 +51,31 @@ func New(p Params) Result {
 			server: prometheusServerWrapper{
 				prometheusCollector: collector,
 				server: healthCollector{
-					baseServer: &server{
-						stopped: make(chan struct{}),
-						localAddr: netip.AddrPortFrom(
-							netip.IPv4Unspecified(),
-							p.Config.Port,
-						),
-						socket:           NewSocket(),
-						queries:          make(map[string]pendingQuery),
-						queryTimeout:     p.Config.QueryTimeout,
-						responder:        r,
-						responderTimeout: time.Second * 5,
-						idIssuer:         &variantIDIssuer{},
-						logger:           p.Logger.Named(subsystem),
-					},
+					baseServer: func() *server {
+						bs := &server{
+							stopped: make(chan struct{}),
+							localAddr: netip.AddrPortFrom(
+								netip.IPv4Unspecified(),
+								p.Config.Port,
+							),
+							socket:           NewSocketForFamily(false),
+							queries:          make(map[string]pendingQuery),
+							queryTimeout:     p.Config.QueryTimeout,
+							responder:        r,
+							responderTimeout: time.Second * 5,
+							idIssuer:         &variantIDIssuer{},
+							logger:           p.Logger.Named(subsystem),
+						}
+						if p.Config.EnableIPv6 {
+							port6 := p.Config.IPv6Port
+							if port6 == 0 {
+								port6 = p.Config.Port
+							}
+							bs.localAddr6 = netip.AddrPortFrom(netip.IPv6Unspecified(), port6)
+							bs.socket6 = NewSocketForFamily(true)
+						}
+						return bs
+					}(),
 					lastResponses: lastResponses,
 				},
 			},

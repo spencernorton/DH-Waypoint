@@ -14,9 +14,10 @@ import (
 
 type Params struct {
 	fx.In
-	Identity lazy.Lazy[protocol.NodeIdentity]
-	Server   lazy.Lazy[server.Server]
-	Logger   *zap.SugaredLogger
+	Identity     lazy.Lazy[protocol.NodeIdentity]
+	Server       lazy.Lazy[server.Server]
+	ServerConfig server.Config
+	Logger       *zap.SugaredLogger
 }
 
 type Result struct {
@@ -53,8 +54,10 @@ func New(p Params) Result {
 			}
 
 			adapter := serverAdapter{
-				nodeID: identity.ID,
-				server: s,
+				nodeID:     identity.ID,
+				nodeIDv6:   identity.EffectiveIDv6(),
+				enableIPv6: p.ServerConfig.EnableIPv6,
+				server:     s,
 			}
 
 			logged := clientLogger{

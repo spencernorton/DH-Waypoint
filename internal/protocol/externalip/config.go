@@ -13,6 +13,10 @@ type FxConfig struct {
 	// empty in production. Break-glass only; see resolver.go.
 	Override string
 
+	// OverrideV6 short-circuits the IPv6 external-IP resolver when dual-stack
+	// IPv6 DHT is enabled. Leave empty in production; break-glass and tests only.
+	OverrideV6 string
+
 	// Interval is the base poll period for the watcher.
 	Interval time.Duration
 

@@ -15,6 +15,15 @@ import (
 	"go.uber.org/zap"
 )
 
+// MaxOutgoingPacketBytes caps every serialized outgoing DHT UDP packet to stay
+// below minimum IPv6 path MTU (1280 bytes minus IPv6+UDP headers) per BEP 32.
+const MaxOutgoingPacketBytes = 1024
+
+var (
+	ErrPacketTooLarge = errors.New("dht server: outgoing packet exceeds 1024-byte UDP bound")
+	ErrIPv6Disabled   = errors.New("dht server: IPv6 DHT socket is not enabled")
+)
+
 type Server interface {
 	start() error
 	stop()
@@ -23,9 +32,12 @@ type Server interface {
 
 type server struct {
 	stopped          chan struct{}
+	stopOnce         sync.Once
 	mutex            sync.Mutex
 	localAddr        netip.AddrPort
+	localAddr6       netip.AddrPort
 	socket           Socket
+	socket6          Socket
 	queryTimeout     time.Duration
 	queries          map[string]pendingQuery
 	responder        responder.Responder
@@ -42,37 +54,44 @@ type pendingQuery struct {
 
 func (s *server) start() error {
 	if err := s.socket.Open(s.localAddr); err != nil {
-		return fmt.Errorf("could not open socket: %w", err)
+		return fmt.Errorf("could not open IPv4 socket: %w", err)
+	}
+	if s.socket6 != nil {
+		if err := s.socket6.Open(s.localAddr6); err != nil {
+			_ = s.socket.Close()
+			return fmt.Errorf("could not open IPv6 socket: %w", err)
+		}
 	}
 
 	go func() {
 		ctx, cancel := context.WithCancel(context.Background())
-		go s.read(ctx)
+		go s.readSocket(ctx, s.socket)
+		if s.socket6 != nil {
+			go s.readSocket(ctx, s.socket6)
+		}
 		<-s.stopped
 		cancel()
 
 		_ = s.socket.Close()
+		if s.socket6 != nil {
+			_ = s.socket6.Close()
+		}
 	}()
 
 	return nil
 }
 
 func (s *server) stop() {
-	close(s.stopped)
+	s.stopOnce.Do(func() {
+		close(s.stopped)
+	})
 }
 
 func (s *server) read(ctx context.Context) {
-	/*   The field size sets a theoretical limit of 65,535 bytes (8 byte header + 65,527 bytes of
-	 * data) for a UDP datagram. However the actual limit for the data length, which is imposed by
-	 * the underlying IPv4 protocol, is 65,507 bytes (65,535 − 8 byte UDP header − 20 byte IP
-	 * header).
-	 *
-	 *   In IPv6 jumbograms it is possible to have UDP packets of size greater than 65,535 bytes.
-	 * RFC 2675 specifies that the length field is set to zero if the length of the UDP header plus
-	 * UDP data is greater than 65,535.
-	 *
-	 * https://en.wikipedia.org/wiki/User_Datagram_Protocol
-	 */
+	s.readSocket(ctx, s.socket)
+}
+
+func (s *server) readSocket(ctx context.Context, sock Socket) {
 	buffer := make([]byte, 65507)
 
 	for {
@@ -80,9 +99,8 @@ func (s *server) read(ctx context.Context) {
 			return
 		}
 
-		n, from, err := s.socket.Receive(buffer)
+		n, from, err := sock.Receive(buffer)
 		if err != nil {
-			// Socket is probably closed; if we're not shutting down then panic
 			if ctx.Err() == nil {
 				panic(fmt.Errorf("socket read error: %w", err))
 			}
@@ -91,9 +109,6 @@ func (s *server) read(ctx context.Context) {
 		}
 
 		if n == 0 {
-			/* Datagram sockets in various domains  (e.g., the UNIX and Internet domains) permit
-			 * zero-length datagrams. When such a datagram is received, the return value (n) is 0.
-			 */
 			continue
 		}
 
@@ -107,7 +122,7 @@ func (s *server) read(ctx context.Context) {
 
 		recvMsg := dht.RecvMsg{
 			Msg:  msg,
-			From: from,
+			From: netip.AddrPortFrom(from.Addr().Unmap(), from.Port()),
 		}
 
 		switch msg.Y {
@@ -157,15 +172,13 @@ func (s *server) handleResponse(msg dht.RecvMsg) {
 	query, ok := s.queries[transactionID]
 	s.mutex.Unlock()
 
-	// UDP lets anyone send a reply, so one counts only when it comes from the
-	// address that was asked.
 	if !ok || msg.From != query.addr {
 		return
 	}
 
 	select {
 	case query.ch <- msg:
-	default: // a repeat of a reply that was already delivered
+	default:
 	}
 }
 
@@ -175,10 +188,10 @@ func (s *server) Query(
 	q string,
 	args dht.MsgArgs,
 ) (r dht.RecvMsg, err error) {
-	// A caller may hold an IPv4 address in its IPv6-mapped form (a bootstrap
-	// entry written as an IP literal resolves to one). The socket reports the
-	// sender in the plain form, and the reply must match it.
 	addr = netip.AddrPortFrom(addr.Addr().Unmap(), addr.Port())
+	if !addr.IsValid() {
+		return dht.RecvMsg{}, errors.New("dht server: invalid target address")
+	}
 
 	transactionID := s.idIssuer.Issue()
 	ch := make(chan dht.RecvMsg, 1)
@@ -187,11 +200,11 @@ func (s *server) Query(
 	s.queries[transactionID] = pendingQuery{addr: addr, ch: ch}
 	s.mutex.Unlock()
 
-	defer (func() {
+	defer func() {
 		s.mutex.Lock()
 		delete(s.queries, transactionID)
 		s.mutex.Unlock()
-	})()
+	}()
 
 	msg := dht.Msg{
 		Q: q,
@@ -233,16 +246,68 @@ func (s *server) Query(
 	}
 }
 
+// encodeBounded serializes msg into <= MaxOutgoingPacketBytes. When a response
+// exceeds the bound (for example carrying both nodes, nodes6, values, or
+// samples), variable-length contact lists are trimmed progressively while
+// preserving required KRPC framing (t, y, r.id, token).
+func encodeBounded(msg dht.Msg) ([]byte, error) {
+	data, err := bencode.Marshal(msg)
+	if err != nil || len(data) <= MaxOutgoingPacketBytes {
+		return data, err
+	}
+	if msg.R == nil {
+		return nil, fmt.Errorf("%w (%d bytes)", ErrPacketTooLarge, len(data))
+	}
+
+	trimmed := msg
+	retCopy := *msg.R
+	if retCopy.Samples != nil {
+		sCopy := append(dht.CompactInfohashes(nil), (*retCopy.Samples)...)
+		retCopy.Samples = &sCopy
+	}
+	trimmed.R = &retCopy
+
+	for len(data) > MaxOutgoingPacketBytes {
+		progressed := false
+		if len(retCopy.Values) > 0 {
+			retCopy.Values = retCopy.Values[:len(retCopy.Values)/2]
+			progressed = true
+		} else if len(retCopy.Nodes6) > 0 {
+			retCopy.Nodes6 = retCopy.Nodes6[:len(retCopy.Nodes6)/2]
+			progressed = true
+		} else if len(retCopy.Nodes) > 0 {
+			retCopy.Nodes = retCopy.Nodes[:len(retCopy.Nodes)/2]
+			progressed = true
+		} else if retCopy.Samples != nil && len(*retCopy.Samples) > 0 {
+			s := (*retCopy.Samples)[:len(*retCopy.Samples)/2]
+			retCopy.Samples = &s
+			progressed = true
+		}
+		if !progressed {
+			return nil, fmt.Errorf("%w (%d bytes)", ErrPacketTooLarge, len(data))
+		}
+		data, err = bencode.Marshal(trimmed)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return data, nil
+}
+
 func (s *server) send(addr netip.AddrPort, msg dht.Msg) error {
-	data, encodeErr := bencode.Marshal(msg)
+	clean := netip.AddrPortFrom(addr.Addr().Unmap(), addr.Port())
+	sock := s.socket
+	if clean.Addr().Is6() {
+		if s.socket6 == nil {
+			return ErrIPv6Disabled
+		}
+		sock = s.socket6
+	}
+
+	data, encodeErr := encodeBounded(msg)
 	if encodeErr != nil {
 		return encodeErr
 	}
 
-	sendErr := s.socket.Send(addr, data)
-	if sendErr != nil {
-		return sendErr
-	}
-
-	return nil
+	return sock.Send(clean, data)
 }

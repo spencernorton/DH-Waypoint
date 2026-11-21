@@ -14,3 +14,10 @@ type Socket interface {
 func NewSocket() Socket {
 	return newSocket()
 }
+
+func NewSocketForFamily(ipv6 bool) Socket {
+	if ipv6 {
+		return newSocket6()
+	}
+	return newSocket()
+}

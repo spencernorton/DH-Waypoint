@@ -29,6 +29,7 @@ type GetOldestPeers struct {
 
 func (c GetOldestPeers) execReturn(t *table) []Node {
 	peers := t.nodes.getLastRespondedBefore(c.Cutoff)
+	peers = append(peers, t.nodes6.getLastRespondedBefore(c.Cutoff)...)
 	sort.Slice(peers, func(i, j int) bool {
 		return peers[i].Time().Before(peers[j].Time())
 	})
@@ -65,11 +66,15 @@ type GetNodesForSampleInfoHashes struct {
 }
 
 func (c GetNodesForSampleInfoHashes) execReturn(t *table) []Node {
-	peers := make([]Node, 0, c.N)
-	for _, p := range t.nodes.getCandidatesForSampleInfoHashes(c.N) {
-		peers = append(peers, p)
-		if len(peers) >= c.N {
-			break
+	v4 := t.nodes.getCandidatesForSampleInfoHashes(c.N)
+	v6 := t.nodes6.getCandidatesForSampleInfoHashes(c.N)
+	peers := make([]Node, 0, min(c.N, len(v4)+len(v6)))
+	for i := 0; len(peers) < c.N && (i < len(v4) || i < len(v6)); i++ {
+		if i < len(v4) {
+			peers = append(peers, v4[i])
+		}
+		if len(peers) < c.N && i < len(v6) {
+			peers = append(peers, v6[i])
 		}
 	}
 
