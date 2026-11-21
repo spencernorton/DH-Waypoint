@@ -2,13 +2,15 @@ package migrations_test
 
 import (
 	"context"
-	"database/sql"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
+	"time"
 
-	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/stdlib"
 	goose "github.com/pressly/goose/v3"
 	"github.com/spencernorton/DH-Waypoint/internal/database/migrations"
 	"github.com/spencernorton/DH-Waypoint/internal/lazy"
@@ -26,13 +28,27 @@ func TestV6PreFlightFiveCaseStateMachinePostgres(t *testing.T) {
 	if dsn == "" {
 		t.Skip("disposable PostgreSQL not configured")
 	}
-	db, err := sql.Open("pgx", dsn)
+	// Run in a disposable database so public schema state never leaks into
+	// sibling packages sharing DH_WAYPOINT_TEST_POSTGRES_DSN.
+	adminCfg, err := pgx.ParseConfig(dsn)
 	require.NoError(t, err)
-	defer func() { _ = db.Close() }()
+	adminDB := stdlib.OpenDB(*adminCfg)
+	t.Cleanup(func() { _ = adminDB.Close() })
 
-	// Reset schema cleanly for deterministic 5-case verification.
-	_, err = db.ExecContext(ctx, "DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
+	tempDBName := fmt.Sprintf("dhw_preflight_test_%d", time.Now().UnixNano())
+	quotedDB := pgx.Identifier{tempDBName}.Sanitize()
+	_, err = adminDB.ExecContext(ctx, "CREATE DATABASE "+quotedDB)
 	require.NoError(t, err)
+
+	testCfg := adminCfg.Copy()
+	testCfg.Database = tempDBName
+	db := stdlib.OpenDB(*testCfg)
+	t.Cleanup(func() {
+		_ = db.Close()
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		_, _ = adminDB.ExecContext(cleanupCtx, "DROP DATABASE IF EXISTS "+quotedDB+" WITH (FORCE)")
+	})
 
 	gdb, err := gorm.Open(gormpg.New(gormpg.Config{Conn: db}), &gorm.Config{})
 	require.NoError(t, err)
