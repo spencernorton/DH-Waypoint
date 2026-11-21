@@ -68,7 +68,8 @@ func TestPostgresPreparationTimeoutRetainsInputAndRecoversAfterRestart(t *testin
 }
 
 func TestPostgresPreparationFailureBudgetPreservesCatalogueAndEvidence(t *testing.T) {
-	s, p, migrations := fixture(t)
+	// Exercises the v5 preparation downgrade boundary (66 -> 65) before v6 epoch 100.
+	s, p, migrations := fixtureAt(t, 83)
 	service := newService(t, "prepare-budget", []v1.Stage{v1.Classify}, func(j v1.Job) v1.Result { return result(j, "tv_show") })
 	register(t, s, service)
 	h := seedTorrent(t, p, 95, "movie")

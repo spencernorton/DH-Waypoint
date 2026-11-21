@@ -25,7 +25,8 @@ func TestMigrationFreezesLegacyAndRestoresPreMigrationSnapshot(t *testing.T) {
  SELECT decode(repeat(n::text,64),'hex'),'classifier_type',decode(repeat('0',40),'hex'),decode(repeat('a',64),'hex'),decode(repeat('b',64),'hex'),decode(repeat('c',64),'hex'),decode(repeat('d',64),'hex'),'{}',0,0,0,0,state,now()+interval '1 day',CASE WHEN state='leased' THEN 'old-worker' END,CASE WHEN state='leased' THEN now()+interval '1 hour' END FROM (VALUES(1,'queued'),(2,'deferred'),(3,'leased'),(4,'completed')) t(n,state);
  INSERT INTO llm_work_applications(task_key,info_hash,source_digest,policy_digest,applied_snapshot) SELECT task_key,info_hash,source_digest,policy_digest,'{"schema":"historical-test"}' FROM llm_work_tasks WHERE state='completed'`)
 	require.NoError(t, e)
-	_, e = m.Up(testContext)
+	// Exercises the v5 freeze boundary (60 -> 83 -> 60) before v6 epoch 100.
+	_, e = m.UpTo(testContext, 83)
 	require.NoError(t, e)
 	var count int
 	require.NoError(t, p.QueryRow(testContext, `SELECT count(*) FROM processor_legacy_freeze`).Scan(&count))

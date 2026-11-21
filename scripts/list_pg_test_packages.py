@@ -7,7 +7,8 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 
 WEIGHT_HINTS = {
-    "./internal/processors": 5,
+    "./internal/processors": 6,
+    "./internal/cataloguerecovery": 4,
     "./internal/database/search": 4,
     "./internal/serving": 3,
     "./internal/processor": 3,

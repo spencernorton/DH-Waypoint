@@ -13,7 +13,8 @@ import (
 )
 
 func TestPostgresAdmissionCASAndRestart(t *testing.T) {
-	s, pool, migrations := fixture(t)
+	// Exercises the v5 admission downgrade boundary (63 -> 62) before v6 epoch 100.
+	s, pool, migrations := fixtureAt(t, 83)
 	a := newService(t, "sampled", []v1.Stage{v1.Classify}, func(j v1.Job) v1.Result { return result(j, "movie") })
 	entry := register(t, s, a)
 	h := seedTorrent(t, pool, 60, nil)
