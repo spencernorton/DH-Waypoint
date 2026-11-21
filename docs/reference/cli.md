@@ -22,6 +22,7 @@ dh-waypoint --help
 | `plugin list` | List registered processor plugins |
 | `plugin validate` | Validate a `*.plugin.yml` file without registering it |
 | `plugin test` | Probe a processor service manifest and status |
+| `lean` | Validate, reconcile, explain, diff, inspect, or clear tombstones for opt-in LEAN MODE YAML profiles (`validate`, `reconcile`, `explain`, `diff`, `status`, `clear-tombstones`) |
 | `torrent create` | Hash a file or directory into a `.torrent` file (`--private`, `--tracker`, `--piece-length`) |
 | `process` | One-shot: rematch the torrents given with `--infoHash` through the classification + persistence pipeline, then exit |
 | `reprocess` | Re-classify already-indexed torrents through the current classifier |

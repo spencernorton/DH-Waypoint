@@ -54,3 +54,14 @@ func TestRegexTemplateClassifiesItsExamples(t *testing.T) {
 		}
 	}
 }
+
+// LoadPluginDir ignores subdirectories such as plugins/lean-mode/.
+func TestPluginDirIgnoresLeanModeSubdir(t *testing.T) {
+	specs, err := LoadPluginDir("../../plugins")
+	if err != nil {
+		t.Fatalf("LoadPluginDir(../../plugins) returned error: %v", err)
+	}
+	if len(specs) != 3 {
+		t.Fatalf("expected 3 processor plugin templates, got %d", len(specs))
+	}
+}

@@ -134,6 +134,37 @@ func New(p Params) (Result, error) {
 				},
 			},
 			{
+				Name:  "diff",
+				Usage: "Compare two LEAN MODE YAML profiles side by side without modifying database state",
+				Flags: []cli.Flag{
+					&cli.StringFlag{Name: "from", Required: true, Usage: "Baseline LEAN MODE YAML profile"},
+					&cli.StringFlag{Name: "to", Required: true, Usage: "Target LEAN MODE YAML profile"},
+					&cli.IntFlag{Name: "batch-size", Value: 200, Usage: "Titles per comparison batch"},
+					&cli.IntFlag{Name: "max-titles", Value: 500, Usage: "Cap titles compared (0 = full catalog)"},
+					&cli.IntFlag{Name: "samples", Value: 25, Usage: "Maximum sample winner changes to emit"},
+				},
+				Action: func(ctx *cli.Context) error {
+					fromProf, err := leanmode.LoadProfileFile(ctx.String("from"))
+					if err != nil {
+						return err
+					}
+					toProf, err := leanmode.LoadProfileFile(ctx.String("to"))
+					if err != nil {
+						return err
+					}
+					report, err := p.Store.DiffProfiles(ctx.Context, fromProf, toProf, leanmode.DiffOptions{
+						TitleBatchSize: ctx.Int("batch-size"),
+						MaxTitles:      ctx.Int("max-titles"),
+						MaxSamples:     ctx.Int("samples"),
+						Now:            time.Now().UTC(),
+					})
+					if err != nil {
+						return err
+					}
+					return json.NewEncoder(ctx.App.Writer).Encode(report)
+				},
+			},
+			{
 				Name:  "status",
 				Usage: "Report persisted LEAN MODE profile counts, runner-ups, and active tombstones",
 				Flags: []cli.Flag{
@@ -159,8 +190,8 @@ func New(p Params) (Result, error) {
 					if err != nil {
 						return err
 					}
-					fmt.Fprintf(ctx.App.Writer, "cleared %d tombstones\n", n)
-					return nil
+					_, err = fmt.Fprintf(ctx.App.Writer, "cleared %d tombstones\n", n)
+					return err
 				},
 			},
 		},

@@ -187,29 +187,29 @@ type ReconcileOptions struct {
 
 // ReconcileReport summarizes a reconciliation + optional prune run.
 type ReconcileReport struct {
-	ProfileID          string         `json:"profile_id"`
-	Mode               string         `json:"mode"`
-	ConfigDigest       string         `json:"config_digest"`
-	TitlesEvaluated    int            `json:"titles_evaluated"`
-	SlotsEvaluated     int            `json:"slots_evaluated"`
-	CandidatesEvaluated int           `json:"candidates_evaluated"`
-	WinnersKept        int            `json:"winners_kept"`
-	RunnerUpsKept      int            `json:"runner_ups_kept"`
-	LosersCount        int            `json:"losers_count"`
-	DisqualifiedCount  int            `json:"disqualified_count"`
-	DisqualByReason    map[string]int `json:"disqualified_by_reason"`
-	WouldPruneCount    int            `json:"would_prune_count"`
-	WouldReclaimBytes  uint64         `json:"would_reclaim_bytes"`
-	PrunedCount        int            `json:"pruned_count"`
-	PrunedBytes        uint64         `json:"pruned_bytes"`
-	ProtectedSkipped   int            `json:"protected_skipped"`
-	TooYoungSkipped    int            `json:"too_young_skipped"`
-	TombstonesWritten  int            `json:"tombstones_written"`
-	RevivedSlots       int            `json:"revived_slots"`
-	HysteresisHolds    int            `json:"hysteresis_holds"`
-	DurationMs         float64        `json:"duration_ms"`
-	TitlesPerSec       float64        `json:"titles_per_sec"`
-	SlotsPerSec        float64        `json:"slots_per_sec"`
+	ProfileID           string         `json:"profile_id"`
+	Mode                string         `json:"mode"`
+	ConfigDigest        string         `json:"config_digest"`
+	TitlesEvaluated     int            `json:"titles_evaluated"`
+	SlotsEvaluated      int            `json:"slots_evaluated"`
+	CandidatesEvaluated int            `json:"candidates_evaluated"`
+	WinnersKept         int            `json:"winners_kept"`
+	RunnerUpsKept       int            `json:"runner_ups_kept"`
+	LosersCount         int            `json:"losers_count"`
+	DisqualifiedCount   int            `json:"disqualified_count"`
+	DisqualByReason     map[string]int `json:"disqualified_by_reason"`
+	WouldPruneCount     int            `json:"would_prune_count"`
+	WouldReclaimBytes   uint64         `json:"would_reclaim_bytes"`
+	PrunedCount         int            `json:"pruned_count"`
+	PrunedBytes         uint64         `json:"pruned_bytes"`
+	ProtectedSkipped    int            `json:"protected_skipped"`
+	TooYoungSkipped     int            `json:"too_young_skipped"`
+	TombstonesWritten   int            `json:"tombstones_written"`
+	RevivedSlots        int            `json:"revived_slots"`
+	HysteresisHolds     int            `json:"hysteresis_holds"`
+	DurationMs          float64        `json:"duration_ms"`
+	TitlesPerSec        float64        `json:"titles_per_sec"`
+	SlotsPerSec         float64        `json:"slots_per_sec"`
 }
 
 type titleKey struct {
@@ -516,15 +516,15 @@ func (s *Store) ExplainTitle(ctx context.Context, cfg ProfileConfig, contentType
 
 // ProfileStatus summarizes persisted state for a profile.
 type ProfileStatus struct {
-	ProfileID       string    `json:"profile_id"`
-	Mode            string    `json:"mode"`
-	ConfigDigest    string    `json:"config_digest"`
-	WinnersRank1    int64     `json:"winners_rank_1"`
-	RunnerUps       int64     `json:"runner_ups"`
-	ActiveTombstones int64    `json:"active_tombstones"`
-	PrunedTotal     int64     `json:"pruned_total"`
-	SlotsEvaluated  int64     `json:"slots_evaluated"`
-	UpdatedAt       time.Time `json:"updated_at"`
+	ProfileID        string    `json:"profile_id"`
+	Mode             string    `json:"mode"`
+	ConfigDigest     string    `json:"config_digest"`
+	WinnersRank1     int64     `json:"winners_rank_1"`
+	RunnerUps        int64     `json:"runner_ups"`
+	ActiveTombstones int64     `json:"active_tombstones"`
+	PrunedTotal      int64     `json:"pruned_total"`
+	SlotsEvaluated   int64     `json:"slots_evaluated"`
+	UpdatedAt        time.Time `json:"updated_at"`
 }
 
 func (s *Store) Status(ctx context.Context, profileID string) ([]ProfileStatus, error) {
@@ -737,10 +737,11 @@ ORDER BY tc.info_hash`,
 		if len(langsJSON) > 0 {
 			_ = json.Unmarshal(langsJSON, &c.Languages)
 		}
-		if engAudio == "dub" {
+		switch engAudio {
+		case "dub":
 			t := true
 			c.EnglishAudio = &t
-		} else if engAudio == "none" {
+		case "none":
 			f := false
 			c.EnglishAudio = &f
 		}

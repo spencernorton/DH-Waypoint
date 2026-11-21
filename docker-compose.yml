@@ -67,6 +67,10 @@ services:
       CONTENT_FILTER_ENFORCE: "${CONTENT_FILTER_ENFORCE:-false}"
       RETENTION_ENABLED: "${RETENTION_ENABLED:-false}"
       RETENTION_ENABLE_PURGE: "${RETENTION_ENABLE_PURGE:-false}"
+      # LEAN MODE curation & disk-compaction plugin (opt-in; see plugins/lean-mode/ & docs/lean-mode.md)
+      LEAN_MODE_ENABLED: "${LEAN_MODE_ENABLED:-false}"
+      LEAN_MODE_CONFIG_FILE: "${LEAN_MODE_CONFIG_FILE:-}"
+      LEAN_MODE_SERVE_GLOBALLY: "${LEAN_MODE_SERVE_GLOBALLY:-false}"
       DHT_CRAWLER_SCALING_FACTOR: "${DHT_SCALING_FACTOR:-1}"
       LOG_LEVEL: ${LOG_LEVEL:-info}
     ports:

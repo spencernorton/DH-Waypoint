@@ -59,7 +59,7 @@ propose: the core validates every proposal and never lets one delete a record.
 report what they would remove through `would_*` metrics, while the opt-in
 adult filter and name policy keep releases out of Torznab and GraphQL results
 without deleting them. A CSAM blocklist, fed from
-lists you choose, is checked before any metadata fetch.
+lists you choose, is checked before any metadata fetch. For RAM- or disk-constrained hosts, the opt-in [**LEAN MODE** plugin](docs/lean-mode.md) (`plugins/lean-mode/`, disabled by default) keeps only the single best release per movie or TV episode across `observe`, `serve`, and double-locked `prune` modes.
 
 **The APIs are standard and bounded.** Torznab for the \*arrs, GraphQL over
 JSON `POST`, a REST read API with an OpenAPI document, and a raw REST v2
@@ -114,6 +114,7 @@ Migrating to [ParadeDB (`paradedb/paradedb:0.26.6-pg18`)](docs/paradedb-bm25.md)
 - [Quickstart](docs/quickstart.md) and [configuration](docs/configuration.md)
 - [API guide](docs/api-guide.md), with [Torznab](docs/reference/torznab-api.md), [GraphQL](docs/reference/graphql-api.md), [metrics](docs/reference/metrics.md) and [CLI](docs/reference/cli.md) references
 - [Evidence](docs/evidence.md): wiring the \*arrs and qBittorrent into labels, ranking and liveness
+- [LEAN MODE plugin](docs/lean-mode.md): opt-in single-best-release curation and disk compaction for RAM/disk-constrained hosts
 - [Plugins](plugins/README.md): the three templates, [plugin files](docs/processors/plugin-files.md), the [v1 protocol](docs/processors/v1.md), the [LLM processor](docs/processors/llm.md) and [Armiger](docs/armiger-integration.md)
 - [BitTorrent v2](docs/bittorrent-v2.md): identities, the raw REST v2 catalogue and processor compatibility
 - [Architecture](docs/architecture.md) and [operations](docs/OPERATIONS.md): internals, capacity, backups and upgrades

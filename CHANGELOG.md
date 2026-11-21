@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Added
+
+- **Opt-in LEAN MODE single-best-release curation plugin (`internal/leanmode`, migration `00083`, `dh-waypoint lean`, `plugins/lean-mode/`).** Adds a disabled-by-default (`LEAN_MODE_ENABLED=false`) declarative YAML 3-tier rule engine (`required`, `preferred`, `if_found`) keeping only the single best release per movie or TV episode/season pack across `observe`, `serve` (per-Torznab/REST profile or global), and double-locked `prune` modes with warm runner-up failover, anti-thrashing hysteresis, config-digest `lean_tombstones` for `dhtcrawler` and `importer`, three bundled presets (`1080p-lean.yml`, `4k-remux-best.yml`, `small-footprint-x265.yml`), `dh-waypoint lean validate|reconcile|explain|diff|status|clear-tombstones`, optional Docker Compose / `.env.example` wiring, and operator documentation (`docs/lean-mode.md`).
+
 ## 5.14.0 — 2026-11-20
 
 ### Added

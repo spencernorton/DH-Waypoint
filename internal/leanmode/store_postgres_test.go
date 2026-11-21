@@ -227,3 +227,47 @@ func TestLeanModeHandlesNullBundleExtensionsAndServingCriteria(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int64(0), cleared)
 }
+
+func TestLeanModeDiffProfilesComparesWithoutMutatingState(t *testing.T) {
+	pool, ctx := setupLeanTestDB(t)
+	store := NewStore(lazy.New(func() (*pgxpool.Pool, error) { return pool, nil }))
+	now := time.Now().UTC()
+	old := now.Add(-96 * time.Hour)
+
+	_, err := pool.Exec(ctx, `INSERT INTO metadata_sources (key, name, created_at, updated_at) VALUES ('tmdb', 'TMDB', $1, $1) ON CONFLICT DO NOTHING`, old)
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `INSERT INTO content (type, source, id, title, release_year, created_at, updated_at) VALUES ('movie', 'tmdb', '604', 'Synthetic Diff Film', 2024, $1, $1)`, old)
+	require.NoError(t, err)
+
+	h1080 := mkHash(0x61)
+	h4k := mkHash(0x62)
+	_, err = pool.Exec(ctx, `INSERT INTO torrents (info_hash, name, size, private, files_status, files_count, created_at, updated_at) VALUES
+		($1,'Synthetic.Diff.Film.2024.1080p.BluRay.x265-NTb',4500000000,false,'single',1,$3,$3),
+		($2,'Synthetic.Diff.Film.2024.2160p.UHD.BluRay.REMUX-FraMeSToR',62000000000,false,'single',1,$3,$3)`, h1080, h4k, old)
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `INSERT INTO torrent_contents (info_hash, content_type, content_source, content_id, video_resolution, video_source, video_codec, video_modifier, release_group, size, seeders, published_at, created_at, updated_at) VALUES
+		($1,'movie','tmdb','604','V1080p','BluRay','x265',NULL,'NTb',4500000000,40,$3,$3,$3),
+		($2,'movie','tmdb','604','V2160p','BluRay','HEVC','REMUX','FraMeSToR',62000000000,25,$3,$3,$3)`, h1080, h4k, old)
+	require.NoError(t, err)
+
+	p1080, err := LoadProfileFile(filepath.Join("..", "..", "plugins", "lean-mode", "1080p-lean.yml"))
+	require.NoError(t, err)
+	p4k, err := LoadProfileFile(filepath.Join("..", "..", "plugins", "lean-mode", "4k-remux-best.yml"))
+	require.NoError(t, err)
+
+	rep, err := store.DiffProfiles(ctx, p1080, p4k, DiffOptions{Now: now})
+	require.NoError(t, err)
+	require.Equal(t, 1, rep.TitlesCompared)
+	require.Equal(t, 1, rep.SlotsCompared)
+	require.Equal(t, 1, rep.Changed)
+	require.Len(t, rep.SampleChanges, 1)
+	require.Equal(t, hex.EncodeToString(h1080), rep.SampleChanges[0].FromHash)
+	require.Equal(t, hex.EncodeToString(h4k), rep.SampleChanges[0].ToHash)
+
+	// Confirm DiffProfiles never writes rows into lean_winners or lean_state.
+	var winnersCount, stateCount int
+	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM lean_winners`).Scan(&winnersCount))
+	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM lean_state`).Scan(&stateCount))
+	require.Equal(t, 0, winnersCount)
+	require.Equal(t, 0, stateCount)
+}

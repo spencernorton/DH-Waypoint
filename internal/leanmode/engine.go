@@ -15,42 +15,42 @@ import (
 // Candidate is the normalized, DB-independent release snapshot evaluated by the
 // three-tier LEAN MODE engine.
 type Candidate struct {
-	InfoHash              []byte
-	Name                  string
-	ContentType           string
-	ContentSource         string
-	ContentID             string
-	SizeBytes             uint64
-	FilesStatus           string
-	FilesCount            int
-	VideoFileCount        int
-	HasEmbeddedSubtitles  bool
-	HasClutterFiles       bool
-	VideoResolution       string // e.g. "1080p", "2160p"
-	VideoSource           string // e.g. "BluRay", "WEBDL", "WEBRip", "CAM"
-	VideoCodec            string // e.g. "x265", "HEVC", "H264", "x264", "AV1"
-	VideoModifier         string // e.g. "REMUX", "SCREENER"
-	Video3D               string
-	ReleaseGroup          string
-	Languages             []string
-	EnglishAudio          *bool
-	Episodes              model.Episodes
-	ReleaseGranularity    string
-	AnimeAbsoluteEpisode  int
-	HDRFormats            []string
-	AudioFormats          []string
-	AudioFeatures         []string
-	Revisions             []string
-	Seeders               *int  // nil = unknown; 0 = observed zero (or tracker zero)
-	SeedersAuthoritative  bool  // true when backed by tracker scrape
-	ArmigerApproved       bool
-	PayloadProofActive    bool
+	InfoHash               []byte
+	Name                   string
+	ContentType            string
+	ContentSource          string
+	ContentID              string
+	SizeBytes              uint64
+	FilesStatus            string
+	FilesCount             int
+	VideoFileCount         int
+	HasEmbeddedSubtitles   bool
+	HasClutterFiles        bool
+	VideoResolution        string // e.g. "1080p", "2160p"
+	VideoSource            string // e.g. "BluRay", "WEBDL", "WEBRip", "CAM"
+	VideoCodec             string // e.g. "x265", "HEVC", "H264", "x264", "AV1"
+	VideoModifier          string // e.g. "REMUX", "SCREENER"
+	Video3D                string
+	ReleaseGroup           string
+	Languages              []string
+	EnglishAudio           *bool
+	Episodes               model.Episodes
+	ReleaseGranularity     string
+	AnimeAbsoluteEpisode   int
+	HDRFormats             []string
+	AudioFormats           []string
+	AudioFeatures          []string
+	Revisions              []string
+	Seeders                *int // nil = unknown; 0 = observed zero (or tracker zero)
+	SeedersAuthoritative   bool // true when backed by tracker scrape
+	ArmigerApproved        bool
+	PayloadProofActive     bool
 	PayloadProofVerifiedAt *time.Time
-	ArmigerEvaluatedAt    *time.Time
-	PublishedAt           time.Time
-	CreatedAt             time.Time
-	LivenessDead          bool
-	Protected             bool // private, canonical_label, label_evidence, grab_attempt, hint, protected tag, hold, quarantine
+	ArmigerEvaluatedAt     *time.Time
+	PublishedAt            time.Time
+	CreatedAt              time.Time
+	LivenessDead           bool
+	Protected              bool // private, canonical_label, label_evidence, grab_attempt, hint, protected tag, hold, quarantine
 }
 
 // IncumbentState represents the current rank-1 winner of a slot from lean_winners.
@@ -63,18 +63,18 @@ type IncumbentState struct {
 
 // ScoredCandidate carries full three-tier scoring provenance for explainability and ranking.
 type ScoredCandidate struct {
-	Candidate       Candidate
-	Disqualified    bool
-	DisqualReasons  []string
-	PreferredScore  float64
-	PreferredVector [7]float64 // res, source, codec, hdr, audio, group, sizeEff
-	InEquivBand     bool
-	TiebreakScore   float64
-	TiebreakVector  []float64
-	Viable          bool
-	KeptRank        int // 1 = primary winner, 2..K = runner-up, 0 = not kept
+	Candidate        Candidate
+	Disqualified     bool
+	DisqualReasons   []string
+	PreferredScore   float64
+	PreferredVector  [7]float64 // res, source, codec, hdr, audio, group, sizeEff
+	InEquivBand      bool
+	TiebreakScore    float64
+	TiebreakVector   []float64
+	Viable           bool
+	KeptRank         int // 1 = primary winner, 2..K = runner-up, 0 = not kept
 	KeptByHysteresis bool
-	PruneReason     string // "", "dominated", "disqualified", "subsumed_by_pack", "subsumed_by_episodes"
+	PruneReason      string // "", "dominated", "disqualified", "subsumed_by_pack", "subsumed_by_episodes"
 }
 
 // SlotDecision is the deterministic output for a single movie or TV slot.

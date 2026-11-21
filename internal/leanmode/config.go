@@ -7,7 +7,7 @@
 //   - observe: compute and persist lean_winners without changing serving or deleting rows.
 //   - serve:   narrow consumer APIs to canonical winners while leaving stored rows intact.
 //   - prune:   opt-in bounded physical pruning of dominated losers with config-digest
-//              tombstones that prevent DHT/importer re-crawl churn.
+//     tombstones that prevent DHT/importer re-crawl churn.
 //
 // Disabled by default upstream (Enabled=false): zero background queries, zero
 // serving overhead, and zero schema mutations when inactive.

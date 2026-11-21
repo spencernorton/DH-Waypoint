@@ -240,6 +240,20 @@ Periodic deletion of torrents that haven't been seen in DHT announcements for a 
 
 The default predicate is conservative: no canonical label, no evidence record, age > 60 days, `updated_at` older than 180 days, and every torrent source reports `seeders=0` observed within the last 30 days.
 
+## LEAN MODE
+
+Optional single-best-release curation and disk-compaction plugin for hosts with limited RAM or disk space. Disabled by default so standard full-catalogue installations incur zero overhead.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `LEAN_MODE_ENABLED` | `false` | Master opt-in switch. When `false`, the background reconciler, serving projection, and tombstone hooks are strict no-ops. |
+| `LEAN_MODE_CONFIG_FILE` | *(none)* | Path to a declarative 3-tier YAML profile (for example `/plugins/lean-mode/1080p-lean.yml` or `/plugins/lean-mode/small-footprint-x265.yml`). |
+| `LEAN_MODE_SERVE_GLOBALLY` | `false` | When `true` and the active profile is in `serve` or `prune` mode, narrows default Torznab, REST, and GraphQL responses to rank-1 winners. Leave `false` to opt in per Torznab profile (`lean_profile`) or REST query (`?lean_profile=<id>`). |
+| `LEAN_MODE_INTERVAL` | `15m` | Cadence between incremental reconciliation sweeps. |
+| `LEAN_MODE_TITLE_BATCH_SIZE` | `200` | Distinct movies/TV shows evaluated per reconciliation batch. |
+
+See [LEAN MODE](lean-mode.md) and [`plugins/lean-mode/`](../plugins/lean-mode/).
+
 ## History pruning
 
 The `eventprune` worker bounds three history tables that otherwise grow for the

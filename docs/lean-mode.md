@@ -32,7 +32,7 @@ Every candidate release in a movie or TV slot passes through three deterministic
   - Changing any rule in the YAML file changes `config_digest`, immediately rendering prior tombstones inactive.
 - **Safety and Revision Invariance:**
   - Serving filters always compose inside `serving.Policy.TorrentCondition`; LEAN MODE can only narrow consumer results, never bypass publication review, payload proof, private-torrent, adult, or blocklist gates.
-  - `lean_winners` (`ON DELETE CASCADE` on `torrents`) and `lean_tombstones` store zero torrent names or file paths, are classified in the CSAM removal registry, and never bump `processor_publication_sources.revision` on retained winners.
+  - `lean_winners` (intentionally without a foreign key to `torrents` so `catalogue_recovery` cascade boundaries remain untouched; orphaned rows are excluded via `EXISTS` and swept during reconcile) and `lean_tombstones` store zero torrent names or file paths, are classified in the CSAM removal registry, and never bump `processor_publication_sources.revision` on retained winners.
   - Pruning enforces a hard protected-row fence (never deleting private torrents, canonical labels, `*arr`/qBittorrent `label_evidence`, `torrent_grab_attempts`, manual hints, active holds, quarantined entries, or privacy-tagged torrents) plus a `max_delete_fraction_per_cycle` circuit breaker.
 
 ## Bundled Presets
@@ -55,10 +55,13 @@ dh-waypoint lean reconcile --config plugins/lean-mode/1080p-lean.yml --mode obse
 # 3. Inspect exact 3-tier decision breakdown for a specific movie or TV show
 dh-waypoint lean explain --config plugins/lean-mode/1080p-lean.yml --type movie --source tmdb --id 550
 
-# 4. Check persisted profile state, runner-ups, and active tombstones
+# 4. Preview slot-by-slot differences between two profiles without mutating DB state
+dh-waypoint lean diff --from plugins/lean-mode/1080p-lean.yml --to plugins/lean-mode/small-footprint-x265.yml
+
+# 5. Check persisted profile state, runner-ups, and active tombstones
 dh-waypoint lean status --profile 1080p-lean
 
-# 5. Clear tombstones for a profile or slot manually if needed
+# 6. Clear tombstones for a profile or slot manually if needed
 dh-waypoint lean clear-tombstones --profile 1080p-lean --slot movie:tmdb:550
 ```
 
@@ -69,3 +72,23 @@ dh-waypoint lean clear-tombstones --profile 1080p-lean --slot movie:tmdb:550
 - `LEAN_MODE_INTERVAL=15m`
 - `LEAN_MODE_TITLE_BATCH_SIZE=200`
 - `LEAN_MODE_SERVE_GLOBALLY=false`
+
+## Docker Compose Quickstart (Low-RAM / Low-Disk Hosts)
+
+Because `./plugins` is already mounted read-only at `/plugins` in `docker-compose.yml`, you can enable LEAN MODE without changing volume mounts:
+
+1. Copy or edit a bundled preset in `plugins/lean-mode/` (for example `plugins/lean-mode/small-footprint-x265.yml`) and set `enabled: true`. Keep `mode: observe` initially.
+2. Add the opt-in variables to `.env` and restart:
+   ```sh
+   LEAN_MODE_ENABLED=true
+   LEAN_MODE_CONFIG_FILE=/plugins/lean-mode/small-footprint-x265.yml
+   LEAN_MODE_SERVE_GLOBALLY=false # set true once verified in observe/serve mode
+   ```
+3. Inspect selected winners and profile diffs (`dh-waypoint lean explain ...`, `dh-waypoint lean diff ...`, `dh-waypoint lean status`), then switch `mode:` to `serve` (non-destructive projection) or `prune` (with `prune.confirm_destructive: true`) when ready.
+
+## Reclaiming OS Disk Space After Pruning
+
+Deleting dominated releases in `prune` mode stops table growth immediately and makes freed pages reusable inside PostgreSQL. To return reclaimed disk space to the host filesystem after an initial large compaction pass:
+
+1. Run `VACUUM FULL ANALYZE` (takes an exclusive table lock) or online `pg_repack` on `torrent_contents`, `torrents`, `torrent_file_bundles`, `torrents_torrent_sources`, and `processor_publication_sources`.
+2. If ParadeDB BM25 is enabled, run `dh-waypoint search bm25 enable --rebuild` to shrink the BM25 index to match the compacted catalogue.

@@ -13,8 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func intPtr(v int) *int       { return &v }
-func boolPtr(v bool) *bool    { return &v }
+func intPtr(v int) *int              { return &v }
 func timePtr(v time.Time) *time.Time { return &v }
 
 func mkHash(b byte) []byte {
@@ -112,7 +111,7 @@ func TestThreeTierEngineRequiredPreferredIfFound(t *testing.T) {
 			HDRFormats: []string{"HDR10"}, AudioFeatures: []string{"ATMOS"},
 			SizeBytes: 4500 << 20, Seeders: intPtr(60), ArmigerApproved: true, PayloadProofActive: true,
 			PayloadProofVerifiedAt: timePtr(now.Add(-2 * time.Hour)),
-			FilesStatus: "single", VideoFileCount: 1, CreatedAt: now.Add(-48 * time.Hour),
+			FilesStatus:            "single", VideoFileCount: 1, CreatedAt: now.Add(-48 * time.Hour),
 		},
 		{
 			// Top band candidate B: identical quality + REPACK -> Tier 3 if_found wins!
@@ -122,7 +121,7 @@ func TestThreeTierEngineRequiredPreferredIfFound(t *testing.T) {
 			HDRFormats: []string{"HDR10"}, AudioFeatures: []string{"ATMOS"}, Revisions: []string{"REPACK"},
 			SizeBytes: 4600 << 20, Seeders: intPtr(45), ArmigerApproved: true, PayloadProofActive: true,
 			PayloadProofVerifiedAt: timePtr(now.Add(-1 * time.Hour)),
-			FilesStatus: "single", VideoFileCount: 1, CreatedAt: now.Add(-36 * time.Hour),
+			FilesStatus:            "single", VideoFileCount: 1, CreatedAt: now.Add(-36 * time.Hour),
 		},
 	}
 
