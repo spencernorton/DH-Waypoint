@@ -40,7 +40,6 @@ var ErrNotBannedKeyword = errors.New("csamblocklist: torrent does not match the 
 // cascadingTables follow `delete from torrents` through a foreign key.
 var cascadingTables = []string{
 	"junkpurge_sync_claims",
-	"lean_winners",
 	"torrent_contents",
 	"torrent_file_bundles",
 	"torrent_files",
@@ -64,6 +63,7 @@ var protectingTables = []string{
 var namelessTables = []string{
 	"junkpurge_student_releases",
 	"lean_tombstones",
+	"lean_winners",
 	"processor_core_receipts",
 	"processor_exclusion_events",
 	"processor_payload_pending",

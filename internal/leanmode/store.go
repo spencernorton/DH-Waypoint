@@ -107,7 +107,7 @@ func ServingWinnersCriteria(profileID, unlinkedPolicy, nonVideoPolicy string) (q
 	if !ProfileIDPattern.MatchString(profileID) {
 		return query.DBCriteria{}, fmt.Errorf("leanmode: invalid profile id %q", profileID)
 	}
-	winnerSubquery := "torrent_contents.info_hash IN (SELECT lw.info_hash FROM lean_winners lw WHERE lw.profile_id = ? AND lw.rank = 1)"
+	winnerSubquery := "EXISTS (SELECT 1 FROM lean_winners lw WHERE lw.profile_id = ? AND lw.rank = 1 AND lw.info_hash = torrent_contents.info_hash)"
 	if unlinkedPolicy == UnlinkedExcludeFromServe && nonVideoPolicy == NonVideoExcludeFromServe {
 		return query.DBCriteria{
 			SQL:  winnerSubquery,
@@ -260,6 +260,15 @@ WHERE profile_id = $1
   AND (config_digest <> $2 OR (expires_at IS NOT NULL AND expires_at <= $3))`,
 		cfg.ID, digest, now); err != nil {
 		return report, fmt.Errorf("leanmode: sweep stale tombstones: %w", err)
+	}
+
+	// Remove orphaned winner projections whose torrent was deleted externally.
+	if _, err := pool.Exec(ctx, `
+DELETE FROM lean_winners lw
+WHERE lw.profile_id = $1
+  AND NOT EXISTS (SELECT 1 FROM torrents t WHERE t.info_hash = lw.info_hash)`,
+		cfg.ID); err != nil {
+		return report, fmt.Errorf("leanmode: sweep orphan winners: %w", err)
 	}
 
 	// Load cursor unless ResetCursor or MaxTitles==0 full sweep.
@@ -525,8 +534,8 @@ func (s *Store) Status(ctx context.Context, profileID string) ([]ProfileStatus, 
 	}
 	q := `
 SELECT st.profile_id, st.mode, st.config_digest, st.slots_evaluated, st.pruned_total, st.updated_at,
-  COALESCE((SELECT count(*) FROM lean_winners w WHERE w.profile_id = st.profile_id AND w.rank = 1), 0),
-  COALESCE((SELECT count(*) FROM lean_winners w WHERE w.profile_id = st.profile_id AND w.rank > 1), 0),
+  COALESCE((SELECT count(*) FROM lean_winners w WHERE w.profile_id = st.profile_id AND w.rank = 1 AND EXISTS (SELECT 1 FROM torrents t WHERE t.info_hash = w.info_hash)), 0),
+  COALESCE((SELECT count(*) FROM lean_winners w WHERE w.profile_id = st.profile_id AND w.rank > 1 AND EXISTS (SELECT 1 FROM torrents t WHERE t.info_hash = w.info_hash)), 0),
   COALESCE((SELECT count(*) FROM lean_tombstones tb WHERE tb.profile_id = st.profile_id AND tb.config_digest = st.config_digest AND (tb.expires_at IS NULL OR tb.expires_at > clock_timestamp())), 0)
 FROM lean_state st`
 	var rows pgx.Rows
@@ -787,13 +796,14 @@ ORDER BY tc.info_hash`,
 
 func loadTitleIncumbents(ctx context.Context, pool *pgxpool.Pool, profileID string, tk titleKey) (map[string]IncumbentState, error) {
 	rows, err := pool.Query(ctx, `
-SELECT slot_key, info_hash, preferred_score, tiebreak_score, incumbent_since
-FROM lean_winners
-WHERE profile_id = $1
-  AND content_type = $2
-  AND content_source = $3
-  AND content_id = $4
-  AND rank = 1`,
+SELECT lw.slot_key, lw.info_hash, lw.preferred_score, lw.tiebreak_score, lw.incumbent_since
+FROM lean_winners lw
+WHERE lw.profile_id = $1
+  AND lw.content_type = $2
+  AND lw.content_source = $3
+  AND lw.content_id = $4
+  AND lw.rank = 1
+  AND EXISTS (SELECT 1 FROM torrents t WHERE t.info_hash = lw.info_hash)`,
 		profileID, tk.ContentType, tk.ContentSource, tk.ContentID)
 	if err != nil {
 		return nil, err

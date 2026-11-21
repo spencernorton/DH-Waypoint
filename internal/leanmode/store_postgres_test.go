@@ -159,6 +159,26 @@ func TestLeanModePostgresLifecycleAndInvariants(t *testing.T) {
 	blockedAfterChange, err := store.TombstonedSet(ctx, [][]byte{hLose})
 	require.NoError(t, err)
 	require.Empty(t, blockedAfterChange, "changing YAML config digest must immediately un-block old tombstones")
+
+	// 5. External deletion of rank-1 winner succeeds without FK cascade, immediately disappears from Status(),
+	//    and promotes the standby runner-up while sweeping the orphaned lean_winners row on next reconcile.
+	_, err = pool.Exec(ctx, `DELETE FROM torrents WHERE info_hash = $1`, hWin)
+	require.NoError(t, err)
+	stAfterDel, err := store.Status(ctx, profPrune.ID)
+	require.NoError(t, err)
+	require.Len(t, stAfterDel, 1)
+	require.Equal(t, int64(0), stAfterDel[0].WinnersRank1)
+	require.Equal(t, int64(1), stAfterDel[0].RunnerUps)
+
+	repPromote, err := store.Reconcile(ctx, profPrune, ReconcileOptions{Now: now.Add(time.Minute)})
+	require.NoError(t, err)
+	require.Equal(t, 1, repPromote.WinnersKept)
+	var promotedHash []byte
+	require.NoError(t, pool.QueryRow(ctx, `SELECT info_hash FROM lean_winners WHERE profile_id = $1 AND rank = 1`, profPrune.ID).Scan(&promotedHash))
+	require.Equal(t, hRun, promotedHash)
+	var orphanCount int
+	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM lean_winners WHERE info_hash = $1`, hWin).Scan(&orphanCount))
+	require.Equal(t, 0, orphanCount)
 }
 
 func TestLeanModeHandlesNullBundleExtensionsAndServingCriteria(t *testing.T) {

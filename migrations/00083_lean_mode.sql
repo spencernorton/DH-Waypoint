@@ -6,7 +6,8 @@ CREATE TABLE IF NOT EXISTS lean_winners (
  profile_id text NOT NULL CHECK (profile_id ~ '^[a-z0-9][a-z0-9._-]{0,63}$'),
  slot_key text NOT NULL CHECK (length(slot_key) BETWEEN 1 AND 256),
  rank smallint NOT NULL CHECK (rank >= 1 AND rank <= 10),
- info_hash bytea NOT NULL REFERENCES torrents(info_hash) ON DELETE CASCADE,
+ -- No foreign key to torrents so catalogue recovery's cascade boundary and schema fingerprint remain unchanged.
+ info_hash bytea NOT NULL CHECK (octet_length(info_hash) IN (20, 32)),
  content_type text NOT NULL,
  content_source text NOT NULL,
  content_id text NOT NULL,
