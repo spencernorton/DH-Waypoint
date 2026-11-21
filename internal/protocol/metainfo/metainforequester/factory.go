@@ -1,6 +1,7 @@
 package metainforequester
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"net/netip"
@@ -35,6 +36,7 @@ type Result struct {
 	RequestConcurrency    prometheus.Collector   `group:"prometheus_collectors"`
 	RequestTransportTotal prometheus.Collector   `group:"prometheus_collectors"`
 	PeerRepCollectors   []prometheus.Collector `group:"prometheus_collectors,flatten"`
+	AppHook             fx.Hook                `group:"app_hooks"`
 }
 
 // refuseNonPublic keeps the dialer away from addresses no DHT peer can have,
@@ -42,7 +44,7 @@ type Result struct {
 func refuseNonPublic(_, address string, _ syscall.RawConn) error {
 	addr, err := netip.ParseAddrPort(address)
 	if err != nil || !protocol.IsPublicAddr(addr.Addr()) {
-		return fmt.Errorf("refusing to connect to non-public address %s", address)
+		return fmt.Errorf("%w %s", errNonPublicAddress, address)
 	}
 
 	return nil
@@ -61,15 +63,23 @@ func New(p Params) Result {
 		Namespace: namespace,
 		Subsystem: subsystem,
 		Name:      "transport_total",
-		Help:      "BEP-9 metadata fetch attempts partitioned by transport (tcp_plain, tcp_mse) and outcome (ok, error).",
+		Help:      "BEP-9 metadata fetch attempts partitioned by transport (tcp_plain, tcp_mse, utp_plain, utp_mse) and outcome (ok, error).",
 	}, []string{"transport", "outcome"})
 
+	var utpD *utpDialer
+	if p.Config.EnableUTP {
+		utpD = newUTPDialer(p.Config.AllowPrivateAddrs)
+	}
+
 	collector := newPrometheusCollector(requester{
-		clientID:       protocol.RandomPeerID(),
-		timeout:        p.Config.RequestTimeout,
-		dialer:         dialer,
-		enableMSE:      p.Config.EnableMSE,
-		transportTotal: transportTotal,
+		clientID:          protocol.RandomPeerID(),
+		timeout:           p.Config.RequestTimeout,
+		dialer:            dialer,
+		utpDialer:         utpD,
+		allowPrivateAddrs: p.Config.AllowPrivateAddrs,
+		enableMSE:         p.Config.EnableMSE,
+		enableUTP:         p.Config.EnableUTP,
+		transportTotal:    transportTotal,
 	})
 
 	// Per-peer reputation cache. Defaults: Enabled=false, so the
@@ -110,5 +120,13 @@ func New(p Params) Result {
 		RequestConcurrency:    collector.requestConcurrency,
 		RequestTransportTotal: transportTotal,
 		PeerRepCollectors:   peerRepMet.collectors(),
+		AppHook: fx.Hook{
+			OnStop: func(context.Context) error {
+				if utpD != nil {
+					return utpD.Close()
+				}
+				return nil
+			},
+		},
 	}
 }

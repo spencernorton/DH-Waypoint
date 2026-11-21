@@ -51,10 +51,17 @@ github.com/anacrolix/envpprof v1.4.0 h1:QHeIcrgHcRChhnxR8l6rlaLlRQx9zd7Q2NII6Zbt
 github.com/anacrolix/envpprof v1.4.0/go.mod h1:7QIG4CaX1uexQ3tqd5+BRa/9e2D02Wcertl6Yh0jCB0=
 github.com/anacrolix/generics v0.2.0 h1:gPwGOs14irokFN9kUP1i1A0Bn0FPT7/hWWD3hHKSKNw=
 github.com/anacrolix/generics v0.2.0/go.mod h1:NGehhfeXJPBujPx0s6cstSj8B+TERsTY32Xckfx5ftc=
+github.com/anacrolix/go-libutp v1.5.2-0.20260908013213-836dd42cdde6 h1:eWpL7T6AXAC/Q5ttYsviaWIBEg4eBpB6LH/LCST8pBc=
+github.com/anacrolix/go-libutp v1.5.2-0.20260908013213-836dd42cdde6/go.mod h1:qJ59Ax77trj2F6OIydwSHtvMpPZSo/zZPPHosbIJQDk=
+github.com/anacrolix/go-utp v0.0.0-20260908033909-9f1664acf866 h1:JMYl7Xp9ZQwUFOzij7Ng+hrhbOymWY2B32p+IeZ8J3M=
+github.com/anacrolix/go-utp v0.0.0-20260908033909-9f1664acf866/go.mod h1:eCVeSbTCNP6qXMaRpjhCeiDd1Ao33c+qQuF+KtFQXzs=
 github.com/anacrolix/log v0.3.0/go.mod h1:lWvLTqzAnCWPJA08T2HCstZi0L1y2Wyvm3FJgwU9jwU=
 github.com/anacrolix/log v0.6.0/go.mod h1:lWvLTqzAnCWPJA08T2HCstZi0L1y2Wyvm3FJgwU9jwU=
 github.com/anacrolix/log v0.17.1-0.20251118025802-918f1157b7bb h1:nGNLCQbxFQZz7/9PXLGQ9GmavI/W+eX66pSwVeUwugU=
 github.com/anacrolix/log v0.17.1-0.20251118025802-918f1157b7bb/go.mod h1:YjBZbwe2v3RsU7WdoBlVSPVpfKuOAno9SRQ/8tIl+hk=
+github.com/anacrolix/lsan v0.1.0 h1:TbgB8fdVXgBwrNsJGHtht9+9FepNFu5H7dU8ek6XYAY=
+github.com/anacrolix/lsan v0.1.0/go.mod h1:66cFKPCO7Sl4vbFnAaSq7e4OXtdMhRSBagJGWgmpJbM=
+github.com/anacrolix/missinggo v0.0.0-20180725070939-60ef2fbf63df/go.mod h1:kwGiTUTZ0+p4vAz3VbAI5a30t2YbvemcmspjKwrAz5s=
 github.com/anacrolix/missinggo v1.1.0/go.mod h1:MBJu3Sk/k3ZfGYcS7z18gwfu72Ey/xopPFJJbTi5yIo=
 github.com/anacrolix/missinggo v1.1.2-0.20190815015349-b888af804467/go.mod h1:MBJu3Sk/k3ZfGYcS7z18gwfu72Ey/xopPFJJbTi5yIo=
 github.com/anacrolix/missinggo v1.2.1/go.mod h1:J5cMhif8jPmFoC3+Uvob3OXXNIhOUikzMt+uUjeM21Y=
@@ -66,6 +73,8 @@ github.com/anacrolix/missinggo/v2 v2.2.0/go.mod h1:o0jgJoYOyaoYQ4E2ZMISVa9c88BbU
 github.com/anacrolix/missinggo/v2 v2.5.1/go.mod h1:WEjqh2rmKECd0t1VhQkLGTdIWXO6f6NLjp5GlMZ+6FA=
 github.com/anacrolix/missinggo/v2 v2.11.0 h1:9vYHTNHa5q8tLeDbA6XWFyYeKrxrhfw7GZe9KpS2Wnw=
 github.com/anacrolix/missinggo/v2 v2.11.0/go.mod h1:gcZICf9xhHZEuLIaxXG1gRg4hpbL7lqgVrq5jsYtQU4=
+github.com/anacrolix/mmsg v1.0.1 h1:TxfpV7kX70m3f/O7ielL/2I3OFkMPjrRCPo7+4X5AWw=
+github.com/anacrolix/mmsg v1.0.1/go.mod h1:x8kRaJY/dCrY9Al0PEcj1mb/uFHwP6GCJ9fLl4thEPc=
 github.com/anacrolix/multiless v0.4.0 h1:lqSszHkliMsZd2hsyrDvHOw4AbYWa+ijQ66LzbjqWjM=
 github.com/anacrolix/multiless v0.4.0/go.mod h1:zJv1JF9AqdZiHwxqPgjuOZDGWER6nyE48WBCi/OOrMM=
 github.com/anacrolix/stm v0.2.0/go.mod h1:zoVQRvSiGjGoTmbM0vSLIiaKjWtNPeTvXUSdJQA4hsg=

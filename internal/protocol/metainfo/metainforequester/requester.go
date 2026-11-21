@@ -25,11 +25,14 @@ type Requester interface {
 }
 
 type requester struct {
-	clientID       protocol.ID
-	timeout        time.Duration
-	dialer         *net.Dialer
-	enableMSE      bool
-	transportTotal *dualemit.CounterVec
+	clientID          protocol.ID
+	timeout           time.Duration
+	dialer            *net.Dialer
+	utpDialer         *utpDialer
+	allowPrivateAddrs bool
+	enableMSE         bool
+	enableUTP         bool
+	transportTotal    *dualemit.CounterVec
 }
 
 type ExtensionBit uint
@@ -105,7 +108,7 @@ func RequestInfoHash(ctx context.Context, r Requester, hash protocol.InfoHash, a
 	return res, err
 }
 
-const minMSEFallbackRemaining = 250 * time.Millisecond
+const minFallbackRemaining = 250 * time.Millisecond
 
 func (r requester) observeTransport(transport, outcome string) {
 	if r.transportTotal != nil {
@@ -117,7 +120,7 @@ func shouldFallbackToMSE(ctx context.Context, err error) bool {
 	if err == nil || ctx.Err() != nil {
 		return false
 	}
-	if errors.Is(err, metainfo.ErrWrongInfoHash) {
+	if errors.Is(err, metainfo.ErrWrongInfoHash) || errors.Is(err, errNonPublicAddress) {
 		return false
 	}
 	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
@@ -127,7 +130,7 @@ func shouldFallbackToMSE(ctx context.Context, err error) bool {
 	if errors.As(err, &netErr) && netErr.Timeout() {
 		return false
 	}
-	if dl, ok := ctx.Deadline(); ok && time.Until(dl) < minMSEFallbackRemaining {
+	if dl, ok := ctx.Deadline(); ok && time.Until(dl) < minFallbackRemaining {
 		return false
 	}
 	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) ||
@@ -137,14 +140,107 @@ func shouldFallbackToMSE(ctx context.Context, err error) bool {
 	return true
 }
 
+func shouldFallbackToUTP(ctx context.Context, err error) bool {
+	if err == nil || ctx.Err() != nil {
+		return false
+	}
+	if errors.Is(err, metainfo.ErrWrongInfoHash) || errors.Is(err, errNonPublicAddress) {
+		return false
+	}
+	if errors.Is(err, context.Canceled) {
+		return false
+	}
+	if dl, ok := ctx.Deadline(); ok && time.Until(dl) < minFallbackRemaining {
+		return false
+	}
+	return true
+}
+
+func (r requester) tcpDialContext(parent context.Context) (context.Context, context.CancelFunc) {
+	if !r.enableUTP || r.utpDialer == nil {
+		return parent, func() {}
+	}
+	dl, ok := parent.Deadline()
+	if !ok {
+		return parent, func() {}
+	}
+	// When uTP fallback is enabled, cap TCP SYN wait at half the overall budget
+	// (at most 2s, at least 500ms) so a blackholed TCP port still leaves room
+	// for uTP within the same RequestTimeout budget.
+	rem := time.Until(dl)
+	capDur := rem / 2
+	if capDur > 2*time.Second {
+		capDur = 2 * time.Second
+	}
+	if capDur < 500*time.Millisecond {
+		capDur = rem
+	}
+	return context.WithTimeout(parent, capDur)
+}
+
+func (r requester) tryUTP(timeoutCtx context.Context, infoHash protocol.ID, addr netip.AddrPort) (Response, error) {
+	conn, dialErr := r.utpDialer.DialContext(timeoutCtx, addr)
+	if dialErr != nil {
+		r.observeTransport("utp_plain", "error")
+		return Response{}, dialErr
+	}
+
+	res, plainErr := FetchFromStream(timeoutCtx, conn, conn, infoHash, r.clientID)
+	if plainErr == nil {
+		r.observeTransport("utp_plain", "ok")
+		return res, nil
+	}
+	r.observeTransport("utp_plain", "error")
+
+	if !r.enableMSE || !shouldFallbackToMSE(timeoutCtx, plainErr) {
+		return Response{}, plainErr
+	}
+
+	mseConn, mseDialErr := r.utpDialer.DialContext(timeoutCtx, addr)
+	if mseDialErr != nil {
+		r.observeTransport("utp_mse", "error")
+		return Response{}, plainErr
+	}
+	stopClose := context.AfterFunc(timeoutCtx, func() { _ = mseConn.Close() })
+	encRW, _, mseErr := mse.InitiateHandshake(mseConn, infoHash[:], nil, mse.AllSupportedCrypto)
+	stopClose()
+	if mseErr != nil {
+		_ = mseConn.Close()
+		r.observeTransport("utp_mse", "error")
+		return Response{}, plainErr
+	}
+
+	mseRes, fetchErr := FetchFromStream(timeoutCtx, mseConn, encRW, infoHash, r.clientID)
+	if fetchErr != nil {
+		r.observeTransport("utp_mse", "error")
+		return Response{}, fetchErr
+	}
+	r.observeTransport("utp_mse", "ok")
+	return mseRes, nil
+}
+
 func (r requester) Request(ctx context.Context, infoHash protocol.ID, addr netip.AddrPort) (Response, error) {
 	timeoutCtx, cancel := context.WithTimeout(ctx, r.timeout)
 	defer cancel()
 
-	conn, connErr := r.connect(timeoutCtx, addr)
+	cleanAddr := netip.AddrPortFrom(addr.Addr().Unmap(), addr.Port())
+
+	tcpDialCtx, tcpDialCancel := r.tcpDialContext(timeoutCtx)
+	conn, connErr := r.connect(tcpDialCtx, cleanAddr)
+	tcpDialCancel()
 	if connErr != nil {
 		r.observeTransport("tcp_plain", "error")
+		if r.enableUTP && r.utpDialer != nil && shouldFallbackToUTP(timeoutCtx, connErr) {
+			if utpRes, utpErr := r.tryUTP(timeoutCtx, infoHash, cleanAddr); utpErr == nil {
+				return utpRes, nil
+			}
+		}
 		return Response{}, connErr
+	}
+	// Re-apply full RequestTimeout deadline on the connected TCP stream when a
+	// shorter TCP dial sub-deadline was used for uTP headroom.
+	if dl, ok := timeoutCtx.Deadline(); ok {
+		_ = conn.SetDeadline(dl)
 	}
 
 	res, plainErr := FetchFromStream(timeoutCtx, conn, conn, infoHash, r.clientID)
@@ -154,31 +250,41 @@ func (r requester) Request(ctx context.Context, infoHash protocol.ID, addr netip
 	}
 	r.observeTransport("tcp_plain", "error")
 
-	if !r.enableMSE || !shouldFallbackToMSE(timeoutCtx, plainErr) {
-		return Response{}, plainErr
+	lastErr := plainErr
+	if r.enableMSE && shouldFallbackToMSE(timeoutCtx, plainErr) {
+		mseDialCtx, mseDialCancel := r.tcpDialContext(timeoutCtx)
+		mseConn, mseDialErr := r.connect(mseDialCtx, cleanAddr)
+		mseDialCancel()
+		if mseDialErr != nil {
+			r.observeTransport("tcp_mse", "error")
+		} else {
+			if dl, ok := timeoutCtx.Deadline(); ok {
+				_ = mseConn.SetDeadline(dl)
+			}
+			stopClose := context.AfterFunc(timeoutCtx, func() { _ = mseConn.Close() })
+			encRW, _, mseErr := mse.InitiateHandshake(mseConn, infoHash[:], nil, mse.AllSupportedCrypto)
+			stopClose()
+			if mseErr != nil {
+				_ = mseConn.Close()
+				r.observeTransport("tcp_mse", "error")
+			} else {
+				mseRes, fetchErr := FetchFromStream(timeoutCtx, mseConn, encRW, infoHash, r.clientID)
+				if fetchErr == nil {
+					r.observeTransport("tcp_mse", "ok")
+					return mseRes, nil
+				}
+				r.observeTransport("tcp_mse", "error")
+				lastErr = fetchErr
+			}
+		}
 	}
 
-	mseConn, mseDialErr := r.connect(timeoutCtx, addr)
-	if mseDialErr != nil {
-		r.observeTransport("tcp_mse", "error")
-		return Response{}, plainErr
+	if r.enableUTP && r.utpDialer != nil && shouldFallbackToUTP(timeoutCtx, lastErr) {
+		if utpRes, utpErr := r.tryUTP(timeoutCtx, infoHash, cleanAddr); utpErr == nil {
+			return utpRes, nil
+		}
 	}
-	stopClose := context.AfterFunc(timeoutCtx, func() { _ = mseConn.Close() })
-	encRW, _, mseErr := mse.InitiateHandshake(mseConn, infoHash[:], nil, mse.AllSupportedCrypto)
-	stopClose()
-	if mseErr != nil {
-		_ = mseConn.Close()
-		r.observeTransport("tcp_mse", "error")
-		return Response{}, plainErr
-	}
-
-	mseRes, fetchErr := FetchFromStream(timeoutCtx, mseConn, encRW, infoHash, r.clientID)
-	if fetchErr != nil {
-		r.observeTransport("tcp_mse", "error")
-		return Response{}, fetchErr
-	}
-	r.observeTransport("tcp_mse", "ok")
-	return mseRes, nil
+	return Response{}, lastErr
 }
 
 // FetchFromStream runs the BitTorrent handshake, BEP 10 extension handshake,

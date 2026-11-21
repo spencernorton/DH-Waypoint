@@ -350,3 +350,39 @@ func TestTransportQualificationRefusingMalformedAndCanceledPeers(t *testing.T) {
 		}
 	})
 }
+
+func TestProductionRequesterFallbackMatrixTCPUTPMSE(t *testing.T) {
+	profiles := []transportProfile{
+		{name: "tcp_only_plaintext", disableTCP: false, disableUTP: true, requireMSE: false},
+		{name: "tcp_mse_required", disableTCP: false, disableUTP: true, requireMSE: true},
+		{name: "utp_only_plaintext", disableTCP: true, disableUTP: false, requireMSE: false},
+		{name: "utp_only_mse_required", disableTCP: true, disableUTP: false, requireMSE: true},
+	}
+
+	reqRes := mreq.New(mreq.Params{
+		Config: mreq.Config{
+			RequestTimeout:    4 * time.Second,
+			KeyMutexSize:      100,
+			AllowPrivateAddrs: true,
+			EnableMSE:         true,
+			EnableUTP:         true,
+		},
+		Logger: zap.NewNop().Sugar(),
+	})
+	t.Cleanup(func() { _ = reqRes.AppHook.OnStop(context.Background()) })
+
+	for _, p := range profiles {
+		t.Run(p.name, func(t *testing.T) {
+			raw, wireHash := syntheticV1Metadata(t, "ProdFallback."+p.name+".mkv")
+			addr, pt := startPeerForProfile(t, p, raw, wireHash)
+
+			start := time.Now()
+			res, err := reqRes.Requester.Request(context.Background(), wireHash, addr)
+			require.NoError(t, err)
+			require.Equal(t, raw, res.Validated.InfoBytes)
+			require.Less(t, time.Since(start), 4*time.Second)
+			stats := pt.Stats()
+			require.Zero(t, stats.BytesReadData.Int64(), "qualification fixture must never transfer payload data")
+		})
+	}
+}
