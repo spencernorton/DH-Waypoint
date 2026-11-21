@@ -36,9 +36,22 @@ func New(p Params) Result {
 			"http_server",
 			fx.Hook{
 				OnStart: func(context.Context) error {
+					scopedKeys, scopedErr := ParseScopedAPIKeys(p.Config.ScopedAPIKeys)
+					if scopedErr != nil {
+						return scopedErr
+					}
+					csrfMW, csrfErr := NewCrossOriginProtectionMiddleware(p.Config)
+					if csrfErr != nil {
+						return csrfErr
+					}
 					gin.SetMode(p.Config.GinMode)
 					g := gin.New()
-					g.Use(ginzap.Ginzap(p.Logger.Named("gin"), time.RFC3339, true), gin.Recovery(), APIKeyAuth(p.Config.APIKey))
+					g.Use(
+						ginzap.Ginzap(p.Logger.Named("gin"), time.RFC3339, true),
+						gin.Recovery(),
+						csrfMW,
+						ScopedAPIKeyAuth(p.Config.APIKey, scopedKeys),
+					)
 					options, optionsErr := resolveOptions(p.Config.Options, p.Options)
 					if optionsErr != nil {
 						return optionsErr

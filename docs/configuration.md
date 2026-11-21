@@ -66,6 +66,8 @@ By default DH-Waypoint's HTTP server trusts whoever connects. These variables ga
 | `TORZNAB_API_KEYS` | *(none)* | Comma-separated `name:value` keys accepted alongside `TORZNAB_API_KEY`; the name labels `dh_waypoint_torznab_requests_total`. Malformed entries are skipped. |
 | `EVIDENCE_WEBHOOK_SECRET` | *(none)* | Shared secret for the `*arr` webhook ingester. Mirror this value as the `X-Evidence-Token` Custom Header on every Sonarr/Radarr/Lidarr/Readarr Connect → Webhook configuration. Empty leaves `/evidence/arr/*` unauthenticated. |
 | `HTTP_SERVER_API_KEY` | unset | Optional key gating GraphQL, `/import`, `/metrics` and `/api/v1/*` (`Authorization: Bearer` or `X-API-Key`). Torznab, tracker, processors, private and evidence APIs keep their own credentials; `/status` stays public. Unset leaves them open, which is safe only while the port stays on `127.0.0.1` or a trusted network. |
+| `HTTP_SERVER_SCOPED_API_KEYS` | unset | Optional comma- or newline-separated named least-privilege keys (`name:scope:secret`; scopes: `admin`, `read`, `search`, `metrics`, `import`). Validated fail-closed on startup; redacted in config dumps. |
+| `HTTP_SERVER_CROSS_ORIGIN_PROTECTION` | `true` | Enforces Go's `net/http.CrossOriginProtection` (`Sec-Fetch-Site` / `Origin`) on non-safe HTTP methods, trusting origins listed in `HTTP_SERVER_CORS_ALLOWED_ORIGINS`. |
 | `HTTP_SERVER_CORS_ALLOWED_ORIGINS` | *(none)* | Comma-separated website origins, no spaces (for example `https://ui.example.com`), whose pages may read the API from a browser. Empty allows none; `*` allows every site. |
 
 ## Release-name eligibility

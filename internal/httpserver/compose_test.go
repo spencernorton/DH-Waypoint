@@ -24,6 +24,7 @@ func TestComposeFilesForwardTheAPIKeyAndBindLocally(t *testing.T) {
 		require.NoError(t, yaml.Unmarshal(raw, &compose), path)
 		app := compose.Services["dh-waypoint"]
 		require.Contains(t, app.Environment, "HTTP_SERVER_API_KEY", path)
+		require.Contains(t, app.Environment, "HTTP_SERVER_SCOPED_API_KEYS", path)
 		require.Contains(t, app.Environment, "HTTP_SERVER_CORS_ALLOWED_ORIGINS", path)
 		// Bare passthrough: a sweep mode set in .env reaches the container, and
 		// unset passes nothing, so Compose cannot override a config file.
