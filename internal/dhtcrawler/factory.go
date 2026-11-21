@@ -19,6 +19,7 @@ import (
 	"github.com/spencernorton/DH-Waypoint/internal/protocol/metainfo/banning"
 	"github.com/spencernorton/DH-Waypoint/internal/protocol/metainfo/metainforequester"
 	"github.com/spencernorton/DH-Waypoint/internal/telemetry/dualemit"
+	"github.com/spencernorton/DH-Waypoint/internal/leanmode"
 	"github.com/spencernorton/DH-Waypoint/internal/verdicts"
 	"github.com/spencernorton/DH-Waypoint/internal/wantbridge"
 	"github.com/spencernorton/DH-Waypoint/internal/worker"
@@ -48,6 +49,8 @@ type Params struct {
 	VerdictsStore        *verdicts.Store
 	VerdictsConfig       verdicts.Config
 	VerdictsMetrics      *verdicts.Metrics
+	LeanStore            *leanmode.Store   `optional:"true"`
+	LeanMetrics          *leanmode.Metrics `optional:"true"`
 	Search               lazy.Lazy[search.Search]
 	Dao                  lazy.Lazy[*dao.Query]
 	BlockingManager      lazy.Lazy[blocking.Manager]
@@ -223,6 +226,8 @@ func New(params Params) Result {
 						verdicts:             params.VerdictsStore,
 						verdictsLive:         params.VerdictsConfig.ReadersEnabled,
 						verdictsMetrics:      params.VerdictsMetrics,
+						leanStore:            params.LeanStore,
+						leanMetrics:          params.LeanMetrics,
 						logger:               params.Logger.Named("dht_crawler"),
 					}
 					c.soughtNodeID.Set(protocol.RandomNodeID())

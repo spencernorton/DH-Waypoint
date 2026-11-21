@@ -10,6 +10,7 @@ import (
 	"github.com/spencernorton/DH-Waypoint/internal/app/cmd/configcmd"
 	"github.com/spencernorton/DH-Waypoint/internal/app/cmd/episodesbackfillcmd"
 	"github.com/spencernorton/DH-Waypoint/internal/app/cmd/granularitybackfillcmd"
+	"github.com/spencernorton/DH-Waypoint/internal/app/cmd/leancmd"
 	"github.com/spencernorton/DH-Waypoint/internal/app/cmd/plugincmd"
 	"github.com/spencernorton/DH-Waypoint/internal/app/cmd/policyshadowcmd"
 	"github.com/spencernorton/DH-Waypoint/internal/app/cmd/processcmd"
@@ -41,6 +42,7 @@ import (
 	"github.com/spencernorton/DH-Waypoint/internal/httpserver/httpserverfx"
 	"github.com/spencernorton/DH-Waypoint/internal/importer/importerfx"
 	"github.com/spencernorton/DH-Waypoint/internal/junkpurge/junkpurgefx"
+	"github.com/spencernorton/DH-Waypoint/internal/leanmode/leanmodefx"
 	"github.com/spencernorton/DH-Waypoint/internal/logging/loggingfx"
 	"github.com/spencernorton/DH-Waypoint/internal/metrics/queuemetrics"
 	"github.com/spencernorton/DH-Waypoint/internal/metrics/torrentmetrics"
@@ -96,6 +98,7 @@ func New() fx.Option {
 		junkpurgefx.New(),
 		verdictsfx.New(),
 		retentionfx.New(),
+		leanmodefx.New(),
 		seedsfx.New(),
 		fx.Module("telemetry", fx.Provide(telemetryhttp.New, telemetryprom.New)),
 		tmdbfx.New(),
@@ -147,6 +150,7 @@ func New() fx.Option {
 			processcmd.New,
 			setupcmd.New,
 			storagecmd.New,
+			leancmd.New,
 			torrentcmd.New,
 			policyshadowcmd.New,
 			workercmd.New,

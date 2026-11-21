@@ -1,0 +1,85 @@
+version: 1
+id: 1080p-lean
+description: >
+  Balanced single-best 1080p catalog profile keeping one clean release per movie,
+  TV episode, and season pack with one warm runner-up for swarm-death failover.
+enabled: false
+mode: observe # observe | serve | prune
+
+scope:
+  content_types: [movie, tv_show]
+  season_pack_policy: separate_slot # separate_slot | prefer_pack | prefer_individual
+  multi_episode_policy: separate_slot
+  unlinked_policy: pass_through
+  non_video_policy: pass_through
+
+resilience:
+  keep_runner_up: 1
+  min_viable_seeders: 1
+  require_known_seeders: false
+  unknown_seeders_grace: 168h
+  hysteresis:
+    min_preferred_delta: 45
+    min_seeder_ratio: 1.5
+    allow_repack_override: true
+    incumbent_grace_period: 24h
+
+required:
+  min_resolution: 720p
+  max_resolution: 2160p
+  exclude_cam_ts: true
+  exclude_3d: true
+  modifiers_blocked: [SCREENER, REGIONAL, BRDISK]
+  codecs_allowed: [H264, x264, HEVC, x265, AV1]
+  min_seeders: 1
+  min_size_mb_movie: 400
+  max_size_mb_movie: 18432
+  min_size_mb_episode: 100
+  max_size_mb_episode: 6144
+  require_files_info: false
+  require_armiger_approved: false
+  require_payload_proof: false
+  exclude_title_patterns:
+    - '\b(hcsub|hardcoded|korsub|hdcam|hdts)\b'
+
+preferred:
+  ranking_mode: weighted
+  equivalence_band: 40
+  resolution_order: [1080p, 2160p, 720p]
+  source_order: [BluRay, WEBDL, REMUX, WEBRip, TV]
+  codec_order: [x265, HEVC, x264, H264, AV1]
+  hdr_order: [DOLBY_VISION, HDR10_PLUS, HDR10, HDR, SDR]
+  audio_order: [ATMOS, TRUEHD, DTS_X, DTS, EAC3, AC3, AAC, OPUS]
+  preferred_groups: [ntb, flux, framestor, playweb, qxr, tigole, rarbg, sparks, gecok, d-z0n3]
+  weights:
+    resolution: 320
+    source: 220
+    codec: 120
+    hdr: 60
+    audio: 60
+    group: 70
+    size_efficiency: 60
+  size_efficiency:
+    mode: target_window
+    target_mb_movie: [1800, 8192]
+    target_mb_episode: [350, 2200]
+    target_mb_season_pack: [3000, 24576]
+
+if_found:
+  order:
+    - repack_proper
+    - preferred_group
+    - highest_seeders
+    - clean_single_media_file
+    - embedded_subtitles
+    - newest_verified
+    - smallest_size_in_band
+  seeder_bucket_factor: 2.0
+
+prune:
+  confirm_destructive: false
+  min_age: 72h
+  batch_size: 500
+  max_delete_fraction_per_cycle: 0.25
+  tombstone_ttl: 2160h
+  revive_slot_on_winner_death: true

@@ -62,6 +62,8 @@ var protectingTables = []string{
 // copied from them: ids, digests, counters, states and fixed reason codes.
 var namelessTables = []string{
 	"junkpurge_student_releases",
+	"lean_tombstones",
+	"lean_winners",
 	"processor_core_receipts",
 	"processor_exclusion_events",
 	"processor_payload_pending",
