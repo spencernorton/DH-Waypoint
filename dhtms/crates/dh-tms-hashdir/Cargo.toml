@@ -1,0 +1,9 @@
+[package]
+name = "dh-tms-hashdir"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+dh-tms-format.workspace = true
+xxhash-rust.workspace = true

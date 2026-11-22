@@ -1,0 +1,12 @@
+[package]
+name = "dh-tms-swarm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+crc32fast.workspace = true
+dh-tms-format.workspace = true
+memmap2.workspace = true
+parking_lot.workspace = true
+roaring.workspace = true
