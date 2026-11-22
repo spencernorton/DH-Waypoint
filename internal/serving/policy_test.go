@@ -2,6 +2,7 @@ package serving
 
 import (
 	"github.com/spencernorton/DH-Waypoint/internal/catalogueguard"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -43,4 +44,21 @@ func TestAdultPolicyUsesPositiveNullableMetadataAndExactUnicodeBoundaries(t *tes
 	require.True(t, strings.Contains(p.strongPattern, "A-Z"))
 	require.Equal(t, "content.type <> 'xxx' AND content.adult IS NOT TRUE", p.ContentCondition().SQL)
 	require.Panics(t, func() { p.TorrentCondition("untrusted; DROP TABLE torrents") })
+}
+
+func TestAdultPolicyExpandsStandaloneDigitEscapesInPostgresPattern(t *testing.T) {
+	p, err := NewPolicy(Config{ExcludeAdult: true}, []string{"fc# ?ppv", "siterip"}, []string{"mkv"})
+	require.NoError(t, err)
+	require.NotContains(t, p.strongPattern, `\d`)
+	require.NotContains(t, p.strongPattern, "[Ff][Cc]0-9")
+	require.Contains(t, p.strongPattern, "[Ff][Cc][0-9]")
+
+	compiled, err := regexp.Compile(p.strongPattern)
+	require.NoError(t, err)
+	require.True(t, compiled.MatchString("FC2-PPV-1234567"))
+	require.True(t, compiled.MatchString("fc2 ppv 999999"))
+	require.True(t, compiled.MatchString("FC9PPV"))
+	require.False(t, compiled.MatchString("FC0-9-PPV"))
+	require.False(t, compiled.MatchString("prefixfc2ppv"))
+	require.True(t, compiled.MatchString("example siterip release"))
 }
