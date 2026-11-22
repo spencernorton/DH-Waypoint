@@ -330,6 +330,7 @@ name = "dh-tmsd"
 version = "0.3.0"
 dependencies = [
  "ahash",
+ "arc-swap",
  "dh-tms-core",
  "dh-tms-format",
  "dh-tms-grammar",
@@ -337,6 +338,7 @@ dependencies = [
  "dh-tms-policy",
  "dh-tms-search",
  "dh-tms-swarm",
+ "parking_lot",
  "serde",
  "serde_json",
  "sha2",

@@ -23,6 +23,7 @@ func TestConfigDefaultsAndFloors(t *testing.T) {
 		func(c *Config) { c.QBStateRetention = 24 * time.Hour },
 		func(c *Config) { c.VerdictEventRetention = 24 * time.Hour },
 		func(c *Config) { c.ApplicationResultsRetention = 24 * time.Hour },
+		func(c *Config) { c.DHTMSOutboxRetention = 10 * time.Minute },
 		func(c *Config) { c.BatchSize = 0 },
 		func(c *Config) { c.Interval = time.Second },
 	} {

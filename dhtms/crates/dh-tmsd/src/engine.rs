@@ -1,3 +1,5 @@
+use crate::builder::{build_empty_generation, build_generation_from_ndjson};
+use arc_swap::ArcSwap;
 use dh_tms_core::CorePlane;
 use dh_tms_format::catalog::MmapContentCatalog;
 use dh_tms_format::{read_current_manifest, FormatError};
@@ -9,8 +11,11 @@ use dh_tms_policy::{PolicyError, PolicyOp, PolicyPlane, PolicyTier, RevokeReason
 use dh_tms_search::l0::L0Doc;
 use dh_tms_search::{term_hash, CustomSearchPlane, QueryMode, SearchError};
 use dh_tms_swarm::{SwarmError, SwarmPlane, SwarmUpdate};
+use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::io::BufRead;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug)]
@@ -461,15 +466,17 @@ impl DaemonEngine {
         initial_pg_lsn: u64,
         initial_lease_ttl_ms: u64,
     ) -> Result<Self, DaemonError> {
-        std::fs::create_dir_all(wal_dir).map_err(|e| DaemonError::Internal(e.to_string()))?;
         let (manifest, gen_dir) = read_current_manifest(db_root)?;
         let gid = manifest.generation_id;
+        let gen_wal_dir = wal_dir.join(format!("gen-{gid:016x}"));
+        std::fs::create_dir_all(&gen_wal_dir).map_err(|e| DaemonError::Internal(e.to_string()))?;
         let now_s = now_epoch_sec();
         let now_m = now_epoch_ms();
         let lease_until = now_m.saturating_add(initial_lease_ttl_ms);
 
-        // Seed writable swarm.chk into wal_dir if not yet present so immutable generation stays untouched!
-        let wal_swarm_chk = wal_dir.join("swarm.chk");
+        // Seed writable swarm.chk into generation-scoped wal_dir so immutable generations and
+        // concurrent readers across hot-swaps never collide on a live mmap.
+        let wal_swarm_chk = gen_wal_dir.join("swarm.chk");
         if !wal_swarm_chk.exists() {
             std::fs::copy(gen_dir.join("swarm.chk"), &wal_swarm_chk)
                 .map_err(|e| DaemonError::Internal(format!("seed swarm.chk: {e}")))?;
@@ -479,15 +486,15 @@ impl DaemonEngine {
         let hash_dir = HashDir::open(&gen_dir, Some(gid))?;
         let policy = PolicyPlane::open(
             &gen_dir,
-            &wal_dir.join("policy.wal"),
+            &gen_wal_dir.join("policy.wal"),
             Some(gid),
             now_s,
             initial_pg_lsn,
             lease_until,
         )?;
-        let swarm = SwarmPlane::open(wal_dir, &wal_dir.join("swarm.wal"), Some(gid))?;
+        let swarm = SwarmPlane::open(&gen_wal_dir, &gen_wal_dir.join("swarm.wal"), Some(gid))?;
         let catalog = MmapContentCatalog::open(&gen_dir.join("catalog.bin"), Some(gid))?;
-        let search = CustomSearchPlane::open(&gen_dir, &wal_dir.join("l0.wal"), Some(gid))?;
+        let search = CustomSearchPlane::open(&gen_dir, &gen_wal_dir.join("l0.wal"), Some(gid))?;
 
         Ok(Self {
             generation_id: gid,
@@ -700,6 +707,7 @@ impl DaemonEngine {
         self.policy.lease().check(now_m)?;
 
         let mut entity_id = req.entity_id;
+        let mut effective_ct = req.content_type;
         let mut titles = req.titles;
         let mut year = req.year;
         if entity_id == 0 && !req.content_id.is_empty() {
@@ -708,11 +716,36 @@ impl DaemonEngine {
             } else {
                 req.content_source.as_str()
             };
-            if let Some(rec) = self
+            let mut resolved = self
                 .catalog
-                .find_by_key(req.content_type, src, &req.content_id)?
-            {
+                .find_by_key(effective_ct, src, &req.content_id)?;
+            if resolved.is_none() {
+                resolved = self
+                    .catalog
+                    .find_by_alt_id(effective_ct, src, &req.content_id)?
+                    .into_iter()
+                    .next();
+            }
+            if resolved.is_none() && effective_ct == 0 {
+                for probe_ct in [1u8, 2u8] {
+                    resolved = self.catalog.find_by_key(probe_ct, src, &req.content_id)?;
+                    if resolved.is_none() {
+                        resolved = self
+                            .catalog
+                            .find_by_alt_id(probe_ct, src, &req.content_id)?
+                            .into_iter()
+                            .next();
+                    }
+                    if resolved.is_some() {
+                        break;
+                    }
+                }
+            }
+            if let Some(rec) = resolved {
                 entity_id = rec.entity_id;
+                if effective_ct == 0 {
+                    effective_ct = rec.content_type;
+                }
                 if year == 0 {
                     year = rec.year;
                 }
@@ -729,7 +762,7 @@ impl DaemonEngine {
         let (linked_ids, unlinked_ids) = self.search.lookup_entity_with_fallback(
             entity_id,
             &titles,
-            req.content_type,
+            effective_ct,
             year,
             season_ep,
             &self.policy,
@@ -1101,5 +1134,157 @@ impl DaemonEngine {
         self.policy
             .apply_batch(&ops, req.pg_lsn, req.sync, req.rebuild_snapshot, now_s)?;
         Ok(serde_json::json!({ "ok": true, "applied": applied, "pg_lsn": req.pg_lsn }))
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ReloadRequest {
+    #[serde(default)]
+    pub pg_lsn: Option<u64>,
+    #[serde(default = "default_reload_lease_ttl")]
+    pub lease_ttl_ms: u64,
+}
+
+fn default_reload_lease_ttl() -> u64 {
+    60_000
+}
+
+#[derive(Debug, Serialize)]
+pub struct ReloadResponse {
+    pub ok: bool,
+    pub generation_id: u64,
+    pub num_docs: usize,
+    pub pg_lsn: u64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct BuildGenerationResponse {
+    pub ok: bool,
+    pub generation_id: u64,
+    pub num_docs: usize,
+    pub pg_lsn: u64,
+}
+
+/// Lock-free hot-swappable host around `DaemonEngine` backed by `ArcSwap`.
+/// Supports empty-volume bootstrap, streaming NDJSON generation builds, and atomic reload.
+pub struct EngineHost {
+    engine: ArcSwap<DaemonEngine>,
+    db_root: PathBuf,
+    wal_dir: PathBuf,
+    allow_clock_override: bool,
+    swap_mu: Mutex<()>,
+}
+
+impl EngineHost {
+    pub fn open_or_init(
+        db_root: &Path,
+        wal_dir: &Path,
+        initial_pg_lsn: u64,
+        initial_lease_ttl_ms: u64,
+        allow_clock_override: bool,
+    ) -> Result<Self, DaemonError> {
+        if !db_root.join("CURRENT.json").exists() {
+            build_empty_generation(db_root)?;
+        }
+        let mut eng = DaemonEngine::open(db_root, wal_dir, initial_pg_lsn, initial_lease_ttl_ms)?;
+        eng.allow_clock_override = allow_clock_override;
+        Ok(Self {
+            engine: ArcSwap::from_pointee(eng),
+            db_root: db_root.to_path_buf(),
+            wal_dir: wal_dir.to_path_buf(),
+            allow_clock_override,
+            swap_mu: Mutex::new(()),
+        })
+    }
+
+    pub fn from_engine(engine: DaemonEngine, db_root: PathBuf, wal_dir: PathBuf) -> Self {
+        let allow_clock_override = engine.allow_clock_override;
+        Self {
+            engine: ArcSwap::from_pointee(engine),
+            db_root,
+            wal_dir,
+            allow_clock_override,
+            swap_mu: Mutex::new(()),
+        }
+    }
+
+    #[inline]
+    pub fn load(&self) -> Arc<DaemonEngine> {
+        self.engine.load_full()
+    }
+
+    pub fn build_and_swap<R: BufRead>(
+        &self,
+        reader: R,
+    ) -> Result<BuildGenerationResponse, DaemonError> {
+        let _guard = self.swap_mu.lock();
+        let cur = self.engine.load();
+        let next_gid = cur.generation_id.saturating_add(1).max(1);
+        let outcome = build_generation_from_ndjson(reader, &self.db_root, next_gid)?;
+        let mut next_eng = DaemonEngine::open(
+            &self.db_root,
+            &self.wal_dir,
+            outcome.pg_lsn,
+            outcome.lease_ttl_ms,
+        )?;
+        next_eng.allow_clock_override = self.allow_clock_override;
+        let resp = BuildGenerationResponse {
+            ok: true,
+            generation_id: next_eng.generation_id,
+            num_docs: next_eng.core.num_docs,
+            pg_lsn: outcome.pg_lsn,
+        };
+        self.engine.store(Arc::new(next_eng));
+        prune_old_wal_dirs(&self.wal_dir, resp.generation_id);
+        Ok(resp)
+    }
+
+    pub fn reload(&self, req: ReloadRequest) -> Result<ReloadResponse, DaemonError> {
+        let _guard = self.swap_mu.lock();
+        let cur = self.engine.load();
+        let pg_lsn = req
+            .pg_lsn
+            .unwrap_or_else(|| cur.policy.lease().applied_lsn());
+        let mut next_eng = DaemonEngine::open(
+            &self.db_root,
+            &self.wal_dir,
+            pg_lsn,
+            req.lease_ttl_ms.max(1_000),
+        )?;
+        next_eng.allow_clock_override = self.allow_clock_override;
+        let resp = ReloadResponse {
+            ok: true,
+            generation_id: next_eng.generation_id,
+            num_docs: next_eng.core.num_docs,
+            pg_lsn,
+        };
+        self.engine.store(Arc::new(next_eng));
+        prune_old_wal_dirs(&self.wal_dir, resp.generation_id);
+        Ok(resp)
+    }
+}
+
+fn prune_old_wal_dirs(wal_dir: &Path, current_gen: u64) {
+    let Ok(entries) = std::fs::read_dir(wal_dir) else {
+        return;
+    };
+    let mut dirs: Vec<(u64, PathBuf)> = Vec::new();
+    for ent in entries.flatten() {
+        let name = ent.file_name();
+        let s = name.to_string_lossy();
+        if let Some(hex) = s.strip_prefix("gen-") {
+            if let Ok(id) = u64::from_str_radix(hex, 16) {
+                if id != current_gen {
+                    dirs.push((id, ent.path()));
+                }
+            }
+        }
+    }
+    dirs.sort_by_key(|(id, _)| *id);
+    if dirs.len() > 1 {
+        let drop_n = dirs.len() - 1;
+        for (_, path) in dirs.into_iter().take(drop_n) {
+            let _ = std::fs::remove_dir_all(path);
+        }
     }
 }

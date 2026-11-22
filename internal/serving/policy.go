@@ -156,38 +156,43 @@ func postgresLetterRanges() string {
 // grouping or pagination. A source-complete quarantine cannot reappear after
 // recrawl. Snapshot expiry does not confer or revoke its visibility authority.
 func (p *Policy) TorrentCondition(table string) clause.Expr {
-	switch table {
-	case "torrents", "torrent_contents", "torrent_files", "torrent_tags":
-	default:
-		panic("invalid serving torrent table")
-	}
-	root := table + ".info_hash"
+	validateServingTable(table)
 	// Keep positive-review joins ahead of the many anti-joins. PostgreSQL's
 	// bounded join-order search otherwise starts with the catalogue and can
 	// scan it before discovering that no current approval exists.
 	sql := "TRUE"
 	args := []any{}
-	if p.requiredProcessor != "" {
-		// A semi-join starts from the small set of explicit approvals; an
-		// application, catalogue match or old registry identity cannot grant access.
-		sql += ` AND ` + root + ` IN (
- SELECT review.info_hash FROM processor_publication_reviews review
- JOIN processor_publication_sources reviewed_t ON reviewed_t.info_hash=review.info_hash
- JOIN processor_registry reviewer ON reviewer.id=review.processor_id
- WHERE review.processor_id=? AND review.approved
- AND review.policy_contract=?
- AND review.source_revision=reviewed_t.revision
- AND reviewer.mode='apply' AND reviewer.state='active'
- AND reviewer.execution_generation=review.execution_generation
- AND reviewer.manifest->'processor'=review.processor_identity
- AND review.processor_identity->>'artifact_digest'=?
- AND jsonb_exists(reviewer.manifest->'capabilities','policy'))`
-		args = append(args, p.requiredProcessor, PublicationReviewPolicy, p.requiredArtifact)
+	if gate, ok := p.PublicationGateCondition(table); ok {
+		sql += " AND " + gate.SQL
+		args = append(args, gate.Vars...)
 	}
 	if gate, ok := p.PayloadGateCondition(table); ok {
 		sql += " AND " + gate.SQL
 		args = append(args, gate.Vars...)
 	}
+	base := p.BaseCondition(table)
+	sql += strings.TrimPrefix(base.SQL, "TRUE")
+	args = append(args, base.Vars...)
+	return clause.Expr{SQL: sql, Vars: args}
+}
+
+func validateServingTable(table string) {
+	switch table {
+	case "torrents", "torrent_contents", "torrent_files", "torrent_tags":
+	default:
+		panic("invalid serving torrent table")
+	}
+}
+
+// BaseCondition enforces all mandatory negative serving visibility guards
+// (quarantine, privacy, processor exclusions, publication holds, optional
+// adult exclusion, and optional name policy) without positive publication or
+// payload review gates.
+func (p *Policy) BaseCondition(table string) clause.Expr {
+	validateServingTable(table)
+	root := table + ".info_hash"
+	sql := "TRUE"
+	args := []any{}
 	// Authentic source snapshots were added with the complete recovery producer.
 	// Do not silently elevate legacy marker-only records into consumer authority.
 	// Keep the qualifying snapshot durable rather than depending on a capture
@@ -287,6 +292,39 @@ func (p *Policy) TorrentCondition(table string) clause.Expr {
 // enforces the complete evidence guard independently of client input.
 func (p *Policy) ExcludesAdult() bool { return p.excludeAdult }
 
+// RequiresPublicationReview reports whether the consumer policy restricts
+// visibility to torrents carrying an active publication processor approval.
+func (p *Policy) RequiresPublicationReview() bool {
+	return p != nil && p.requiredProcessor != ""
+}
+
+// PublicationGateCondition returns the positive publication-review semi-join
+// clause for table when required publication review is active.
+func (p *Policy) PublicationGateCondition(table string) (clause.Expr, bool) {
+	if !p.RequiresPublicationReview() {
+		return clause.Expr{}, false
+	}
+	validateServingTable(table)
+	root := table + ".info_hash"
+	// A semi-join starts from the small set of explicit approvals; an
+	// application, catalogue match or old registry identity cannot grant access.
+	return clause.Expr{
+		SQL: root + ` IN (
+ SELECT review.info_hash FROM processor_publication_reviews review
+ JOIN processor_publication_sources reviewed_t ON reviewed_t.info_hash=review.info_hash
+ JOIN processor_registry reviewer ON reviewer.id=review.processor_id
+ WHERE review.processor_id=? AND review.approved
+ AND review.policy_contract=?
+ AND review.source_revision=reviewed_t.revision
+ AND reviewer.mode='apply' AND reviewer.state='active'
+ AND reviewer.execution_generation=review.execution_generation
+ AND reviewer.manifest->'processor'=review.processor_identity
+ AND review.processor_identity->>'artifact_digest'=?
+ AND jsonb_exists(reviewer.manifest->'capabilities','policy'))`,
+		Vars: []any{p.requiredProcessor, PublicationReviewPolicy, p.requiredArtifact},
+	}, true
+}
+
 // RequiresPayloadEvidence reports whether the consumer policy restricts
 // visibility to torrents carrying active piece-bound payload verification.
 // Query planners use this signal to drive searches from the selective
@@ -294,6 +332,37 @@ func (p *Policy) ExcludesAdult() bool { return p.excludeAdult }
 // or capping relevance scoring to the newest unapproved rows.
 func (p *Policy) RequiresPayloadEvidence() bool {
 	return p != nil && p.requiredPayloadArtifact != ""
+}
+
+// PayloadExpirySQL returns a scalar SQL expression yielding the Unix epoch
+// expiry (BIGINT, 0 if none) of an active piece-bound payload verification for
+// table.info_hash.
+func (p *Policy) PayloadExpirySQL(table string) (clause.Expr, bool) {
+	if !p.RequiresPayloadEvidence() {
+		return clause.Expr{}, false
+	}
+	validateServingTable(table)
+	root := table + ".info_hash"
+	if p.previousPayloadArtifact != "" && p.previousPayloadArtifact != p.requiredPayloadArtifact {
+		return clause.Expr{
+			SQL: `COALESCE((SELECT FLOOR(EXTRACT(EPOCH FROM payload.expires_at))::bigint
+ FROM processor_payload_reviews payload
+ JOIN processor_publication_sources payload_source ON payload_source.info_hash=payload.info_hash
+ WHERE payload.info_hash=` + root + ` AND payload.approved AND payload.source_revision=payload_source.revision
+ AND payload.verifier_artifact IN (?,?) AND payload.policy IN (?,?) AND payload.expires_at>CURRENT_TIMESTAMP
+ LIMIT 1), 0)`,
+			Vars: []any{p.requiredPayloadArtifact, p.previousPayloadArtifact, PayloadEvidenceContract, PayloadEvidenceContractV2},
+		}, true
+	}
+	return clause.Expr{
+		SQL: `COALESCE((SELECT FLOOR(EXTRACT(EPOCH FROM payload.expires_at))::bigint
+ FROM processor_payload_reviews payload
+ JOIN processor_publication_sources payload_source ON payload_source.info_hash=payload.info_hash
+ WHERE payload.info_hash=` + root + ` AND payload.approved AND payload.source_revision=payload_source.revision
+ AND payload.verifier_artifact=? AND payload.policy IN (?,?) AND payload.expires_at>CURRENT_TIMESTAMP
+ LIMIT 1), 0)`,
+		Vars: []any{p.requiredPayloadArtifact, PayloadEvidenceContract, PayloadEvidenceContractV2},
+	}, true
 }
 
 // PayloadGateCondition returns the positive payload-evidence semi-join clause

@@ -12,7 +12,7 @@ import (
 type ReadMode string
 
 const (
-	// ReadModeOff disables all DH-TMS traffic (default).
+	// ReadModeOff disables all DH-TMS traffic.
 	ReadModeOff ReadMode = "off"
 	// ReadModeShadow serves responses from PostgreSQL while shadowing reads to DH-TMS
 	// to verify result parity, visibility invariants, and latency.
@@ -22,16 +22,22 @@ const (
 )
 
 const (
-	defaultTimeout = 500 * time.Millisecond
+	defaultTimeout         = 500 * time.Millisecond
+	defaultSyncInterval    = 2 * time.Second
+	defaultLeaseTTL        = 60 * time.Second
+	defaultRebuildDebounce = 15 * time.Second
 )
 
-// Config holds runtime settings for the DH-TMS sidecar client.
+// Config holds runtime settings for the DH-TMS sidecar client and sync worker.
 type Config struct {
 	Mode             ReadMode
 	Endpoint         string
 	AuthToken        string
 	Timeout          time.Duration
 	ShadowSampleRate float64
+	SyncInterval     time.Duration
+	LeaseTTL         time.Duration
+	RebuildDebounce  time.Duration
 }
 
 // DefaultConfig returns a disabled client configuration.
@@ -40,17 +46,30 @@ func DefaultConfig() Config {
 		Mode:             ReadModeOff,
 		Timeout:          defaultTimeout,
 		ShadowSampleRate: 1.0,
+		SyncInterval:     defaultSyncInterval,
+		LeaseTTL:         defaultLeaseTTL,
+		RebuildDebounce:  defaultRebuildDebounce,
 	}
 }
 
 // ConfigFromEnv loads Config from DH_TMS_* environment variables.
+// When DH_TMS_ENDPOINT is set and DH_TMS_READ_MODE is unset or "auto",
+// Mode defaults to ReadModeServe for out-of-the-box sidecar acceleration.
 func ConfigFromEnv() (Config, error) {
 	cfg := DefaultConfig()
-	if raw := strings.TrimSpace(os.Getenv("DH_TMS_READ_MODE")); raw != "" {
-		cfg.Mode = ReadMode(strings.ToLower(raw))
-	}
 	if ep := strings.TrimSpace(os.Getenv("DH_TMS_ENDPOINT")); ep != "" {
 		cfg.Endpoint = ep
+	}
+	rawMode := strings.ToLower(strings.TrimSpace(os.Getenv("DH_TMS_READ_MODE")))
+	switch rawMode {
+	case "", "auto":
+		if cfg.Endpoint != "" {
+			cfg.Mode = ReadModeServe
+		} else {
+			cfg.Mode = ReadModeOff
+		}
+	default:
+		cfg.Mode = ReadMode(rawMode)
 	}
 	if tok := strings.TrimSpace(os.Getenv("DH_TMS_AUTH_TOKEN")); tok != "" {
 		cfg.AuthToken = tok
@@ -68,6 +87,27 @@ func ConfigFromEnv() (Config, error) {
 			return Config{}, fmt.Errorf("invalid DH_TMS_SHADOW_SAMPLE_RATE %q: %w", raw, err)
 		}
 		cfg.ShadowSampleRate = rate
+	}
+	if raw := strings.TrimSpace(os.Getenv("DH_TMS_SYNC_INTERVAL_MS")); raw != "" {
+		ms, err := strconv.Atoi(raw)
+		if err != nil || ms <= 0 {
+			return Config{}, fmt.Errorf("invalid DH_TMS_SYNC_INTERVAL_MS %q: must be positive integer milliseconds", raw)
+		}
+		cfg.SyncInterval = time.Duration(ms) * time.Millisecond
+	}
+	if raw := strings.TrimSpace(os.Getenv("DH_TMS_LEASE_TTL_MS")); raw != "" {
+		ms, err := strconv.Atoi(raw)
+		if err != nil || ms <= 0 {
+			return Config{}, fmt.Errorf("invalid DH_TMS_LEASE_TTL_MS %q: must be positive integer milliseconds", raw)
+		}
+		cfg.LeaseTTL = time.Duration(ms) * time.Millisecond
+	}
+	if raw := strings.TrimSpace(os.Getenv("DH_TMS_REBUILD_DEBOUNCE_MS")); raw != "" {
+		ms, err := strconv.Atoi(raw)
+		if err != nil || ms < 0 {
+			return Config{}, fmt.Errorf("invalid DH_TMS_REBUILD_DEBOUNCE_MS %q: must be non-negative integer milliseconds", raw)
+		}
+		cfg.RebuildDebounce = time.Duration(ms) * time.Millisecond
 	}
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err

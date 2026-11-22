@@ -1,4 +1,4 @@
-use crate::engine::{DaemonEngine, DaemonError, DashstatsRequest};
+use crate::engine::{DaemonEngine, DaemonError, DashstatsRequest, EngineHost, ReloadRequest};
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
 #[cfg(unix)]
@@ -11,6 +11,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 const MAX_BODY_BYTES: usize = 16 * 1024 * 1024;
+const MAX_BUILD_STREAM_BYTES: u64 = 64 * 1024 * 1024 * 1024;
 const MAX_HEADER_LINES: usize = 64;
 const MAX_HEADER_LINE_BYTES: usize = 8192;
 const MAX_CONCURRENT_CONNS: usize = 128;
@@ -54,6 +55,91 @@ fn ct_eq(a: &[u8], b: &[u8]) -> bool {
     diff == 0
 }
 
+struct ChunkedReader<R: BufRead> {
+    inner: R,
+    remaining_in_chunk: usize,
+    total_read: u64,
+    max_bytes: u64,
+    done: bool,
+}
+
+impl<R: BufRead> ChunkedReader<R> {
+    fn new(inner: R, max_bytes: u64) -> Self {
+        Self {
+            inner,
+            remaining_in_chunk: 0,
+            total_read: 0,
+            max_bytes,
+            done: false,
+        }
+    }
+
+    fn read_next_chunk_header(&mut self) -> io::Result<()> {
+        let mut line = String::new();
+        let n = self.inner.read_line(&mut line)?;
+        if n == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "truncated chunked transfer stream",
+            ));
+        }
+        let size_hex = line.trim().split(';').next().unwrap_or("").trim();
+        let size = usize::from_str_radix(size_hex, 16)
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid chunk size header"))?;
+        if size == 0 {
+            // Drain optional trailers until empty CRLF line.
+            loop {
+                line.clear();
+                let tn = self.inner.read_line(&mut line)?;
+                if tn == 0 || line == "\r\n" || line == "\n" {
+                    break;
+                }
+            }
+            self.done = true;
+            self.remaining_in_chunk = 0;
+        } else {
+            self.remaining_in_chunk = size;
+        }
+        Ok(())
+    }
+}
+
+impl<R: BufRead> Read for ChunkedReader<R> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        if self.done || buf.is_empty() {
+            return Ok(0);
+        }
+        while self.remaining_in_chunk == 0 {
+            self.read_next_chunk_header()?;
+            if self.done {
+                return Ok(0);
+            }
+        }
+        let want = buf.len().min(self.remaining_in_chunk);
+        let n = self.inner.read(&mut buf[..want])?;
+        if n == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "unexpected eof inside chunk body",
+            ));
+        }
+        self.total_read = self.total_read.saturating_add(n as u64);
+        if self.total_read > self.max_bytes {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "chunked body exceeds limit",
+            ));
+        }
+        self.remaining_in_chunk -= n;
+        if self.remaining_in_chunk == 0 {
+            // Consume trailing CRLF after chunk payload.
+            let mut crlf = String::new();
+            let _ = self.inner.read_line(&mut crlf)?;
+        }
+        Ok(n)
+    }
+}
+
 enum LineRead {
     Eof,
     Line(String),
@@ -91,11 +177,13 @@ fn write_json_response<W: Write>(
 }
 
 fn dispatch(
-    engine: &DaemonEngine,
+    host: &EngineHost,
     method: &str,
     path: &str,
     body: &[u8],
 ) -> (u16, &'static str, Vec<u8>) {
+    let engine_arc = host.load();
+    let engine: &DaemonEngine = &engine_arc;
     let route_path = path.split('?').next().unwrap_or(path);
     let query_str = path.split_once('?').map(|x| x.1).unwrap_or("");
 
@@ -199,6 +287,19 @@ fn dispatch(
             let resp = engine.handle_l0_upsert(req)?;
             serde_json::to_vec(&resp).map_err(|e| DaemonError::Internal(e.to_string()))
         }
+        ("POST", "/v1/reload") => {
+            let req = if body.is_empty() {
+                ReloadRequest {
+                    pg_lsn: None,
+                    lease_ttl_ms: 60_000,
+                }
+            } else {
+                serde_json::from_slice(body)
+                    .map_err(|e| DaemonError::BadRequest(format!("invalid json: {e}")))?
+            };
+            let resp = host.reload(req)?;
+            serde_json::to_vec(&resp).map_err(|e| DaemonError::Internal(e.to_string()))
+        }
         _ => Err(DaemonError::NotFound),
     })();
 
@@ -247,7 +348,7 @@ fn dispatch(
 }
 
 pub fn handle_connection<S: Read + Write>(
-    engine: &DaemonEngine,
+    host: &EngineHost,
     auth_token: Option<&str>,
     mut stream: S,
 ) {
@@ -269,7 +370,8 @@ pub fn handle_connection<S: Read + Write>(
     let Some(method) = parts.next() else { return };
     let Some(path) = parts.next() else { return };
 
-    let mut content_length: usize = 0;
+    let mut content_length: u64 = 0;
+    let mut is_chunked = false;
     let mut provided_token: Option<String> = None;
     let mut headers_terminated = false;
 
@@ -297,7 +399,7 @@ pub fn handle_connection<S: Read + Write>(
                     let key = k.trim();
                     let val = v.trim();
                     if key.eq_ignore_ascii_case("content-length") {
-                        match val.parse::<usize>() {
+                        match val.parse::<u64>() {
                             Ok(n) => content_length = n,
                             Err(_) => {
                                 let _ = write_json_response(
@@ -308,6 +410,10 @@ pub fn handle_connection<S: Read + Write>(
                                 );
                                 return;
                             }
+                        }
+                    } else if key.eq_ignore_ascii_case("transfer-encoding") {
+                        if val.to_ascii_lowercase().contains("chunked") {
+                            is_chunked = true;
                         }
                     } else if key.eq_ignore_ascii_case("x-dhtms-token") {
                         provided_token = Some(val.to_string());
@@ -335,21 +441,6 @@ pub fn handle_connection<S: Read + Write>(
         return;
     }
 
-    if content_length > MAX_BODY_BYTES {
-        let _ = write_json_response(
-            reader.into_inner(),
-            413,
-            "Payload Too Large",
-            br#"{"error":"payload_too_large","code":"payload_too_large"}"#,
-        );
-        return;
-    }
-
-    let mut body = vec![0u8; content_length];
-    if content_length > 0 && reader.read_exact(&mut body).is_err() {
-        return;
-    }
-
     let route_path = path.split('?').next().unwrap_or(path);
     if let Some(expected) = auth_token {
         if !expected.is_empty() && !(method == "GET" && route_path == "/v1/health") {
@@ -368,13 +459,94 @@ pub fn handle_connection<S: Read + Write>(
         }
     }
 
-    let (status, reason, resp_body) = dispatch(engine, method, path, &body);
+    // Stream NDJSON generation builds directly from the socket without buffering whole payloads.
+    if method == "POST" && route_path == "/v1/generation/build" {
+        if !is_chunked && content_length > MAX_BUILD_STREAM_BYTES {
+            let _ = write_json_response(
+                reader.into_inner(),
+                413,
+                "Payload Too Large",
+                br#"{"error":"payload_too_large","code":"payload_too_large"}"#,
+            );
+            return;
+        }
+        let build_res = if is_chunked {
+            let chunked = ChunkedReader::new(&mut reader, MAX_BUILD_STREAM_BYTES);
+            host.build_and_swap(BufReader::new(chunked))
+        } else {
+            let limited = (&mut reader).take(content_length);
+            host.build_and_swap(BufReader::new(limited))
+        };
+        let (status, reason, resp_body) = match build_res {
+            Ok(resp) => match serde_json::to_vec(&resp) {
+                Ok(b) => (200, "OK", b),
+                Err(e) => {
+                    let payload =
+                        serde_json::json!({"error": e.to_string(), "code": "internal_error"});
+                    (
+                        500,
+                        "Internal Server Error",
+                        serde_json::to_vec(&payload).unwrap_or_default(),
+                    )
+                }
+            },
+            Err(DaemonError::BadRequest(msg)) => {
+                let payload = serde_json::json!({"error": msg, "code": "bad_request"});
+                (
+                    400,
+                    "Bad Request",
+                    serde_json::to_vec(&payload).unwrap_or_default(),
+                )
+            }
+            Err(other) => {
+                let payload =
+                    serde_json::json!({"error": format!("{other:?}"), "code": "internal_error"});
+                (
+                    500,
+                    "Internal Server Error",
+                    serde_json::to_vec(&payload).unwrap_or_default(),
+                )
+            }
+        };
+        let _ = write_json_response(reader.into_inner(), status, reason, &resp_body);
+        return;
+    }
+
+    let mut body = Vec::new();
+    if is_chunked {
+        let mut chunked = ChunkedReader::new(&mut reader, MAX_BODY_BYTES as u64);
+        if chunked.read_to_end(&mut body).is_err() {
+            let _ = write_json_response(
+                reader.into_inner(),
+                413,
+                "Payload Too Large",
+                br#"{"error":"payload_too_large","code":"payload_too_large"}"#,
+            );
+            return;
+        }
+    } else {
+        if content_length > MAX_BODY_BYTES as u64 {
+            let _ = write_json_response(
+                reader.into_inner(),
+                413,
+                "Payload Too Large",
+                br#"{"error":"payload_too_large","code":"payload_too_large"}"#,
+            );
+            return;
+        }
+        body.resize(content_length as usize, 0);
+        if content_length > 0 && reader.read_exact(&mut body).is_err() {
+            return;
+        }
+    }
+
+    let (status, reason, resp_body) = dispatch(host, method, path, &body);
     let _ = write_json_response(reader.into_inner(), status, reason, &resp_body);
 }
 
 #[cfg(unix)]
 pub fn serve_unix(
-    engine: Arc<DaemonEngine>,
+    host: Arc<EngineHost>,
     socket_path: &Path,
     auth_token: Option<Arc<String>>,
     shutdown: Arc<AtomicBool>,
@@ -393,7 +565,7 @@ pub fn serve_unix(
         match listener.accept() {
             Ok((mut stream, _)) => {
                 let _ = stream.set_nonblocking(false);
-                let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
+                let _ = stream.set_read_timeout(Some(Duration::from_secs(30)));
                 let _ = stream.set_write_timeout(Some(Duration::from_secs(10)));
                 let Some(guard) = try_acquire_conn(&active_conns) else {
                     let _ = write_json_response(
@@ -404,11 +576,11 @@ pub fn serve_unix(
                     );
                     continue;
                 };
-                let eng = Arc::clone(&engine);
+                let h = Arc::clone(&host);
                 let tok = auth_token.clone();
                 std::thread::spawn(move || {
                     let _guard = guard;
-                    handle_connection(&eng, tok.as_deref().map(String::as_str), stream);
+                    handle_connection(&h, tok.as_deref().map(String::as_str), stream);
                 });
             }
             Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
@@ -422,7 +594,7 @@ pub fn serve_unix(
 }
 
 pub fn serve_tcp(
-    engine: Arc<DaemonEngine>,
+    host: Arc<EngineHost>,
     addr: &str,
     auth_token: Option<Arc<String>>,
     shutdown: Arc<AtomicBool>,
@@ -435,7 +607,7 @@ pub fn serve_tcp(
             Ok((mut stream, _)) => {
                 let _ = stream.set_nonblocking(false);
                 let _ = stream.set_nodelay(true);
-                let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
+                let _ = stream.set_read_timeout(Some(Duration::from_secs(30)));
                 let _ = stream.set_write_timeout(Some(Duration::from_secs(10)));
                 let Some(guard) = try_acquire_conn(&active_conns) else {
                     let _ = write_json_response(
@@ -446,11 +618,11 @@ pub fn serve_tcp(
                     );
                     continue;
                 };
-                let eng = Arc::clone(&engine);
+                let h = Arc::clone(&host);
                 let tok = auth_token.clone();
                 std::thread::spawn(move || {
                     let _guard = guard;
-                    handle_connection(&eng, tok.as_deref().map(String::as_str), stream);
+                    handle_connection(&h, tok.as_deref().map(String::as_str), stream);
                 });
             }
             Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
