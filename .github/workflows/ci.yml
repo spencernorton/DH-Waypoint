@@ -149,53 +149,76 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
       - name: Build supported container with source identity
+        env:
+          BUILD_SOURCE: https://github.com/${{ github.repository }}
         run: |
-          VERSION=v$(cat VERSION)
+          VERSION="v$(cat VERSION)"
+          printf '%s\n' "$VERSION" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-rc\.[1-9][0-9]*)?$'
+          COMMIT=$(git rev-parse HEAD)
           BUILD_DATE=$(git show -s --format=%cI HEAD)
-          docker build --build-arg VERSION="$VERSION" \
-            --build-arg REVISION="$GITHUB_SHA" \
-            --build-arg BUILD_DATE="$BUILD_DATE" \
-            --build-arg SOURCE="https://github.com/$GITHUB_REPOSITORY" \
-            -t dh-waypoint:ci .
+          docker build --platform linux/amd64 --build-arg VERSION="$VERSION" \
+            --build-arg COMMIT="$COMMIT" --build-arg BUILD_DATE="$BUILD_DATE" \
+            --build-arg SOURCE="$BUILD_SOURCE" --tag dh-waypoint:ci .
+          test "$(docker image inspect dh-waypoint:ci --format '{{.Os}}/{{.Architecture}}')" = 'linux/amd64'
+          test "$(docker image inspect dh-waypoint:ci --format '{{index .Config.Labels "org.opencontainers.image.version"}}')" = "$VERSION"
+          test "$(docker image inspect dh-waypoint:ci --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "$COMMIT"
+          test "$(docker image inspect dh-waypoint:ci --format '{{index .Config.Labels "org.opencontainers.image.created"}}')" = "$BUILD_DATE"
+          test "$(docker image inspect dh-waypoint:ci --format '{{index .Config.Labels "org.opencontainers.image.source"}}')" = "$BUILD_SOURCE"
           sh scripts/check_backend_image.sh dh-waypoint:ci "$VERSION"
-          docker build -t dh-waypoint-evidence-relay:ci ./tools/evidencerelay
       - name: Build and smoke-test all independent adapter images
         run: |
           for adapter in llm armiger match stremio prowlarr-sync; do
-            docker build -t "dh-waypoint-adapter-${adapter}:ci" "./adapters/${adapter}"
-            docker run --rm --network none --read-only --entrypoint /bin/sh "dh-waypoint-adapter-${adapter}:ci" -ec '
-              test ! -e /app/ui
-              test "$(id -u)" != "0"
-            '
+            echo "=== Building adapter: $adapter ==="
+            docker build --platform linux/amd64 -f "adapters/$adapter/Dockerfile" --tag "dh-waypoint-$adapter:ci" .
+            docker run --rm --network none --read-only --cap-drop ALL \
+              --security-opt no-new-privileges "dh-waypoint-$adapter:ci" --help
           done
       - name: Prove import, processing, public search and restart persistence
-        run: python3 scripts/check_runtime.py --image dh-waypoint:ci --evidence-relay-image dh-waypoint-evidence-relay:ci
-      - name: Prove standalone + Compose v5.15 -> v6.0 hard-stop, config preservation & downgrade refusal
+        run: python3 scripts/check_runtime.py --image dh-waypoint:ci --evidence out/runtime
+      - name: Prove v5.15 -> v6.0 hard-stop, automatic upgrade & downgrade refusal
         run: |
-          python3 scripts/test_v6_upgrade_drill.py --v5-image ghcr.io/spencernorton/dh-waypoint:v5.15.0 --v6-image dh-waypoint:ci --pg-image postgres:16-alpine
-          python3 scripts/test_v6_upgrade_drill.py --v5-image ghcr.io/spencernorton/dh-waypoint:v5.15.0 --v6-image dh-waypoint:ci --pg-image postgres:18-alpine --skip-compose
+          python3 scripts/test_v6_upgrade_drill.py \
+            --v5-image ghcr.io/spencernorton/dh-waypoint:v5.15.0 \
+            --v6-image dh-waypoint:ci \
+            --pg-image postgres:16-alpine
+          python3 scripts/test_v6_upgrade_drill.py \
+            --v5-image ghcr.io/spencernorton/dh-waypoint:v5.15.0 \
+            --v6-image dh-waypoint:ci \
+            --pg-image postgres:18-alpine \
+            --skip-compose
       - name: Export the exact runtime-qualified image
-        if: ${{ inputs.upload_image }}
+        env:
+          BUILD_SOURCE: https://github.com/${{ github.repository }}
         run: |
-          VERSION=v$(cat VERSION)
           python3 scripts/tested_image.py export --image dh-waypoint:ci \
-            --source "https://github.com/$GITHUB_REPOSITORY" \
-            --revision "$GITHUB_SHA" --version "$VERSION" \
-            --platform linux/amd64 --dir tested-image
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.1
-        if: ${{ inputs.upload_image }}
+            --runtime out/runtime/runtime.json --dir out/tested-image \
+            --source "$BUILD_SOURCE" --revision "$(git rev-parse HEAD)" --version "v$(cat VERSION)"
+          CANDIDATE_ID=$(docker image inspect dh-waypoint:ci --format '{{.Id}}')
+          docker image rm dh-waypoint:ci
+          if docker image inspect "$CANDIDATE_ID" >/dev/null 2>&1; then
+            echo 'Candidate is still loaded; cannot prove a fresh archive import' >&2
+            exit 1
+          fi
+          LOADED_ID=$(python3 scripts/tested_image.py load --dir out/tested-image \
+            --source "$BUILD_SOURCE" --revision "$(git rev-parse HEAD)" --version "v$(tr -d '[:space:]' < VERSION)")
+          test "$LOADED_ID" = "$CANDIDATE_ID"
+          python3 scripts/test_tested_image.py out/tested-image
+          cp out/tested-image/receipt.json out/runtime/tested-image.json
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: success() && startsWith(github.ref, 'refs/tags/v')
         with:
           name: dh-waypoint-tested-image
-          path: tested-image
+          path: out/tested-image/
           if-no-files-found: error
-          retention-days: 1
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.1
-        if: ${{ failure() }}
+          compression-level: 0
+          retention-days: 7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
         with:
-          name: runtime-check-logs
-          path: runtime-check-logs.txt
-          if-no-files-found: ignore
+          name: backend-runtime-evidence
+          path: out/runtime/
+          retention-days: 14

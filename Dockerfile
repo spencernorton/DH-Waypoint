@@ -17,13 +17,13 @@ RUN CGO_ENABLED=0 go build -trimpath \
 
 FROM alpine:3.23.3@sha256:25109184c71bdad752c8312a8623239686a9a2071e8825f20acb8f2198c3f659
 
-ARG BUILD_DATE
-ARG REVISION
-ARG VERSION
-ARG SOURCE
-LABEL org.opencontainers.image.created="${BUILD_DATE}" \
-      org.opencontainers.image.revision="${REVISION}" \
-      org.opencontainers.image.version="${VERSION}" \
+ARG VERSION=dev
+ARG COMMIT=unknown
+ARG BUILD_DATE=1970-01-01T00:00:00Z
+ARG SOURCE=https://github.com/spencernorton/DH-Waypoint
+LABEL org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.revision="${COMMIT}" \
+      org.opencontainers.image.created="${BUILD_DATE}" \
       org.opencontainers.image.source="${SOURCE}"
 
 # TLS roots for metadata and optional service APIs, time zones, and the Compose health probe.
