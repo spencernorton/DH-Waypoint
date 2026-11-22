@@ -74,7 +74,7 @@ func NewPolicy(cfg Config, strongKeywords, mediaExtensions []string, names ...*n
 	// exact Go letter set instead of locale-dependent [:alpha:], which can widen
 	// keyword boundaries on C-locale databases. Go's \d is ASCII, too.
 	pattern := strings.ReplaceAll(r.String(), `\p{L}`, postgresLetterRanges())
-	pattern = strings.ReplaceAll(pattern, `\d`, `0-9`)
+	pattern = expandPostgresDigits(pattern)
 	p := &Policy{processorExclusions: cfg.ProcessorExclusions, excludeAdult: cfg.ExcludeAdult, strongPattern: pattern, mediaExtensions: append([]string(nil), mediaExtensions...)}
 	p.requiredProcessor, p.requiredArtifact = cfg.RequiredProcessor, cfg.RequiredProcessorArtifactDigest
 	p.requiredPayloadArtifact = cfg.RequiredPayloadVerifierArtifactDigest
@@ -84,6 +84,48 @@ func NewPolicy(cfg Config, strongKeywords, mediaExtensions []string, names ...*n
 		p.names = names[0]
 	}
 	return p, nil
+}
+
+// expandPostgresDigits replaces Go's ASCII \d shorthand with 0-9 inside
+// bracket character classes and [0-9] outside character classes so standalone
+// digit tokens (such as the '#' digit wildcard in keyword specs) do not become
+// the literal sequence "0-9" in PostgreSQL ARE regexes.
+func expandPostgresDigits(pattern string) string {
+	var out strings.Builder
+	out.Grow(len(pattern) + 16)
+	inClass := false
+	classStart := -1
+	for i := 0; i < len(pattern); i++ {
+		ch := pattern[i]
+		if ch == '\\' && i+1 < len(pattern) {
+			next := pattern[i+1]
+			if next == 'd' {
+				if inClass {
+					out.WriteString("0-9")
+				} else {
+					out.WriteString("[0-9]")
+				}
+				i++
+				continue
+			}
+			out.WriteByte(ch)
+			out.WriteByte(next)
+			i++
+			continue
+		}
+		if !inClass && ch == '[' {
+			inClass = true
+			classStart = i
+		} else if inClass && ch == ']' {
+			isLeadingLiteral := (i == classStart+1) || (i == classStart+2 && pattern[classStart+1] == '^')
+			if !isLeadingLiteral {
+				inClass = false
+				classStart = -1
+			}
+		}
+		out.WriteByte(ch)
+	}
+	return out.String()
 }
 
 func postgresLetterRanges() string {
