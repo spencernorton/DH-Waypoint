@@ -462,13 +462,115 @@ volumes:
         run("rm", "-rf", str(tmp_dir), check=False)
 
 
+
+def tms_compose_smoke(tms_image):
+    """Verify the real docker-compose.yml dh-tmsd companion service (non-root UID 1000,
+    internal-only network with zero published host ports, healthcheck, and token auth)."""
+    project = f"dhwtms{uuid.uuid4().hex[:8]}"
+    token = f"drill-{uuid.uuid4().hex[:12]}"
+    wrong_token = f"bad-{uuid.uuid4().hex[:12]}"
+    tmp_dir = Path(tempfile.mkdtemp(prefix="dhw-tms-compose-"))
+    env_file = tmp_dir / ".env"
+    env_file.write_text(
+        "POSTGRES_PASSWORD=compose-tms-pass\n"
+        f"DH_TMS_AUTH_TOKEN={token}\n"
+    )
+    override = tmp_dir / "tms-override.yml"
+    override.write_text(f"""services:
+  dh-tmsd:
+    image: {tms_image}
+    container_name: {project}-tmsd
+    restart: "no"
+""")
+    files = [ROOT / "docker-compose.yml", override]
+
+    def compose(*args, check=True):
+        cmd = ["docker", "compose", "-p", project, "--env-file", str(env_file), "--profile", "dhtms"]
+        for f in files:
+            cmd.extend(["-f", str(f)])
+        cmd.extend(args)
+        return run(*cmd, check=check, timeout=180)
+
+    try:
+        # 1. Non-root UID 1000 initializes a synthetic generation directly onto the named volume
+        init_res = compose("run", "--rm", "dh-tmsd", "init-fixture", "--out", "/var/lib/dh-tms/db")
+        manifest = json.loads(init_res.stdout)
+        assert manifest.get("generation_id"), f"unexpected init-fixture manifest: {manifest}"
+        print(f"[TMS 1/4] non-root UID 1000 init-fixture on Compose volume VERIFIED (gen={manifest['generation_id']})", flush=True)
+
+        # 2. Boot companion dh-tmsd and wait for Compose healthcheck (/v1/health)
+        compose("up", "-d", "dh-tmsd")
+        cid = compose("ps", "-q", "dh-tmsd").stdout.strip()
+        assert cid, "dh-tmsd container did not start"
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline:
+            status = run("docker", "inspect", "--format", "{{.State.Health.Status}}", cid).stdout.strip()
+            if status == "healthy":
+                break
+            if status == "unhealthy":
+                logs = run("docker", "logs", cid, check=False)
+                raise AssertionError(f"dh-tmsd unhealthy:\n{logs.stdout}\n{logs.stderr}")
+            time.sleep(0.5)
+        else:
+            logs = run("docker", "logs", cid, check=False)
+            raise AssertionError(f"dh-tmsd never became healthy:\n{logs.stdout}\n{logs.stderr}")
+        print("[TMS 2/4] companion dh-tmsd Compose healthcheck healthy VERIFIED", flush=True)
+
+        # 3. Verify zero published host ports and UID 1000 process ownership
+        ports = run("docker", "port", cid).stdout.strip()
+        assert ports == "", f"dh-tmsd must not publish host ports, got: {ports}"
+        uid = run("docker", "exec", cid, "id", "-u").stdout.strip()
+        assert uid == "1000", f"expected non-root UID 1000, got {uid}"
+        print("[TMS 3/4] zero published host ports & UID 1000 runtime VERIFIED", flush=True)
+
+        # 4. Verify internal Compose network reachability + 401/200 X-DHTMS-Token enforcement
+        net_name = f"{project}_default"
+        payload = '{"query":"usual suspects","tier":"base"}'
+        probe_script = (
+            "set -eu\n"
+            "code_health=$(curl -s -o /dev/null -w '%{http_code}' http://dh-tmsd:7841/v1/health)\n"
+            'test "$code_health" = 200\n'
+            f"code_unauth=$(curl -s -o /dev/null -w '%{{http_code}}' -X POST -H 'Content-Type: application/json' -d '{payload}' http://dh-tmsd:7841/v1/search)\n"
+            'test "$code_unauth" = 401\n'
+            f"code_wrong=$(curl -s -o /dev/null -w '%{{http_code}}' -X POST -H 'Content-Type: application/json' -H \"X-DHTMS-Token: $TMS_WRONG\" -d '{payload}' http://dh-tmsd:7841/v1/search)\n"
+            'test "$code_wrong" = 401\n'
+            f"code_ok=$(curl -s -o /tmp/out.json -w '%{{http_code}}' -X POST -H 'Content-Type: application/json' -H \"X-DHTMS-Token: $TMS_VALID\" -d '{payload}' http://dh-tmsd:7841/v1/search)\n"
+            'test "$code_ok" = 200\n'
+            "cat /tmp/out.json\n"
+        )
+        probe = run(
+            "docker", "run", "--rm", "--network", net_name,
+            "-e", f"TMS_VALID={token}",
+            "-e", f"TMS_WRONG={wrong_token}",
+            "--entrypoint", "/bin/sh", tms_image, "-ec", probe_script,
+        )
+        search_resp = json.loads(probe.stdout)
+        assert isinstance(search_resp.get("docs"), list) and len(search_resp["docs"]) >= 1, f"expected >=1 fixture doc, got: {search_resp}"
+        print(f"[TMS 4/4] internal network auth 401/401/200 & fixture search docs ({len(search_resp['docs'])}) VERIFIED", flush=True)
+        print("ALL DH-TMS COMPANION COMPOSE CHECKS PASSED")
+    finally:
+        compose("down", "-v", "--remove-orphans", check=False)
+        run("rm", "-rf", str(tmp_dir), check=False)
+
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--v5-image", required=True)
-    ap.add_argument("--v6-image", required=True)
+    ap.add_argument("--v5-image")
+    ap.add_argument("--v6-image")
     ap.add_argument("--pg-image", default="postgres:16-alpine")
     ap.add_argument("--skip-compose", action="store_true")
+    ap.add_argument("--tms-image")
+    ap.add_argument("--tms-only", action="store_true")
     args = ap.parse_args()
-    drill(args.v5_image, args.v6_image, args.pg_image)
-    if not args.skip_compose:
-        compose_drill(args.v5_image, args.v6_image)
+    if args.tms_only:
+        if not args.tms_image:
+            ap.error("--tms-image is required with --tms-only")
+        tms_compose_smoke(args.tms_image)
+    else:
+        if not args.v5_image or not args.v6_image:
+            ap.error("--v5-image and --v6-image are required unless --tms-only is set")
+        drill(args.v5_image, args.v6_image, args.pg_image)
+        if not args.skip_compose:
+            compose_drill(args.v5_image, args.v6_image)
+        if args.tms_image:
+            tms_compose_smoke(args.tms_image)

@@ -75,6 +75,12 @@ services:
       LEAN_MODE_SERVE_GLOBALLY: "${LEAN_MODE_SERVE_GLOBALLY:-false}"
       METAINFO_REQUESTER_ENABLE_MSE: "${METAINFO_REQUESTER_ENABLE_MSE:-true}"
       VERDICTS_READERS_ENABLED: "${VERDICTS_READERS_ENABLED:-true}"
+      # DH-TMS companion sidecar (opt-in via COMPOSE_PROFILES=dhtms during Stage 2 rollout;
+      # defaults to off until a generation is seeded).
+      DH_TMS_READ_MODE: "${DH_TMS_READ_MODE:-off}"
+      DH_TMS_ENDPOINT: "${DH_TMS_ENDPOINT:-}"
+      DH_TMS_AUTH_TOKEN: "${DH_TMS_AUTH_TOKEN:-}"
+      DH_TMS_TIMEOUT_MS: "${DH_TMS_TIMEOUT_MS:-500}"
       # One-time backup acknowledgement when upgrading an existing v5.12-v5.15 DB (see docs/migration-v6.md)
       UPGRADE_CONFIRM_V6_BACKUP: "${UPGRADE_CONFIRM_V6_BACKUP:-}"
       DHT_CRAWLER_SCALING_FACTOR: "${DHT_SCALING_FACTOR:-1}"
@@ -216,7 +222,33 @@ services:
       PROWLARR_API_KEY: ${PROWLARR_API_KEY:-}
       PROWLARR_IMPORT_SOURCE: ${PROWLARR_IMPORT_SOURCE:-prowlarr-sync}
 
+  dh-tmsd:
+    profiles: [dhtms]
+    image: ghcr.io/spencernorton/dh-waypoint-tms:${DH_WAYPOINT_VERSION:-v6.0.0}
+    container_name: dh-waypoint-tmsd
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 20s
+    environment:
+      DH_TMS_AUTH_TOKEN: "${DH_TMS_AUTH_TOKEN:-}"
+    volumes:
+      - dh-waypoint-tms-db:/var/lib/dh-tms/db
+      - dh-waypoint-tms-wal:/var/lib/dh-tms/wal
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "--show-error", "--output", "/dev/null", "http://127.0.0.1:7841/v1/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
 volumes:
   dh-waypoint-config:
   dh-waypoint-data:
   dh-waypoint-postgres:
+  dh-waypoint-tms-db:
+  dh-waypoint-tms-wal:
