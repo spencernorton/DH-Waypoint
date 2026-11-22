@@ -1,0 +1,21 @@
+[package]
+name = "dh-tms-search"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+ahash.workspace = true
+byteorder.workspace = true
+crc32fast.workspace = true
+dh-tms-core.workspace = true
+dh-tms-format.workspace = true
+dh-tms-grammar.workspace = true
+dh-tms-policy.workspace = true
+parking_lot.workspace = true
+roaring.workspace = true
+xxhash-rust.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true

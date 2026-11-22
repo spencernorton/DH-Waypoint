@@ -1,0 +1,13 @@
+[package]
+name = "dh-tms-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+ahash.workspace = true
+crc32fast.workspace = true
+dh-tms-format.workspace = true
+rayon.workspace = true
+zstd.workspace = true
