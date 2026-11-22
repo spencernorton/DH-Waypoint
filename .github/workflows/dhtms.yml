@@ -6,12 +6,14 @@ on:
       - 'dhtms/**'
       - 'internal/database/dhtms/**'
       - '.github/workflows/dhtms.yml'
+      - 'scripts/test_v6_upgrade_drill.py'
   push:
     branches: [main]
     paths:
       - 'dhtms/**'
       - 'internal/database/dhtms/**'
       - '.github/workflows/dhtms.yml'
+      - 'scripts/test_v6_upgrade_drill.py'
 permissions:
   contents: read
 jobs:
@@ -54,3 +56,15 @@ jobs:
         run: |
           go vet ./internal/database/dhtms/...
           go test -race -count=1 -v ./internal/database/dhtms/...
+      - name: Build dh-tmsd container and verify companion Compose service
+        run: |
+          VERSION="v$(cat VERSION)"
+          COMMIT=$(git rev-parse HEAD)
+          BUILD_DATE=$(git show -s --format=%cI HEAD)
+          BUILD_SOURCE="https://github.com/${{ github.repository }}"
+          docker build -f dhtms/Dockerfile --build-arg VERSION="$VERSION" \
+            --build-arg COMMIT="$COMMIT" --build-arg BUILD_DATE="$BUILD_DATE" \
+            --build-arg SOURCE="$BUILD_SOURCE" --tag dh-waypoint-tms:ci dhtms
+          test "$(docker image inspect dh-waypoint-tms:ci --format '{{.Config.User}}')" = '1000:1000'
+          test "$(docker image inspect dh-waypoint-tms:ci --format '{{index .Config.Labels "org.opencontainers.image.version"}}')" = "$VERSION"
+          python3 scripts/test_v6_upgrade_drill.py --tms-only --tms-image dh-waypoint-tms:ci

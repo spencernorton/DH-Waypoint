@@ -32,3 +32,16 @@ To run the Go↔Rust Unix-socket end-to-end test suite from the repository root:
 ```bash
 DH_TMSD_BIN="$PWD/dhtms/target/release/dh-tmsd" go test -race -v ./internal/database/dhtms/...
 ```
+
+## Container & Companion Compose Service
+
+`dh-tmsd` runs as a dedicated, non-root (`UID 1000:1000`) companion container with zero host ports published, keeping a single writer by construction and sharing an internal Compose network with `dh-waypoint`:
+
+```bash
+# Build the companion image locally
+docker build -f dhtms/Dockerfile -t dh-waypoint-tms:local dhtms
+
+# Initialize a synthetic fixture generation on the Compose volume and start dh-tmsd
+docker compose --profile dhtms run --rm dh-tmsd init-fixture --out /var/lib/dh-tms/db
+COMPOSE_PROFILES=dhtms DH_TMS_AUTH_TOKEN=change-me docker compose up -d dh-tmsd
+```

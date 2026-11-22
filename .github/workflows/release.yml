@@ -29,7 +29,7 @@ jobs:
           BUILD_SOURCE: https://github.com/${{ github.repository }}
         run: |
           VERSION="v$(cat VERSION)"
-          printf '%s\n' "$VERSION" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
+          printf '%s\n' "$VERSION" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-rc\.[1-9][0-9]*)?$'
           COMMIT=$(git rev-parse HEAD)
           BUILD_DATE=$(git show -s --format=%cI HEAD)
           docker build --platform linux/arm64 --build-arg VERSION="$VERSION" \
@@ -58,8 +58,70 @@ jobs:
           if-no-files-found: error
           compression-level: 0
           retention-days: 7
+  dhtms_amd64:
+    name: Native linux/amd64 DH-TMS sidecar qualification
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build and qualify linux/amd64 dh-tmsd container
+        env:
+          BUILD_SOURCE: https://github.com/${{ github.repository }}
+        run: |
+          VERSION="v$(cat VERSION)"
+          printf '%s\n' "$VERSION" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-rc\.[1-9][0-9]*)?$'
+          COMMIT=$(git rev-parse HEAD)
+          BUILD_DATE=$(git show -s --format=%cI HEAD)
+          docker build --platform linux/amd64 -f dhtms/Dockerfile --build-arg VERSION="$VERSION" \
+            --build-arg COMMIT="$COMMIT" --build-arg BUILD_DATE="$BUILD_DATE" \
+            --build-arg SOURCE="$BUILD_SOURCE" --tag dh-waypoint-tms:ci-amd64 dhtms
+          test "$(docker image inspect dh-waypoint-tms:ci-amd64 --format '{{.Os}}/{{.Architecture}}')" = 'linux/amd64'
+          test "$(docker image inspect dh-waypoint-tms:ci-amd64 --format '{{.Config.User}}')" = '1000:1000'
+          python3 scripts/test_v6_upgrade_drill.py --tms-only --tms-image dh-waypoint-tms:ci-amd64
+          mkdir -p out/dhtms-amd64
+          docker save dh-waypoint-tms:ci-amd64 -o out/dhtms-amd64/image.tar
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dh-waypoint-tms-image-amd64
+          path: out/dhtms-amd64/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+  dhtms_arm64:
+    name: Native linux/arm64 DH-TMS sidecar qualification
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build and qualify linux/arm64 dh-tmsd container
+        env:
+          BUILD_SOURCE: https://github.com/${{ github.repository }}
+        run: |
+          VERSION="v$(cat VERSION)"
+          printf '%s\n' "$VERSION" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-rc\.[1-9][0-9]*)?$'
+          COMMIT=$(git rev-parse HEAD)
+          BUILD_DATE=$(git show -s --format=%cI HEAD)
+          docker build --platform linux/arm64 -f dhtms/Dockerfile --build-arg VERSION="$VERSION" \
+            --build-arg COMMIT="$COMMIT" --build-arg BUILD_DATE="$BUILD_DATE" \
+            --build-arg SOURCE="$BUILD_SOURCE" --tag dh-waypoint-tms:ci-arm64 dhtms
+          test "$(docker image inspect dh-waypoint-tms:ci-arm64 --format '{{.Os}}/{{.Architecture}}')" = 'linux/arm64'
+          test "$(docker image inspect dh-waypoint-tms:ci-arm64 --format '{{.Config.User}}')" = '1000:1000'
+          python3 scripts/test_v6_upgrade_drill.py --tms-only --tms-image dh-waypoint-tms:ci-arm64
+          mkdir -p out/dhtms-arm64
+          docker save dh-waypoint-tms:ci-arm64 -o out/dhtms-arm64/image.tar
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dh-waypoint-tms-image-arm64
+          path: out/dhtms-arm64/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
   publish:
-    needs: [checks, privacy, image_arm64]
+    needs: [checks, privacy, image_arm64, dhtms_amd64, dhtms_arm64]
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     permissions:
@@ -104,6 +166,14 @@ jobs:
         with:
           name: dh-waypoint-tested-image-arm64
           path: tested-image-arm64
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: dh-waypoint-tms-image-amd64
+          path: dhtms-image-amd64
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: dh-waypoint-tms-image-arm64
+          path: dhtms-image-arm64
       - name: Publish multi-arch runtime-qualified containers and channel tags
         id: push
         env:
@@ -159,9 +229,39 @@ jobs:
           cp tested-image-amd64/receipt.json release-assets/TESTED_IMAGE.json
           cp tested-image-arm64/receipt.json release-assets/TESTED_IMAGE_ARM64.json
 
+          TMS_IMAGE="${IMAGE}-tms"
+          docker load -i dhtms-image-amd64/image.tar
+          docker tag dh-waypoint-tms:ci-amd64 "$TMS_IMAGE:$RELEASE_TAG-amd64"
+          test "$(docker image inspect "$TMS_IMAGE:$RELEASE_TAG-amd64" --format '{{.Os}}/{{.Architecture}}')" = 'linux/amd64'
+          docker push "$TMS_IMAGE:$RELEASE_TAG-amd64"
+          TMS_AMD64_DIGEST=$(docker image inspect "$TMS_IMAGE:$RELEASE_TAG-amd64" --format '{{index .RepoDigests 0}}')
+
+          docker load -i dhtms-image-arm64/image.tar
+          docker tag dh-waypoint-tms:ci-arm64 "$TMS_IMAGE:$RELEASE_TAG-arm64"
+          test "$(docker image inspect "$TMS_IMAGE:$RELEASE_TAG-arm64" --format '{{.Os}}/{{.Architecture}}')" = 'linux/arm64'
+          docker push "$TMS_IMAGE:$RELEASE_TAG-arm64"
+          TMS_ARM64_DIGEST=$(docker image inspect "$TMS_IMAGE:$RELEASE_TAG-arm64" --format '{{index .RepoDigests 0}}')
+
+          if [ "$IS_PRERELEASE" = "true" ]; then
+            TMS_TAG_ARGS=(-t "$TMS_IMAGE:$RELEASE_TAG")
+          else
+            TMS_TAG_ARGS=(-t "$TMS_IMAGE:$RELEASE_TAG" -t "$TMS_IMAGE:$MINOR_TAG" -t "$TMS_IMAGE:$MAJOR_TAG")
+            if [ "$MAJOR_NUM" != "5" ] && [ "$PROMOTE_V6_LATEST" = "true" ]; then
+              TMS_TAG_ARGS+=(-t "$TMS_IMAGE:latest")
+            fi
+          fi
+          docker buildx imagetools create "${TMS_TAG_ARGS[@]}" "$TMS_AMD64_DIGEST" "$TMS_ARM64_DIGEST"
+          TMS_INDEX_DIGEST=$(docker buildx imagetools inspect "$TMS_IMAGE:$RELEASE_TAG" --format '{{.Manifest.Digest}}')
+          printf '%s@%s\n' "$TMS_IMAGE" "$TMS_INDEX_DIGEST" > release-assets/IMAGE_DIGEST_TMS.txt
+          printf '%s\n' "$TMS_AMD64_DIGEST" > release-assets/IMAGE_DIGEST_TMS_AMD64.txt
+          printf '%s\n' "$TMS_ARM64_DIGEST" > release-assets/IMAGE_DIGEST_TMS_ARM64.txt
+
           echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
           echo "index_digest=$INDEX_DIGEST" >> "$GITHUB_OUTPUT"
           echo "local_amd64_tag=$IMAGE:$RELEASE_TAG-amd64" >> "$GITHUB_OUTPUT"
+          echo "tms_image=$TMS_IMAGE" >> "$GITHUB_OUTPUT"
+          echo "tms_index_digest=$TMS_INDEX_DIGEST" >> "$GITHUB_OUTPUT"
+          echo "tms_local_amd64_tag=$TMS_IMAGE:$RELEASE_TAG-amd64" >> "$GITHUB_OUTPUT"
           echo "is_prerelease=$IS_PRERELEASE" >> "$GITHUB_OUTPUT"
       - name: Generate CycloneDX SBOM from runtime-qualified image
         uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
@@ -171,11 +271,25 @@ jobs:
           output-file: release-assets/SBOM.cdx.json
           upload-artifact: "false"
           upload-release-assets: "false"
+      - name: Generate CycloneDX SBOM for DH-TMS sidecar image
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        with:
+          image: ${{ steps.push.outputs.tms_local_amd64_tag }}
+          format: cyclonedx-json
+          output-file: release-assets/SBOM-tms.cdx.json
+          upload-artifact: "false"
+          upload-release-assets: "false"
       - name: Attest build provenance for multi-arch release index
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-name: ${{ steps.push.outputs.image }}
           subject-digest: ${{ steps.push.outputs.index_digest }}
+          push-to-registry: true
+      - name: Attest build provenance for multi-arch DH-TMS release index
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ steps.push.outputs.tms_image }}
+          subject-digest: ${{ steps.push.outputs.tms_index_digest }}
           push-to-registry: true
       - name: Logout of GHCR
         if: always()

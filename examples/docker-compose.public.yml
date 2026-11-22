@@ -120,6 +120,12 @@ services:
 
       METAINFO_REQUESTER_ENABLE_MSE: "${METAINFO_REQUESTER_ENABLE_MSE:-true}"
       VERDICTS_READERS_ENABLED: "${VERDICTS_READERS_ENABLED:-true}"
+      # DH-TMS companion sidecar (opt-in via COMPOSE_PROFILES=dhtms during Stage 2 rollout;
+      # defaults to off until a generation is seeded).
+      DH_TMS_READ_MODE: "${DH_TMS_READ_MODE:-off}"
+      DH_TMS_ENDPOINT: "${DH_TMS_ENDPOINT:-}"
+      DH_TMS_AUTH_TOKEN: "${DH_TMS_AUTH_TOKEN:-}"
+      DH_TMS_TIMEOUT_MS: "${DH_TMS_TIMEOUT_MS:-500}"
       UPGRADE_CONFIRM_V6_BACKUP: "${UPGRADE_CONFIRM_V6_BACKUP:-}"
       LOG_LEVEL: ${LOG_LEVEL:-info}
 
@@ -198,7 +204,35 @@ services:
         max-size: "50m"
         max-file: "5"
 
+  dh-tmsd:
+    profiles: [dhtms]
+    build:
+      context: ../dhtms
+      dockerfile: Dockerfile
+    container_name: dh-waypoint-tmsd
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 20s
+    environment:
+      DH_TMS_AUTH_TOKEN: "${DH_TMS_AUTH_TOKEN:-}"
+    volumes:
+      - dh-waypoint-tms-db:/var/lib/dh-tms/db
+      - dh-waypoint-tms-wal:/var/lib/dh-tms/wal
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "--show-error", "--output", "/dev/null", "http://127.0.0.1:7841/v1/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
 volumes:
   dh-waypoint-config:
   dh-waypoint-data:
   dh-waypoint-postgres:
+  dh-waypoint-tms-db:
+  dh-waypoint-tms-wal:
