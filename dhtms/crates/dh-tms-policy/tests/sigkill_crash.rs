@@ -21,7 +21,7 @@ fn child_main(dir: &Path) {
     println!("SYNCED_50");
     let _ = std::io::stdout().flush();
 
-    for (seq, d) in (1000u64..).zip(50..10_000u32) {
+    for (seq, d) in (1000u64..).zip(50..9_990u32) {
         let _ = p.revoke_immediate(d, RevokeReason::Hold, seq, false);
     }
     std::thread::sleep(std::time::Duration::from_secs(30));

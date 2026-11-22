@@ -3,16 +3,17 @@ name = "dh-tmsd"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+rust-version.workspace = true
 
 [dependencies]
 ahash.workspace = true
-dh-tms-core = { path = "../dh-tms-core" }
-dh-tms-format = { path = "../dh-tms-format" }
-dh-tms-grammar = { path = "../dh-tms-grammar" }
-dh-tms-hashdir = { path = "../dh-tms-hashdir" }
-dh-tms-policy = { path = "../dh-tms-policy" }
-dh-tms-search = { path = "../dh-tms-search" }
-dh-tms-swarm = { path = "../dh-tms-swarm" }
+dh-tms-core.workspace = true
+dh-tms-format.workspace = true
+dh-tms-grammar.workspace = true
+dh-tms-hashdir.workspace = true
+dh-tms-policy.workspace = true
+dh-tms-search.workspace = true
+dh-tms-swarm.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
