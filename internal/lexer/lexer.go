@@ -1,23 +1,22 @@
 package lexer
 
 import (
-	"bufio"
-	"errors"
-	"io"
 	"strconv"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 )
 
 func NewLexer(str string) Lexer {
 	return Lexer{
-		reader: bufio.NewReader(strings.NewReader(str)),
+		str: str,
 	}
 }
 
 type Lexer struct {
-	pos    int
-	reader *bufio.Reader
+	str     string
+	bytePos int
+	pos     int
 }
 
 func (l *Lexer) Pos() int {
@@ -25,25 +24,26 @@ func (l *Lexer) Pos() int {
 }
 
 func (l *Lexer) Read() (rune, bool) {
-	r, _, err := l.reader.ReadRune()
-	if err != nil {
-		if errors.Is(err, io.EOF) {
-			return 0, false
-		}
-
-		panic(err)
+	if l.bytePos >= len(l.str) {
+		return 0, false
 	}
-
+	if b := l.str[l.bytePos]; b < utf8.RuneSelf {
+		l.bytePos++
+		l.pos++
+		return rune(b), true
+	}
+	r, size := utf8.DecodeRuneInString(l.str[l.bytePos:])
+	l.bytePos += size
 	l.pos++
-
 	return r, true
 }
 
 func (l *Lexer) Backup() {
-	if err := l.reader.UnreadRune(); err != nil {
-		panic(err)
+	if l.bytePos == 0 {
+		panic("lexer: cannot backup past start")
 	}
-
+	_, size := utf8.DecodeLastRuneInString(l.str[:l.bytePos])
+	l.bytePos -= size
 	l.pos--
 }
 
@@ -54,62 +54,81 @@ func (l *Lexer) BackupN(n int) {
 }
 
 func (l *Lexer) IsEOF() bool {
-	_, ok := l.Read()
-	if !ok {
-		return true
-	}
-
-	l.Backup()
-
-	return false
+	return l.bytePos >= len(l.str)
 }
 
 func (l *Lexer) ReadIf(fn func(rune) bool) (rune, bool) {
-	r, ok := l.Read()
-	if !ok {
+	if l.bytePos >= len(l.str) {
 		return 0, false
 	}
-
+	var r rune
+	var size int
+	if b := l.str[l.bytePos]; b < utf8.RuneSelf {
+		r = rune(b)
+		size = 1
+	} else {
+		r, size = utf8.DecodeRuneInString(l.str[l.bytePos:])
+	}
 	if !fn(r) {
-		l.Backup()
 		return 0, false
 	}
-
+	l.bytePos += size
+	l.pos++
 	return r, true
 }
 
 func (l *Lexer) ReadWhile(fn func(rune) bool) string {
-	var str string
-
-	for {
-		r, ok := l.ReadIf(fn)
-		if !ok {
+	start := l.bytePos
+	hasInvalid := false
+	for l.bytePos < len(l.str) {
+		var r rune
+		var size int
+		if b := l.str[l.bytePos]; b < utf8.RuneSelf {
+			r = rune(b)
+			size = 1
+		} else {
+			r, size = utf8.DecodeRuneInString(l.str[l.bytePos:])
+			if r == utf8.RuneError && size == 1 {
+				hasInvalid = true
+			}
+		}
+		if !fn(r) {
 			break
 		}
-
-		str += string(r)
+		l.bytePos += size
+		l.pos++
 	}
-
-	return str
+	if !hasInvalid {
+		return l.str[start:l.bytePos]
+	}
+	return strings.ToValidUTF8(l.str[start:l.bytePos], string(utf8.RuneError))
 }
 
 func (l *Lexer) ReadUntil(fn func(rune) bool) string {
-	var str string
-
-	for {
-		r, ok := l.Read()
-		if !ok {
-			break
+	start := l.bytePos
+	hasInvalid := false
+	for l.bytePos < len(l.str) {
+		var r rune
+		var size int
+		if b := l.str[l.bytePos]; b < utf8.RuneSelf {
+			r = rune(b)
+			size = 1
+		} else {
+			r, size = utf8.DecodeRuneInString(l.str[l.bytePos:])
+			if r == utf8.RuneError && size == 1 {
+				hasInvalid = true
+			}
 		}
-
-		str += string(r)
-
+		l.bytePos += size
+		l.pos++
 		if fn(r) {
 			break
 		}
 	}
-
-	return str
+	if !hasInvalid {
+		return l.str[start:l.bytePos]
+	}
+	return strings.ToValidUTF8(l.str[start:l.bytePos], string(utf8.RuneError))
 }
 
 func (l *Lexer) ReadInt() (int, bool) {

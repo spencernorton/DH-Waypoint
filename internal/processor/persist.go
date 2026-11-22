@@ -19,6 +19,7 @@ import (
 	"github.com/spencernorton/DH-Waypoint/internal/database/filebundles"
 	"github.com/spencernorton/DH-Waypoint/internal/model"
 	"github.com/spencernorton/DH-Waypoint/internal/protocol"
+	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
 
@@ -134,7 +135,8 @@ func (c processor) persist(ctx context.Context, payload persistPayload) error {
 	ordinary.deleteInfoHashes = nil
 	if !ordinary.isEmpty() {
 		if err := c.dao.Transaction(func(tx *dao.Query) error {
-			if err := c.guardNameApplications(ctx, tx, sourceNames); err != nil {
+			locked, err := c.guardNameApplications(ctx, tx, sourceNames)
+			if err != nil {
 				return err
 			}
 			if err := guardPreservedApplications(ctx, tx, payload.applications); err != nil {
@@ -153,7 +155,7 @@ func (c processor) persist(ctx context.Context, payload persistPayload) error {
 			// removes them — an ID-changing replacement (unmatched->matched) is
 			// exactly the case where the 'llm' value lives on a row about to die.
 			if len(torrentContentsPtr) > 0 {
-				if restoreErr := c.restoreReleaseAttributes(ctx, tx, torrentContentsPtr, sourceNames); restoreErr != nil {
+				if restoreErr := c.restoreReleaseAttributesWithLocked(ctx, tx, torrentContentsPtr, sourceNames, locked); restoreErr != nil {
 					return restoreErr
 				}
 				if restoreErr := c.restoreLLMEnglishAudio(ctx, tx, torrentContentsPtr); restoreErr != nil {
@@ -215,31 +217,83 @@ var errReleaseAttributesChanged = errors.New("retained release attribute source 
 // skips parsing must not erase them, and automatic processing never overwrites
 // a retained value with another interpretation of the same name.
 func (c processor) restoreReleaseAttributes(ctx context.Context, tx *dao.Query, tcs []*model.TorrentContent, names map[protocol.InfoHash]string) error {
-	byHash := map[protocol.InfoHash][]*model.TorrentContent{}
+	return c.restoreReleaseAttributesWithLocked(ctx, tx, tcs, names, nil)
+}
+
+func (c processor) restoreReleaseAttributesWithLocked(ctx context.Context, tx *dao.Query, tcs []*model.TorrentContent, names map[protocol.InfoHash]string, locked *lockedTorrentBatch) error {
+	byHash := make(map[protocol.InfoHash][]*model.TorrentContent, len(tcs))
 	for _, tc := range tcs {
 		byHash[tc.InfoHash] = append(byHash[tc.InfoHash], tc)
 	}
-	hashes := make([]protocol.InfoHash, 0, len(byHash))
-	for hash := range byHash {
-		hashes = append(hashes, hash)
+	if len(byHash) == 0 {
+		return nil
 	}
-	sort.Slice(hashes, func(i, j int) bool { return hashes[i].String() < hashes[j].String() })
-	for _, hash := range hashes {
-		raw, err := tx.Torrent.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).Where(tx.Torrent.InfoHash.Eq(hash)).First()
-		if err != nil {
-			return err
+	hashes := sortedHashesFromMap(byHash)
+
+	var torrentNames map[protocol.InfoHash]string
+	var contentsByHash map[protocol.InfoHash][]*model.TorrentContent
+	if locked.covers(hashes) {
+		torrentNames = locked.torrents
+		contentsByHash = locked.contents
+	} else {
+		torrentNames = make(map[protocol.InfoHash]string, len(hashes))
+		for start := 0; start < len(hashes); start += persistLockChunkSize {
+			end := min(start+persistLockChunkSize, len(hashes))
+			values := infoHashValuers(hashes[start:end])
+			torrents, err := tx.Torrent.WithContext(ctx).
+				Select(tx.Torrent.InfoHash, tx.Torrent.Name).
+				Where(tx.Torrent.InfoHash.In(values...)).
+				Order(tx.Torrent.InfoHash).
+				Clauses(clause.Locking{Strength: "UPDATE"}).
+				Find()
+			if err != nil {
+				return err
+			}
+			for _, raw := range torrents {
+				torrentNames[raw.InfoHash] = raw.Name
+			}
 		}
-		if names[hash] != raw.Name {
+		for _, hash := range hashes {
+			rawName, ok := torrentNames[hash]
+			if !ok {
+				return gorm.ErrRecordNotFound
+			}
+			if names[hash] != rawName {
+				return errReleaseAttributesChanged
+			}
+		}
+
+		contentsByHash = make(map[protocol.InfoHash][]*model.TorrentContent, len(hashes))
+		for start := 0; start < len(hashes); start += persistLockChunkSize {
+			end := min(start+persistLockChunkSize, len(hashes))
+			values := infoHashValuers(hashes[start:end])
+			rows, err := tx.TorrentContent.WithContext(ctx).
+				Select(tx.TorrentContent.InfoHash, tx.TorrentContent.ReleaseAttributes).
+				Where(tx.TorrentContent.InfoHash.In(values...)).
+				Order(tx.TorrentContent.InfoHash, tx.TorrentContent.ID).
+				Clauses(clause.Locking{Strength: "UPDATE"}).
+				Find()
+			if err != nil {
+				return err
+			}
+			for _, row := range rows {
+				contentsByHash[row.InfoHash] = append(contentsByHash[row.InfoHash], row)
+			}
+		}
+	}
+
+	for _, hash := range hashes {
+		rawName, ok := torrentNames[hash]
+		if !ok {
+			return gorm.ErrRecordNotFound
+		}
+		if names[hash] != rawName {
 			return errReleaseAttributesChanged
 		}
-		rows, err := tx.TorrentContent.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).Where(tx.TorrentContent.InfoHash.Eq(hash)).Find()
-		if err != nil {
-			return err
-		}
 		var retained *model.ReleaseAttributes
-		sum := sha256.Sum256([]byte(raw.Name))
+		sum := sha256.Sum256([]byte(rawName))
 		nameHash := hex.EncodeToString(sum[:])
-		for _, row := range rows {
+		for _, row := range contentsByHash[hash] {
 			if row.ReleaseAttributes == nil {
 				continue
 			}
@@ -250,7 +304,7 @@ func (c processor) restoreReleaseAttributes(ctx context.Context, tx *dao.Query, 
 			if a.SourceNameSHA256 != nameHash {
 				// Stored release attributes belonged to a superseded torrent name
 				// (for example, a hash-only import before full metadata updated
-				// torrents.name). Because this batch already classified raw.Name,
+				// torrents.name). Because this batch already classified rawName,
 				// do not retain stale attributes or fail the batch.
 				continue
 			}

@@ -8,6 +8,7 @@ import (
 
 	"go.uber.org/fx"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 	gormlogger "gorm.io/gorm/logger"
 	"gorm.io/gorm/utils"
 )
@@ -48,7 +49,7 @@ func (l *customLogger) LogMode(level gormlogger.LogLevel) gormlogger.Interface {
 	newlogger := *l
 	newlogger.logLevel = level
 
-	return l
+	return &newlogger
 }
 
 func (l *customLogger) Info(_ context.Context, msg string, data ...interface{}) {
@@ -69,11 +70,15 @@ func (l *customLogger) Trace(_ context.Context, begin time.Time, fc func() (stri
 	}
 
 	elapsed := time.Since(begin)
+	core := l.zap.Desugar().Core()
 
 	switch {
 	case err != nil && l.logLevel >= gormlogger.Error &&
 		!errors.Is(err, gormlogger.ErrRecordNotFound) &&
 		!errors.Is(err, context.Canceled):
+		if !core.Enabled(zapcore.ErrorLevel) {
+			return
+		}
 		sql, rows := fc()
 		l.zap.Errorw("gorm trace",
 			"location", utils.FileWithLineNum(),
@@ -82,6 +87,9 @@ func (l *customLogger) Trace(_ context.Context, begin time.Time, fc func() (stri
 			"sql", sql,
 			"rows", rows)
 	case elapsed > l.slowThreshold && l.slowThreshold != 0 && l.logLevel >= gormlogger.Warn:
+		if !core.Enabled(zapcore.WarnLevel) {
+			return
+		}
 		sql, rows := fc()
 		slowLog := fmt.Sprintf("SLOW SQL >= %v", l.slowThreshold)
 		l.zap.Warnw("gorm trace",
@@ -91,6 +99,9 @@ func (l *customLogger) Trace(_ context.Context, begin time.Time, fc func() (stri
 			"sql", sql,
 			"rows", rows)
 	case l.logLevel == gormlogger.Info:
+		if !core.Enabled(zapcore.DebugLevel) {
+			return
+		}
 		sql, rows := fc()
 		l.zap.Debugw("gorm trace",
 			"location", utils.FileWithLineNum(),

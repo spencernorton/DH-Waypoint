@@ -42,7 +42,7 @@ func TestRestoreReleaseAttributesAllowsSupersededTorrentName(t *testing.T) {
 	}
 
 	mock.ExpectQuery(`SELECT .* FROM "torrents".*FOR UPDATE`).
-		WithArgs(hash.Bytes(), 1).
+		WithArgs(hash.Bytes()).
 		WillReturnRows(sqlmock.NewRows([]string{"info_hash", "name"}).AddRow(hash.Bytes(), newName))
 	mock.ExpectQuery(`SELECT .* FROM "torrent_contents".*FOR UPDATE`).
 		WithArgs(hash.Bytes()).
@@ -68,7 +68,7 @@ func TestRestoreReleaseAttributesRejectsConcurrentRenameAndPreservesUnchanged(t 
 		p, mock := newReleaseAttrMockProcessor(t)
 		hash := processTestHash(42)
 		mock.ExpectQuery(`SELECT .* FROM "torrents".*FOR UPDATE`).
-			WithArgs(hash.Bytes(), 1).
+			WithArgs(hash.Bytes()).
 			WillReturnRows(sqlmock.NewRows([]string{"info_hash", "name"}).AddRow(hash.Bytes(), "Changed.During.Classify.2025.mkv"))
 
 		tc := &model.TorrentContent{InfoHash: hash}
@@ -92,7 +92,7 @@ func TestRestoreReleaseAttributesRejectsConcurrentRenameAndPreservesUnchanged(t 
 		}
 
 		mock.ExpectQuery(`SELECT .* FROM "torrents".*FOR UPDATE`).
-			WithArgs(hash.Bytes(), 1).
+			WithArgs(hash.Bytes()).
 			WillReturnRows(sqlmock.NewRows([]string{"info_hash", "name"}).AddRow(hash.Bytes(), name))
 		mock.ExpectQuery(`SELECT .* FROM "torrent_contents".*FOR UPDATE`).
 			WithArgs(hash.Bytes()).
@@ -109,4 +109,68 @@ func TestRestoreReleaseAttributesRejectsConcurrentRenameAndPreservesUnchanged(t 
 			t.Fatalf("SQL expectations: %v", err)
 		}
 	})
+}
+
+func TestRestoreReleaseAttributesBatchesMultipleHashesInSortedOrder(t *testing.T) {
+	p, mock := newReleaseAttrMockProcessor(t)
+	hashA := processTestHash(10)
+	hashB := processTestHash(20)
+	hashC := processTestHash(30)
+	nameA := "Alpha.2025.1080p.WEB-DL-GRP"
+	nameB := "Beta.2025.2160p.HEVC.HDR10-GRP"
+	nameC := "Gamma.2025.720p.BluRay-GRP"
+	attrsB := model.InferReleaseAttributes(nameB, "2160p.HEVC.HDR10")
+	rawB, err := json.Marshal(attrsB)
+	if err != nil {
+		t.Fatalf("marshal attrsB: %v", err)
+	}
+
+	mock.ExpectQuery(`SELECT .* FROM "torrents".*WHERE "torrents"\."info_hash" IN \(\$1,\$2,\$3\).*ORDER BY "torrents"\."info_hash".*FOR UPDATE`).
+		WithArgs(hashA.Bytes(), hashB.Bytes(), hashC.Bytes()).
+		WillReturnRows(sqlmock.NewRows([]string{"info_hash", "name"}).
+			AddRow(hashA.Bytes(), nameA).
+			AddRow(hashB.Bytes(), nameB).
+			AddRow(hashC.Bytes(), nameC))
+	mock.ExpectQuery(`SELECT .* FROM "torrent_contents".*WHERE "torrent_contents"\."info_hash" IN \(\$1,\$2,\$3\).*ORDER BY "torrent_contents"\."info_hash","torrent_contents"\."id".*FOR UPDATE`).
+		WithArgs(hashA.Bytes(), hashB.Bytes(), hashC.Bytes()).
+		WillReturnRows(sqlmock.NewRows([]string{"info_hash", "release_attributes"}).
+			AddRow(hashB.Bytes(), rawB))
+
+	// Pass hashes intentionally out of sorted order to verify deterministic locking order.
+	tcC := &model.TorrentContent{InfoHash: hashC}
+	tcA := &model.TorrentContent{InfoHash: hashA}
+	tcB := &model.TorrentContent{InfoHash: hashB}
+	names := map[protocol.InfoHash]string{
+		hashC: nameC,
+		hashA: nameA,
+		hashB: nameB,
+	}
+	if err := p.restoreReleaseAttributes(context.Background(), p.dao, []*model.TorrentContent{tcC, tcA, tcB}, names); err != nil {
+		t.Fatalf("restoreReleaseAttributes: %v", err)
+	}
+	if tcB.ReleaseAttributes == nil || tcB.ReleaseAttributes.SourceNameSHA256 != attrsB.SourceNameSHA256 {
+		t.Fatalf("expected retained release attributes on hashB, got %+v", tcB.ReleaseAttributes)
+	}
+	if tcA.ReleaseAttributes != nil || tcC.ReleaseAttributes != nil {
+		t.Fatalf("expected nil attributes on hashA/hashC, got %+v / %+v", tcA.ReleaseAttributes, tcC.ReleaseAttributes)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("SQL expectations: %v", err)
+	}
+}
+
+func TestRestoreReleaseAttributesMissingTorrentReturnsNotFound(t *testing.T) {
+	p, mock := newReleaseAttrMockProcessor(t)
+	hash := processTestHash(55)
+	mock.ExpectQuery(`SELECT .* FROM "torrents".*FOR UPDATE`).
+		WithArgs(hash.Bytes()).
+		WillReturnRows(sqlmock.NewRows([]string{"info_hash", "name"}))
+
+	err := p.restoreReleaseAttributes(context.Background(), p.dao, []*model.TorrentContent{{InfoHash: hash}}, map[protocol.InfoHash]string{hash: "Missing.2025.mkv"})
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		t.Fatalf("err = %v, want gorm.ErrRecordNotFound", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("SQL expectations: %v", err)
+	}
 }

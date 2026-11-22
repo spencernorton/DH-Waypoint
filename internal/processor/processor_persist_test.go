@@ -422,7 +422,7 @@ func TestProcessRecoveryOffStillPersistsOrdinaryRowsInMixedBatch(t *testing.T) {
 }
 
 func expectReleaseAttributeReads(mock sqlmock.Sqlmock, hash protocol.InfoHash, name string) {
-	mock.ExpectQuery(`SELECT .* FROM "torrents".*FOR UPDATE`).WithArgs(hash.Bytes(), 1).WillReturnRows(sqlmock.NewRows([]string{"info_hash", "name"}).AddRow(hash.Bytes(), name))
+	mock.ExpectQuery(`SELECT .* FROM "torrents".*ORDER BY.*FOR UPDATE`).WithArgs(hash.Bytes()).WillReturnRows(sqlmock.NewRows([]string{"info_hash", "name"}).AddRow(hash.Bytes(), name))
 	mock.ExpectQuery(`SELECT .* FROM "torrent_contents".*FOR UPDATE`).WithArgs(hash.Bytes()).WillReturnRows(sqlmock.NewRows([]string{"info_hash", "release_attributes"}))
 }
 
