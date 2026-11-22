@@ -40,12 +40,9 @@ source when processing existing records. Application transactions recheck the
 source after a response; rejected retained work stays unapplied, with permanent
 dispatch history and responses intact.
 
-Local backlog processing (`backlog-local-classify`) applies authoritative
-name/any-adult classification eligibility before hydration and reuses
-current-source admission at provider boundaries. Operator maintenance
-commands `derived-backfill`, `episodes-backfill` and `anime-backfill` also filter
-selection when enabled and recheck selected source names/current classifications
-inside their write transactions. OFF deployments keep their original behavior.
+Live classification and reprocessing apply authoritative name and adult
+classification eligibility before hydration and reuse current-source admission
+at provider boundaries. OFF deployments keep their original behavior.
 The policy gate does not clear old derived values or change maintenance's normal
 non-NULL field handling, protections or provider allowances.
 

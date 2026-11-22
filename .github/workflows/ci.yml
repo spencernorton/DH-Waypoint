@@ -1,20 +1,21 @@
-# Public Go race tests, sharded PostgreSQL 16 & 18 integration, headless boundary,
-# container build, and v5 -> v6 hard-stop & auto-upgrade drill.
+# Public Go race tests, full sharded PostgreSQL 16 & 18 integration, headless boundary,
+# container build, and standalone + Compose v5 -> v6 hard-stop & auto-upgrade drills.
 name: CI
 on:
   workflow_call:
+    inputs:
+      upload_image:
+        type: boolean
+        default: false
   pull_request:
   push:
     branches: [main]
 permissions:
   contents: read
-concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
 jobs:
   tests:
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -23,7 +24,7 @@ jobs:
         run: |
           python3 scripts/test_headless_boundary.py
           python3 scripts/check_headless_boundary.py
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v6.4.0
         with:
           go-version-file: go.mod
       - run: python3 scripts/check_processor_boundary.py
@@ -50,16 +51,16 @@ jobs:
     env:
       DH_WAYPOINT_TEST_POSTGRES_DSN: postgres://postgres:test-only@127.0.0.1:5432/dh_waypoint_test?sslmode=disable
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v6.4.0
         with:
           go-version-file: go.mod
       - name: Run auto-discovered PG 16 Shard 1/2
         run: |
           PKGS=$(python3 scripts/list_pg_test_packages.py --shards 2 --index 0)
-          echo "Shard 1/2 packages: $PKGS"
+          echo "PG 16 Shard 1/2 packages: $PKGS"
           go test -race -p 1 -count=1 -timeout=12m $PKGS
 
   integration_pg16_shard2:
@@ -77,16 +78,16 @@ jobs:
     env:
       DH_WAYPOINT_TEST_POSTGRES_DSN: postgres://postgres:test-only@127.0.0.1:5432/dh_waypoint_test?sslmode=disable
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v6.4.0
         with:
           go-version-file: go.mod
       - name: Run auto-discovered PG 16 Shard 2/2
         run: |
           PKGS=$(python3 scripts/list_pg_test_packages.py --shards 2 --index 1)
-          echo "Shard 2/2 packages: $PKGS"
+          echo "PG 16 Shard 2/2 packages: $PKGS"
           go test -race -p 1 -count=1 -timeout=12m $PKGS
 
   integration_pg18:
@@ -104,14 +105,44 @@ jobs:
     env:
       DH_WAYPOINT_TEST_POSTGRES_DSN: postgres://postgres:test-only@127.0.0.1:5432/dh_waypoint_test?sslmode=disable
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v6.4.0
         with:
           go-version-file: go.mod
-      - name: Run PG 18 core & preflight integration suite
-        run: go test -race -p 1 -count=1 -timeout=12m ./migrations ./internal/database/migrations ./internal/database/search ./internal/database/filebundles ./internal/torznab/adapter ./internal/serving ./internal/namepolicy ./internal/restapi ./internal/leanmode ./internal/cataloguerecovery/... ./internal/csamblocklist/...
+      - name: Run auto-discovered PG 18 Shard 1/2
+        run: |
+          PKGS=$(python3 scripts/list_pg_test_packages.py --shards 2 --index 0)
+          echo "PG 18 Shard 1/2 packages: $PKGS"
+          go test -race -p 1 -count=1 -timeout=12m $PKGS
+
+  integration_pg18_shard2:
+    name: PostgreSQL 18 integration (shard 2)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_PASSWORD: test-only
+          POSTGRES_DB: dh_waypoint_test
+        ports: ['5432:5432']
+        options: --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 3s --health-retries 10
+    env:
+      DH_WAYPOINT_TEST_POSTGRES_DSN: postgres://postgres:test-only@127.0.0.1:5432/dh_waypoint_test?sslmode=disable
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v6.4.0
+        with:
+          go-version-file: go.mod
+      - name: Run auto-discovered PG 18 Shard 2/2
+        run: |
+          PKGS=$(python3 scripts/list_pg_test_packages.py --shards 2 --index 1)
+          echo "PG 18 Shard 2/2 packages: $PKGS"
+          go test -race -p 1 -count=1 -timeout=12m $PKGS
 
   image:
     name: Public container build
@@ -126,7 +157,7 @@ jobs:
           BUILD_SOURCE: https://github.com/${{ github.repository }}
         run: |
           VERSION="v$(cat VERSION)"
-          printf '%s\n' "$VERSION" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
+          printf '%s\n' "$VERSION" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-rc\.[1-9][0-9]*)?$'
           COMMIT=$(git rev-parse HEAD)
           BUILD_DATE=$(git show -s --format=%cI HEAD)
           docker build --platform linux/amd64 --build-arg VERSION="$VERSION" \
@@ -154,6 +185,11 @@ jobs:
             --v5-image ghcr.io/spencernorton/dh-waypoint:v5.15.0 \
             --v6-image dh-waypoint:ci \
             --pg-image postgres:16-alpine
+          python3 scripts/test_v6_upgrade_drill.py \
+            --v5-image ghcr.io/spencernorton/dh-waypoint:v5.15.0 \
+            --v6-image dh-waypoint:ci \
+            --pg-image postgres:18-alpine \
+            --skip-compose
       - name: Export the exact runtime-qualified image
         env:
           BUILD_SOURCE: https://github.com/${{ github.repository }}

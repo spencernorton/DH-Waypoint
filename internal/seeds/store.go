@@ -29,8 +29,9 @@ type Store struct {
 	recheckCursorAt  time.Time
 	recheckCursorH   []byte
 	neverCursorH     []byte
-	payloadTableOnce sync.Once
-	hasPayloadTable  bool
+	payloadTableMu      sync.Mutex
+	payloadTableChecked bool
+	hasPayloadTable     bool
 }
 
 func NewStore(pool lazy.Lazy[*pgxpool.Pool], names ...*namepolicy.Policy) *Store {
@@ -42,13 +43,24 @@ func NewStore(pool lazy.Lazy[*pgxpool.Pool], names ...*namepolicy.Policy) *Store
 }
 
 func (s *Store) payloadReviewsAvailable(ctx context.Context, pool *pgxpool.Pool) bool {
-	s.payloadTableOnce.Do(func() {
-		var exists bool
-		if err := pool.QueryRow(ctx, `SELECT to_regclass('processor_payload_reviews') IS NOT NULL`).Scan(&exists); err == nil {
-			s.hasPayloadTable = exists
-		}
-	})
-	return s.hasPayloadTable
+	s.payloadTableMu.Lock()
+	if s.payloadTableChecked {
+		exists := s.hasPayloadTable
+		s.payloadTableMu.Unlock()
+		return exists
+	}
+	s.payloadTableMu.Unlock()
+
+	var exists bool
+	if err := pool.QueryRow(ctx, `SELECT to_regclass('processor_payload_reviews') IS NOT NULL`).Scan(&exists); err != nil {
+		return false
+	}
+
+	s.payloadTableMu.Lock()
+	s.hasPayloadTable = exists
+	s.payloadTableChecked = true
+	s.payloadTableMu.Unlock()
+	return exists
 }
 
 func (s *Store) queryRechecks(

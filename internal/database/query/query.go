@@ -259,7 +259,7 @@ func (gq *genericQuery[T]) doItems() {
 
 		var finalItems []T
 
-		doneChan := make(chan error)
+		doneChan := make(chan error, 2)
 
 		raceCtx, raceCancel := context.WithCancel(gq.ctx)
 		defer raceCancel()

@@ -329,17 +329,6 @@ See [reference/cli.md](reference/cli.md) for the full CLI surface.
 - [csam-defense.md](csam-defense.md)
 - [operations/security.md](operations/security.md)
 
-`release-fields-repair` operates on a bounded frozen cohort without calling a
-workflow, metadata provider or model. Freeze an explicit JSON array of at most
-1,000 info hashes with `freeze --cohort cohort.json --output plan.json`, inspect
-the before/after fields, then use `apply --plan plan.json` for a dry run.
-`--write` commits each row with its before/after journal. The frozen build,
-parser, full source and name digests, target revision, current fields and absence of manual hints
-must match. New advertised attribute JSON is filled only when the existing
-value is NULL. Changing a non-null historical video source requires explicit
-reviewed ownership evidence in that exact plan; it is never assumed to belong
-to the parser.
-
 A restart resumes using the journal. `rollback --plan plan.json` reports the
 restoration; adding `--write` restores only unchanged journalled fields. Source
 edits, later revisions or changed application facts refuse restoration. Field

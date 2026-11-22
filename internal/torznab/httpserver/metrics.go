@@ -147,6 +147,7 @@ func (m *Metrics) observeSearch(profile, tp string, cats []int, resultCount int,
 	if profile == "" {
 		profile = "default"
 	}
+	tp = normalizeMetricType(tp)
 	catClass := classifyCats(cats)
 	m.searchTotal.With(prometheus.Labels{
 		"type":      tp,
@@ -234,3 +235,14 @@ func resultCountIfOK(err error, count int) int {
 // _ is a compile-time assertion that strconv is imported (the
 // handler may want it for query-param parsing later).
 var _ = strconv.Itoa
+
+func normalizeMetricType(tp string) string {
+	switch tp {
+	case "search", "tvsearch", "movie", "music", "audio", "book", "caps":
+		return tp
+	case "":
+		return "empty"
+	default:
+		return "other"
+	}
+}

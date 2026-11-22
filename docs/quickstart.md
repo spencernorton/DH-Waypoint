@@ -6,8 +6,8 @@ indexer client. The public stack does not serve a browser page.
 ## Prerequisites
 
 Use Docker and Docker Compose, persistent disk, and outbound TCP/UDP access
-for DHT and metadata retrieval. PostgreSQL 14+ is required; the example includes
-PostgreSQL 16. Start with modest crawl settings and measure memory/disk growth
+for DHT and metadata retrieval. PostgreSQL 16 or 18 is required; the default Compose stack includes
+PostgreSQL 16 (and `examples/docker-compose.pg18.yml` provides PostgreSQL 18 for fresh installs). Start with modest crawl settings and measure memory/disk growth
 before sizing a large corpus. Bootstrap time depends on the network.
 
 ## Source and configuration

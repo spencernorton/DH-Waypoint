@@ -17,8 +17,8 @@ default; the deterministic processing pipeline works without them.
 ## Where is persistent state?
 
 PostgreSQL stores the corpus, evidence and processing state. The optional
-backend mounts retain `/root/.config/bitmagnet` and
-`/root/.local/share/bitmagnet`. The reference stack uses named volumes and
+backend mounts live at `/var/lib/dh-waypoint/config/bitmagnet` and
+`/var/lib/dh-waypoint/data/bitmagnet` (non-root UID `1000:1000`). The reference stack uses named volumes and
 does not ship a browser SQLite database. Back up the database and whichever
 optional backend state you use.
 

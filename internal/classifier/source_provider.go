@@ -2,6 +2,7 @@ package classifier
 
 import (
 	"os"
+	"path/filepath"
 
 	"github.com/adrg/xdg"
 	"github.com/spencernorton/DH-Waypoint/internal/tmdb"
@@ -94,12 +95,14 @@ func (coreSourceProvider) source() ([]byte, error) {
 type xdgSourceProvider struct{}
 
 func (xdgSourceProvider) source() ([]byte, error) {
-	if path, pathErr := xdg.ConfigFile("bitmagnet/classifier.yml"); pathErr == nil {
-		if bytes, readErr := os.ReadFile(path); readErr == nil {
-			return bytes, nil
-		} else if !os.IsNotExist(readErr) {
-			return nil, readErr
-		}
+	path := filepath.Join(xdg.ConfigHome, "bitmagnet", "classifier.yml")
+	if resolved, pathErr := xdg.ConfigFile("bitmagnet/classifier.yml"); pathErr == nil {
+		path = resolved
+	}
+	if bytes, readErr := os.ReadFile(path); readErr == nil {
+		return bytes, nil
+	} else if !os.IsNotExist(readErr) {
+		return nil, readErr
 	}
 
 	return []byte{'{', '}'}, nil

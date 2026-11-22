@@ -1,7 +1,9 @@
 package configfx
 
 import (
+	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/adrg/xdg"
@@ -64,7 +66,17 @@ func New() fx.Option {
 			},
 		),
 	)
-	if configFilePath, err := xdg.ConfigFile("bitmagnet/config.yml"); err == nil {
+	configFilePath := filepath.Join(xdg.ConfigHome, "bitmagnet", "config.yml")
+	if resolved, err := xdg.ConfigFile("bitmagnet/config.yml"); err == nil {
+		configFilePath = resolved
+	} else if _, statErr := os.Stat(configFilePath); statErr != nil && !os.IsNotExist(statErr) {
+		_, _ = fmt.Fprintf(os.Stderr, "warning: unable to access %s (%v); check volume mount path and UID 1000:1000 ownership\n", configFilePath, statErr)
+		configFilePath = ""
+	} else if statErr != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "warning: unable to initialize config directory for %s (%v); falling back to environment variables\n", configFilePath, err)
+		configFilePath = ""
+	}
+	if configFilePath != "" {
 		options = append(options,
 			fx.Provide(
 				fx.Annotated{

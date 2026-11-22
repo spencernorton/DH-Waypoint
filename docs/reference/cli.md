@@ -19,6 +19,7 @@ dh-waypoint --help
 | `config show` | Render every resolved config path with values, defaults, and source |
 | `init` | Scaffold `config.yml`, `.env` with generated secrets, and a `plugins/` directory |
 | `doctor` | Check processing mode, database TCP reachability, and plugin files |
+| `upgrade` | Inspect v5 -> v6 upgrade readiness (`--check`) or run backup-acknowledged automatic v6 upgrade (`--confirm-backup`) |
 | `plugin list` | List registered processor plugins |
 | `plugin validate` | Validate a `*.plugin.yml` file without registering it |
 | `plugin test` | Probe a processor service manifest and status |
@@ -26,16 +27,7 @@ dh-waypoint --help
 | `torrent create` | Hash a file or directory into a `.torrent` file (`--private`, `--tracker`, `--piece-length`) |
 | `process` | One-shot: rematch the torrents given with `--infoHash` through the classification + persistence pipeline, then exit |
 | `reprocess` | Re-classify already-indexed torrents through the current classifier |
-| `anime-backfill` | Recompute the stored `is_anime` flag from torrent names |
-| `backlog-local-classify` | Classify unmatched movie/TV rows locally, without queue jobs or API calls |
-| `catalogue-policy-shadow` | Evaluate English and availability evidence without changing catalogue eligibility |
-| `derived-backfill` | Fill derived `torrent_contents` columns for rows classified before they existed (alias `granularity-backfill`) |
-| `episodes-backfill` | Re-parse 3+ digit or concatenated episode numbers in `tv_show` rows |
-| `purge-content-types` | Count and sample out-of-scope content types; `--write` is refused in current builds (catalogue removal is disabled) |
-| `refresh-alt-titles` | Backfill alternative titles onto existing TMDB content rows |
-| `refresh-anime-titles` | Rebuild the anime alias table from AniDB and Anime-Lists data |
 | `refresh-seeds` | Scrape public UDP trackers (BEP 15) for seeder and leecher counts |
-| `release-fields-repair` | `freeze`, `apply` or `rollback` a bounded filename-field repair plan (see [Configuration](../configuration.md)) |
 | `attribution recon` | Read-only report correlating Torznab results with Prowlarr grabs, qBittorrent state and `*arr` imports |
 
 Commands with a `--write` flag only report until it is given; the `refresh-*` commands persist unless `--dryRun` is given. Pending migrations apply automatically on first database use; `migrate` and `gorm` exist only in the development binary (`go run ./internal/dev`), not in the release image.

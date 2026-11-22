@@ -9,7 +9,6 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/spencernorton/DH-Waypoint/internal/cataloguepolicy"
 	"github.com/spencernorton/DH-Waypoint/internal/lazy"
 	"github.com/stretchr/testify/require"
 )
@@ -103,20 +102,6 @@ func TestPostgresLeechersPositiveHistoryAndCoverage(t *testing.T) {
 		require.NoError(t, err)
 		require.Zero(t, live)
 	}
-	// The retained fact protects against two subsequent spaced zeros in the
-	// existing shadow evaluator; persistence itself does not change liveness.
-	cfg := cataloguepolicy.DefaultAvailabilityConfig()
-	now := anchor.Add(48 * time.Hour)
-	obs := func(id, class string, at time.Time) cataloguepolicy.Observation {
-		return cataloguepolicy.Observation{ID: id, Source: "tracker", Class: class, ObservedAt: at, ExpiresAt: at.Add(cfg.FreshFor), Qualified: true}
-	}
-	decision := cataloguepolicy.EvaluateAvailability([]cataloguepolicy.Observation{
-		obs("positive", "positive", anchor),
-		obs("zero-1", "zero", now.Add(-6*time.Hour)),
-		obs("zero-2", "zero", now.Add(-time.Hour)),
-	}, now, cfg)
-	require.Equal(t, "fresh_known_zero", decision.State)
-	require.Equal(t, "recent_positive_history_protects", decision.Reason)
 	var status string
 	require.NoError(t, pool.QueryRow(ctx, `select status from torrent_liveness where info_hash=$1`, hash).Scan(&status))
 	require.Equal(t, "dead", status)

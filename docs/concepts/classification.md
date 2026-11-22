@@ -59,7 +59,7 @@ You can inspect the rules:
 dh-waypoint classifier show --format yaml
 ```
 
-The bundled rules merge with an optional `classifier.yml` in the config directory (`/root/.config/bitmagnet/classifier.yml` in the container), then one in the working directory, so you can extend or override them without rebuilding. After a rule change, run `dh-waypoint reprocess` to apply it to already-indexed torrents.
+The bundled rules merge with an optional `classifier.yml` in the config directory (`/var/lib/dh-waypoint/config/bitmagnet/classifier.yml` in the container), then one in the working directory, so you can extend or override them without rebuilding. After a rule change, run `dh-waypoint reprocess` to apply it to already-indexed torrents.
 
 ## Where labels surface
 

@@ -127,8 +127,8 @@ Migrating to [ParadeDB (`paradedb/paradedb:0.26.6-pg18`)](docs/paradedb-bm25.md)
 | Path | Purpose |
 |---|---|
 | `dh-waypoint-postgres` volume | The database: catalogue, evidence ledger, queues and processor state |
-| `dh-waypoint-config` volume, `/root/.config/bitmagnet` | Optional `config.yml` and `classifier.yml` |
-| `dh-waypoint-data` volume, `/root/.local/share/bitmagnet` | Rotated log files, when file logging is enabled |
+| `dh-waypoint-config` volume, `/var/lib/dh-waypoint/config/bitmagnet` | Optional `config.yml` and `classifier.yml` |
+| `dh-waypoint-data` volume, `/var/lib/dh-waypoint/data/bitmagnet` | Rotated log files, when file logging is enabled |
 | `./plugins`, read-only | The plugin files that register processors |
 
 The crawler joins the public DHT and connects to peers, which see this host's

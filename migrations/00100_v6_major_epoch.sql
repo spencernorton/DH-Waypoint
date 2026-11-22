@@ -4,15 +4,6 @@ INSERT INTO key_values (key, value, created_at, updated_at)
 VALUES ('schema_major', '6', now(), now())
 ON CONFLICT (key) DO UPDATE
 SET value = '6', updated_at = now();
-
-INSERT INTO key_values (key, value, created_at, updated_at)
-VALUES (
-    'v6_upgrade_receipt',
-    jsonb_build_object('schema_major', 6, 'recorded_at', to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'))::text,
-    now(),
-    now()
-)
-ON CONFLICT (key) DO NOTHING;
 -- +goose StatementEnd
 
 -- +goose Down

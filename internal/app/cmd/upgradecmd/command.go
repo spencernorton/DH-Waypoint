@@ -53,14 +53,7 @@ func New(p Params) (Result, error) {
 				fmt.Fprintf(out, "Database:     %s\n", rep.DatabaseName)
 				fmt.Fprintf(out, "Goose schema: %d (schema_major=%d, set=%v)\n", rep.GooseVersion, rep.SchemaMajor, rep.HasSchemaMajor)
 				fmt.Fprintf(out, "Fingerprint:  %s\n", rep.Fingerprint)
-				for _, b := range rep.Blockers {
-					fmt.Fprintf(out, "BLOCKER:      %s\n", b)
-				}
-				for _, a := range rep.Advisories {
-					fmt.Fprintf(out, "ADVISORY:     %s\n", a)
-				}
-				fmt.Fprintf(out, "Backup cmd:   %s\n", rep.BackupCommand)
-				fmt.Fprintf(out, "Ack token:    %s\n", rep.ConfirmEnvAssignment)
+				migrations.WriteReadinessDetails(out, rep, "")
 				if !rep.Ready {
 					return cli.Exit("upgrade pre-flight found blocking issues", migrations.ExitCodeIncompatibleSchema)
 				}
