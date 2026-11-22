@@ -272,6 +272,10 @@ func authorizeReadOnlyGraphQL(c *gin.Context) (int, string) {
 	if parseErr != nil || doc == nil || len(doc.Operations) == 0 {
 		return http.StatusForbidden, "forbidden"
 	}
+	fragments := make(map[string]*ast.FragmentDefinition, len(doc.Fragments))
+	for _, frag := range doc.Fragments {
+		fragments[frag.Name] = frag
+	}
 	if opName := strings.TrimSpace(payload.OperationName); opName != "" {
 		var target *ast.OperationDefinition
 		for _, op := range doc.Operations {
@@ -280,15 +284,42 @@ func authorizeReadOnlyGraphQL(c *gin.Context) (int, string) {
 				break
 			}
 		}
-		if target == nil || target.Operation != ast.Query {
+		if target == nil || target.Operation != ast.Query || selectionSetUsesAdminOnlyField(target.SelectionSet, fragments, map[string]bool{}) {
 			return http.StatusForbidden, "forbidden"
 		}
 		return 0, ""
 	}
 	for _, op := range doc.Operations {
-		if op.Operation != ast.Query {
+		if op.Operation != ast.Query || selectionSetUsesAdminOnlyField(op.SelectionSet, fragments, map[string]bool{}) {
 			return http.StatusForbidden, "forbidden"
 		}
 	}
 	return 0, ""
+}
+
+// selectionSetUsesAdminOnlyField rejects top-level GraphQL fields that expose
+// catalogue-policy-hidden evidence rows under non-admin scopes (including via
+// aliases, inline fragments, or named fragment spreads).
+func selectionSetUsesAdminOnlyField(set ast.SelectionSet, fragments map[string]*ast.FragmentDefinition, visited map[string]bool) bool {
+	for _, sel := range set {
+		switch node := sel.(type) {
+		case *ast.Field:
+			if node.Name == "evidence" {
+				return true
+			}
+		case *ast.InlineFragment:
+			if selectionSetUsesAdminOnlyField(node.SelectionSet, fragments, visited) {
+				return true
+			}
+		case *ast.FragmentSpread:
+			if visited[node.Name] {
+				continue
+			}
+			visited[node.Name] = true
+			if frag, ok := fragments[node.Name]; ok && selectionSetUsesAdminOnlyField(frag.SelectionSet, fragments, visited) {
+				return true
+			}
+		}
+	}
+	return false
 }

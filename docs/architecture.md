@@ -37,7 +37,7 @@ Piece Assembly & SHA-1 Verify"]
         Preempt["Stage 1: Canonical Label Preempt
 (torrent_canonical_labels)"]
         CEL["Stage 2: CEL Rule Engine & Parsers
-(titlenorm + releasefields)"]
+(titlenorm + model release parsers)"]
         AnimeDB["Curated Anime & TMDB Backbone
 (AniDB + Anime-Lists + TMDB FTS)"]
         BEP9 --> ContentFilter --> Preempt --> CEL --> AnimeDB
@@ -142,9 +142,9 @@ Once persisted or queued into `queue_jobs`, torrents pass through DH-Waypoint's 
 - Ground-truth labels recorded by the `*arr` evidence pipeline (`POST /evidence/arr/:instance` webhooks, `*arr` history pollers, and `qBittorrent` state pollers in `internal/evidence`) short-circuit classification with `confidence = 1.0`.
 - Opt-in title-level evidence (`internal/evidence`) resolves newly discovered episodes or quality variants of a monitored show to the canonical identity already verified by Sonarr or Radarr.
 
-### Stage 2: Unified Title Normalizer & Release Field Parsers (`internal/titlenorm`, `internal/releasefields`)
+### Stage 2: Unified Title Normalizer & Release Parsers (`internal/titlenorm`, `internal/model`)
 - `internal/titlenorm` is the single canonical title normalizer shared across Torznab search, CEL classification, TMDB matching, and evidence attribution.
-- `internal/releasefields` deterministically extracts `video_resolution`, `video_source`, `video_codec`, `hdr_formats`, `audio_channels`, `audio_formats`, `release_group`, `release_granularity` (single episode, multi-episode `S01E01E02`, season pack), `release_date`, 3-digit/4-digit `anime_absolute_episode`, and `english_audio` presence.
+- `internal/model` deterministically extracts `video_resolution`, `video_source`, `video_codec`, `hdr_formats`, `audio_channels`, `audio_formats`, `release_group`, `release_granularity` (single episode, multi-episode `S01E01E02`, season pack), `release_date`, 3-digit/4-digit `anime_absolute_episode`, and `english_audio` presence.
 
 ### Stage 3: CEL Classifier & Curated Anime / TMDB Backbone (`internal/anime`, `internal/animedb`, `internal/tmdb`)
 - **Sandboxed CEL Engine (`classifier.core.yml`):** Evaluates fast (<1 ms) Common Expression Language rules over release names, file extensions, directory hierarchies, and byte sizes.

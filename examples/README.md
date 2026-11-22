@@ -44,8 +44,9 @@ remain opt-in and report through shadow metrics; catalogue deletion is
 disabled in current releases ([catalogue removal](../docs/OPERATIONS.md#catalogue-removal)).
 
 The persistent volumes store PostgreSQL, core configuration and core data.
-Existing upstream-compatible paths under `/root/.config/bitmagnet` and
-`/root/.local/share/bitmagnet` are preserved.
+Container state runs as non-root `UID 1000:1000` under `/var/lib/dh-waypoint/config/bitmagnet`
+and `/var/lib/dh-waypoint/data/bitmagnet`. Fresh PostgreSQL 18 deployments can use
+`examples/docker-compose.pg18.yml`.
 
 ## Upgrade and recovery
 

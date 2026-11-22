@@ -3,6 +3,7 @@ package migrations
 import (
 	"context"
 	"database/sql"
+	"fmt"
 
 	goose "github.com/pressly/goose/v3"
 	"github.com/spencernorton/DH-Waypoint/internal/lazy"
@@ -67,37 +68,59 @@ type migrator struct {
 	logger *zap.SugaredLogger
 }
 
+func (m *migrator) withMigrationLock(ctx context.Context, fn func() error) error {
+	conn, err := m.db.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("acquire migration lock connection: %w", err)
+	}
+	defer func() {
+		_, _ = conn.ExecContext(context.Background(), "SELECT pg_advisory_unlock($1)", migrationAdvisoryLockKey)
+		_ = conn.Close()
+	}()
+	if _, err := conn.ExecContext(ctx, "SELECT pg_advisory_lock($1)", migrationAdvisoryLockKey); err != nil {
+		return fmt.Errorf("acquire migration advisory lock: %w", err)
+	}
+	return fn()
+}
+
 func (m *migrator) Up(ctx context.Context) error {
 	_, err := m.UpWithConfirm(ctx, "")
 	return err
 }
 
 func (m *migrator) UpWithConfirm(ctx context.Context, confirmToken string) (*PreFlightOutcome, error) {
-	outcome, err := CheckV6PreFlight(ctx, m.db, confirmToken)
+	var outcome *PreFlightOutcome
+	err := m.withMigrationLock(ctx, func() error {
+		var checkErr error
+		outcome, checkErr = CheckV6PreFlight(ctx, m.db, confirmToken)
+		if checkErr != nil {
+			return checkErr
+		}
+		if outcome.Case == "v5_auto_upgrade" {
+			m.logger.Infow("v6 pre-flight backup acknowledgement verified; running automatic v5 -> v6 upgrade",
+				"pre_upgrade_goose_version", outcome.PreUpgradeGooseVer,
+				"fingerprint", outcome.PreUpgradeFingerprint,
+			)
+		}
+		m.logger.Info("checking and applying migrations...")
+		if upErr := goose.UpContext(ctx, m.db, "."); upErr != nil {
+			return upErr
+		}
+		return RecordUpgradeReceipt(ctx, m.db, outcome)
+	})
 	if err != nil {
-		return nil, err
-	}
-	if outcome.Case == "v5_auto_upgrade" {
-		m.logger.Infow("v6 pre-flight backup acknowledgement verified; running automatic v5 -> v6 upgrade",
-			"pre_upgrade_goose_version", outcome.PreUpgradeGooseVer,
-			"fingerprint", outcome.PreUpgradeFingerprint,
-		)
-	}
-	m.logger.Info("checking and applying migrations...")
-	if err := goose.UpContext(ctx, m.db, "."); err != nil {
-		return nil, err
-	}
-	if err := RecordUpgradeReceipt(ctx, m.db, outcome); err != nil {
 		return nil, err
 	}
 	return outcome, nil
 }
 
 func (m *migrator) UpTo(ctx context.Context, version int64) error {
-	if _, err := CheckV6PreFlight(ctx, m.db, ""); err != nil {
-		return err
-	}
-	return goose.UpToContext(ctx, m.db, ".", version)
+	return m.withMigrationLock(ctx, func() error {
+		if _, err := CheckV6PreFlight(ctx, m.db, ""); err != nil {
+			return err
+		}
+		return goose.UpToContext(ctx, m.db, ".", version)
+	})
 }
 
 func (m *migrator) Down(ctx context.Context) error {

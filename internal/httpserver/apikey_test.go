@@ -196,3 +196,25 @@ func TestScopedAPIKeyAuthorizationMatrix(t *testing.T) {
 	require.Equal(t, 200, call(t, e, "GET", "/api/quarantine", "X-API-Key", "tok-admin"))
 	require.Equal(t, 200, call(t, e, "GET", "/debug/pprof/", "X-API-Key", "tok-admin"))
 }
+
+func TestReadOnlyGraphQLRejectsEvidenceField(t *testing.T) {
+	e := scopedAPIKeyEngine("", []ScopedAPIKey{
+		{Name: "reader", Scope: ScopeRead, Token: "read-tok"},
+		{Name: "searcher", Scope: ScopeSearch, Token: "search-tok"},
+		{Name: "ops", Scope: ScopeAdmin, Token: "admin-tok"},
+	})
+	blockedQueries := []string{
+		`{"query":"query { evidence { totalCount } }"}`,
+		`{"query":"query { e: evidence { totalCount } }"}`,
+		`{"query":"query { ... on Query { evidence { totalCount } } }"}`,
+		`{"query":"query { ...Ev } fragment Ev on Query { evidence { totalCount } }"}`,
+		`{"query":"query A { search { totalCount } } query B { evidence { totalCount } }","operationName":"B"}`,
+	}
+	for _, body := range blockedQueries {
+		require.Equal(t, http.StatusForbidden, callWithBody(t, e, "POST", "/graphql", "X-API-Key", "read-tok", body).Code, body)
+		require.Equal(t, http.StatusForbidden, callWithBody(t, e, "POST", "/graphql", "X-API-Key", "search-tok", body).Code, body)
+		require.Equal(t, http.StatusOK, callWithBody(t, e, "POST", "/graphql", "X-API-Key", "admin-tok", body).Code, body)
+	}
+	allowed := `{"query":"query A { search { totalCount } } query B { evidence { totalCount } }","operationName":"A"}`
+	require.Equal(t, http.StatusOK, callWithBody(t, e, "POST", "/graphql", "X-API-Key", "read-tok", allowed).Code)
+}

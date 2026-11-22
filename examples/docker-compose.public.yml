@@ -12,6 +12,7 @@ services:
       dockerfile: Dockerfile
     container_name: dh-waypoint
     restart: unless-stopped
+    stop_grace_period: 20s
     depends_on:
       postgres:
         condition: service_healthy
@@ -135,9 +136,8 @@ services:
       - "${DH_WAYPOINT_PEER_PORT:-3334}:3334/tcp"
       - "${DH_WAYPOINT_PEER_PORT:-3334}:3334/udp"
     volumes:
-      - dh-waypoint-config:/var/lib/dh-waypoint/config
-      - dh-waypoint-data:/var/lib/dh-waypoint/data
-      - dh-waypoint-tms:/var/lib/dh-waypoint/tms
+      - dh-waypoint-config:/var/lib/dh-waypoint/config/bitmagnet
+      - dh-waypoint-data:/var/lib/dh-waypoint/data/bitmagnet
       - ./plugins:/plugins:ro
     logging:
       driver: json-file
@@ -154,7 +154,7 @@ services:
       start_period: 90s
 
   postgres:
-    image: postgres:18-alpine
+    image: postgres:16-alpine
     container_name: dh-waypoint-postgres
     restart: unless-stopped
     shm_size: 512m
@@ -164,7 +164,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env.public}
       PGUSER: bitmagnet
     volumes:
-      - dh-waypoint-postgres:/var/lib/postgresql
+      - dh-waypoint-postgres:/var/lib/postgresql/data
     # Modest tuning suitable for a 4-8 GB host. Larger deployments
     # should bump shared_buffers and effective_cache_size to ~25% /
     # ~75% of available RAM respectively.
@@ -201,5 +201,4 @@ services:
 volumes:
   dh-waypoint-config:
   dh-waypoint-data:
-  dh-waypoint-tms:
   dh-waypoint-postgres:

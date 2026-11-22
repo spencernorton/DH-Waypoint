@@ -1,6 +1,6 @@
 # Local backend development
 
-Use the Go version in `go.mod`, PostgreSQL 14+ (16 recommended), and optionally
+Use the Go version in `go.mod`, PostgreSQL 16 or 18, and optionally
 [Task](https://taskfile.dev) and Docker Compose. Python 3 runs the public policy
 checks; the backend executable and container do not depend on Python.
 

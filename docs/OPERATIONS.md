@@ -64,9 +64,8 @@ accepting live verdicts or deletion.
 
 Catalogue removal and crawler blocking require the complete, bounded recovery
 transition. The application does not attach this disabled foundation: legacy
-CEL delete actions, enforced content-filter drops, GraphQL deletion and
-`purge-content-types --write` therefore return a recovery-disabled error before
-deletion or bloom admission. The command's `--force` flag cannot bypass it.
+CEL delete actions, enforced content-filter drops, and GraphQL deletion
+therefore return a recovery-disabled error before deletion or bloom admission.
 Ordinary matching and keep/review rows still persist, including independent
 rows in a batch whose removal is held.
 

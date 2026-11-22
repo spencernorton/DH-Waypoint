@@ -87,7 +87,8 @@ func New(p Params) (Result, error) {
 						cli.OsExiter(exitCoder.ExitCode())
 						return
 					}
-					panic(err)
+					_, _ = fmt.Fprintln(os.Stderr, err)
+					cli.OsExiter(1)
 				}
 			})()
 			return nil

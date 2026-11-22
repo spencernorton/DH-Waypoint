@@ -44,9 +44,9 @@ const configTemplate = `# DH-Waypoint configuration. Every value here can also b
 # docs/configuration.md
 
 # Processing mode: full | basic | raw
-#   full  - built-in CEL classifier, title parsing and matching (default)
-#   basic - core stamps only a coarse category from file extensions;
-#           use with a processor plugin doing real classification
+#   full  - built-in CEL classifier, title parsing and matching
+#   basic - core stamps a coarse category from file extensions (recommended
+#           default when pairing with an external processor plugin)
 #   raw   - core stores metainfo untouched; plugins do everything
 processing:
   mode: basic
@@ -210,14 +210,7 @@ func New(p Params) (Result, error) {
 								"postgres=%s (major=%d, direct PG 16/18 supported), goose=%d, est_torrents=%d, fingerprint=%s",
 								rep.PostgresVersion, rep.PostgresMajor, rep.GooseVersion, rep.EstimatedTorrents, rep.Fingerprint,
 							))
-							for _, b := range rep.Blockers {
-								fmt.Fprintf(out, "        BLOCKER:  %s\n", b)
-							}
-							for _, a := range rep.Advisories {
-								fmt.Fprintf(out, "        ADVISORY: %s\n", a)
-							}
-							fmt.Fprintf(out, "        BACKUP:   %s\n", rep.BackupCommand)
-							fmt.Fprintf(out, "        CONFIRM:  %s\n", rep.ConfirmEnvAssignment)
+							migrations.WriteReadinessDetails(out, rep, "        ")
 						}
 					}
 				}

@@ -1,0 +1,226 @@
+# Fresh-install PostgreSQL 18 stack for DH-Waypoint v6.0.0.
+# Do NOT apply this file directly over an existing v5 PostgreSQL 16 volume;
+# existing v5.12-v5.15 installations upgrade in place using docker-compose.yml
+# (PostgreSQL 16) with zero manual PostgreSQL dump/restore (see docs/migration-v6.md).
+# DH-Waypoint — one-command install from the published image.
+#
+#   cp examples/.env.example .env   # or: dh-waypoint init (generates secrets)
+#   # set POSTGRES_PASSWORD in .env
+#   docker compose up -d
+#   docker compose exec dh-waypoint dh-waypoint doctor
+#
+# No source checkout or Go toolchain needed at run time. To build from
+# source instead, use examples/docker-compose.public.yml.
+# Pin a release with DH_WAYPOINT_VERSION (default: the version in VERSION).
+# Optional plugin services (openrouter, armiger): see plugins/README.md.
+
+services:
+
+  dh-waypoint:
+    image: ghcr.io/spencernorton/dh-waypoint:${DH_WAYPOINT_VERSION:-v6.0.0}
+    container_name: dh-waypoint
+    restart: unless-stopped
+    stop_grace_period: 20s
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command:
+      - worker
+      - run
+      - --all
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_NAME: bitmagnet
+      POSTGRES_USER: bitmagnet
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (run dh-waypoint init)}
+      # Processing mode: full | basic | raw. basic stamps only a coarse
+      # category in core and leaves real classification to plugins.
+      PROCESSING_MODE: "${PROCESSING_MODE:-basic}"
+      SERVING_REQUIRED_PROCESSOR: "${SERVING_REQUIRED_PROCESSOR:-}"
+      SERVING_REQUIRED_PROCESSOR_ARTIFACT_DIGEST: "${SERVING_REQUIRED_PROCESSOR_ARTIFACT_DIGEST:-}"
+      SERVING_REQUIRED_PAYLOAD_VERIFIER_ARTIFACT_DIGEST: "${SERVING_REQUIRED_PAYLOAD_VERIFIER_ARTIFACT_DIGEST:-}"
+      PROCESSORS_PAYLOAD_VERIFIER_TOKEN: "${PROCESSORS_PAYLOAD_VERIFIER_TOKEN:-}"
+      # Drop *.plugin.yml files into ./plugins to register plugins.
+      PROCESSORS_PLUGINS_DIR: /plugins
+      PROCESSORS_ADMIN_TOKEN: ${PROCESSORS_ADMIN_TOKEN:-}
+      # Private tracker (opt-in): see docs/private-tracker.md
+      TRACKER_ENABLED: "${TRACKER_ENABLED:-false}"
+      TRACKER_PASSKEYS: # passed only when set; empty fails startup before the next release
+      TRACKER_ADMIN_TOKEN: ${TRACKER_ADMIN_TOKEN:-}
+      TRACKER_PUBLIC_BASE_URL: ${TRACKER_PUBLIC_BASE_URL:-}
+      TORZNAB_API_KEY: ${TORZNAB_API_KEY:-}
+      # Gates GraphQL, /import, /metrics and the REST API. Passed only when
+      # .env defines it; an empty value there turns the key off.
+      HTTP_SERVER_API_KEY:
+      HTTP_SERVER_SCOPED_API_KEYS:
+      # Website origins allowed to read the API from a browser (comma-separated,
+      # no spaces). Empty allows none.
+      HTTP_SERVER_CORS_ALLOWED_ORIGINS: "${HTTP_SERVER_CORS_ALLOWED_ORIGINS:-}"
+      TMDB_API_KEY: ${TMDB_API_KEY:-}
+      # Shared secret for /evidence/arr/<instance>: the X-Evidence-Token
+      # header each *arr webhook sends. Empty accepts unauthenticated posts.
+      EVIDENCE_WEBHOOK_SECRET: ${EVIDENCE_WEBHOOK_SECRET:-}
+      CSAM_BLOCKLIST_ENABLED: "${CSAM_BLOCKLIST_ENABLED:-true}"
+      CSAM_BLOCKLIST_FEED_URLS: "${CSAM_BLOCKLIST_FEED_URLS:-}"
+      CSAM_BLOCKLIST_EXPORT_ENABLED: "${CSAM_BLOCKLIST_EXPORT_ENABLED:-true}"
+      CSAM_BLOCKLIST_EXPORT_UPSTREAM_URL: "${CSAM_BLOCKLIST_EXPORT_UPSTREAM_URL:-}"
+      # Sweep of stored banned-keyword matches: apply (delete), dry_run (count
+      # only) or off. Passed only when .env defines it; unset leaves the mode
+      # to a config file or the built-in default, apply. See docs/csam-defense.md.
+      CSAM_SWEEP_MODE:
+      CONTENT_FILTER_ENABLED: "${CONTENT_FILTER_ENABLED:-false}"
+      CONTENT_FILTER_ENFORCE: "${CONTENT_FILTER_ENFORCE:-false}"
+      RETENTION_ENABLED: "${RETENTION_ENABLED:-false}"
+      RETENTION_ENABLE_PURGE: "${RETENTION_ENABLE_PURGE:-false}"
+      # LEAN MODE curation & disk-compaction plugin (opt-in; see plugins/lean-mode/ & docs/lean-mode.md)
+      LEAN_MODE_ENABLED: "${LEAN_MODE_ENABLED:-false}"
+      LEAN_MODE_CONFIG_FILE: "${LEAN_MODE_CONFIG_FILE:-}"
+      LEAN_MODE_SERVE_GLOBALLY: "${LEAN_MODE_SERVE_GLOBALLY:-false}"
+      METAINFO_REQUESTER_ENABLE_MSE: "${METAINFO_REQUESTER_ENABLE_MSE:-true}"
+      VERDICTS_READERS_ENABLED: "${VERDICTS_READERS_ENABLED:-true}"
+      # One-time backup acknowledgement when upgrading an existing v5.12-v5.15 DB (see docs/migration-v6.md)
+      UPGRADE_CONFIRM_V6_BACKUP: "${UPGRADE_CONFIRM_V6_BACKUP:-}"
+      DHT_CRAWLER_SCALING_FACTOR: "${DHT_SCALING_FACTOR:-1}"
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    ports:
+      # Local only by default. Set DH_WAYPOINT_HTTP_BIND=0.0.0.0 (or one
+      # address) to let other hosts in, and set the API keys first.
+      - "${DH_WAYPOINT_HTTP_BIND:-127.0.0.1}:${DH_WAYPOINT_HTTP_PORT:-3333}:3333"
+      - "${DH_WAYPOINT_PEER_PORT:-3334}:3334/tcp"
+      - "${DH_WAYPOINT_PEER_PORT:-3334}:3334/udp"
+    volumes:
+      - dh-waypoint-config:/var/lib/dh-waypoint/config/bitmagnet
+      - dh-waypoint-data:/var/lib/dh-waypoint/data/bitmagnet
+      - ./plugins:/plugins:ro
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+    healthcheck:
+      # /status stays public when HTTP_SERVER_API_KEY is set. It returns 503
+      # until every check has run once, about a minute after start.
+      test: ["CMD", "curl", "--fail", "--silent", "--show-error", "--output", "/dev/null", "http://127.0.0.1:3333/status"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 90s
+
+  postgres:
+    image: postgres:18-alpine
+    container_name: dh-waypoint-postgres
+    restart: unless-stopped
+    shm_size: 512m
+    environment:
+      POSTGRES_DB: bitmagnet
+      POSTGRES_USER: bitmagnet
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (run dh-waypoint init)}
+      PGUSER: bitmagnet
+    volumes:
+      - dh-waypoint-postgres:/var/lib/postgresql
+    command:
+      - postgres
+      - -c
+      - shared_buffers=512MB
+      - -c
+      - effective_cache_size=1GB
+      - -c
+      - work_mem=16MB
+      - -c
+      - maintenance_work_mem=128MB
+      - -c
+      - max_connections=100
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bitmagnet -d bitmagnet"]
+      interval: 10s
+      start_period: 20s
+      timeout: 5s
+      retries: 5
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+  # Optional plugin services: each starts only when its profile is listed in
+  # COMPOSE_PROFILES (see plugins/README.md). The two processors share
+  # dh-waypoint's network namespace, so they listen on its loopback address
+  # and nothing else can reach them.
+  openrouter:
+    profiles: [openrouter]
+    build:
+      context: .
+      dockerfile: adapters/llm/Dockerfile
+    restart: unless-stopped
+    network_mode: service:dh-waypoint
+    depends_on:
+      dh-waypoint:
+        condition: service_started
+        restart: true
+    command: [-config, /config/openrouter.json]
+    environment:
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+    volumes:
+      - ./adapters/llm/openrouter.json:/config/openrouter.json:ro
+
+  armiger-ultra:
+    profiles: [armiger]
+    image: ghcr.io/spencernorton/armiger:${ARMIGER_VERSION:-3.13.2}
+    restart: unless-stopped
+
+  armiger:
+    profiles: [armiger]
+    build:
+      context: .
+      dockerfile: adapters/armiger/Dockerfile
+    restart: unless-stopped
+    network_mode: service:dh-waypoint
+    depends_on:
+      dh-waypoint:
+        condition: service_started
+        restart: true
+      armiger-ultra:
+        condition: service_started
+    environment:
+      ARMIGER_URL: http://armiger-ultra:8096
+      ARMIGER_VERSION: ${ARMIGER_VERSION:-3.13.2}
+      ARMIGER_MIN_CONFIDENCE: ${ARMIGER_MIN_CONFIDENCE:-0.6}
+
+  stremio:
+    profiles: [stremio]
+    build:
+      context: .
+      dockerfile: adapters/stremio/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      dh-waypoint:
+        condition: service_healthy
+    environment:
+      STREMIO_LISTEN: 0.0.0.0:7000
+      DH_WAYPOINT_TORZNAB_URL: http://dh-waypoint:3333
+      DH_WAYPOINT_TORZNAB_KEY: ${TORZNAB_API_KEY:-}
+      STREMIO_ADDON_NAME: ${STREMIO_ADDON_NAME:-DH-Waypoint}
+      STREMIO_MAX_STREAMS: "${STREMIO_MAX_STREAMS:-25}"
+    ports:
+      - "${STREMIO_BIND:-127.0.0.1}:${STREMIO_PORT:-7000}:7000"
+
+  prowlarr-sync:
+    profiles: [prowlarr-sync]
+    build:
+      context: .
+      dockerfile: adapters/prowlarr-sync/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      dh-waypoint:
+        condition: service_healthy
+    environment:
+      DH_WAYPOINT_URL: http://dh-waypoint:3333
+      PROWLARR_TORZNAB_FEED_URL: ${PROWLARR_TORZNAB_FEED_URL:-}
+      PROWLARR_API_KEY: ${PROWLARR_API_KEY:-}
+      PROWLARR_IMPORT_SOURCE: ${PROWLARR_IMPORT_SOURCE:-prowlarr-sync}
+
+volumes:
+  dh-waypoint-config:
+  dh-waypoint-data:
+  dh-waypoint-postgres:

@@ -36,8 +36,7 @@ The public distribution is MIT-licensed and runs independently of a browser site
 
 - [Consumer visibility](serving-exclusions.md), [release-name eligibility](RELEASE_NAME_POLICY.md)
   and [release-name metadata claims](release-metadata.md)
-- [Catalogue removal foundation](catalogue-recovery.md) and
-  [policy shadow review](catalogue-policy-shadow.md)
+- [Catalogue removal foundation](catalogue-recovery.md)
 - [Catalogue search design](design/catalogue-search.md),
   [processor operations validation](processors/operations-validation.md) and the
   [glossary](concepts/glossary.md)

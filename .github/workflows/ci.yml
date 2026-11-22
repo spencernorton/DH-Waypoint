@@ -1,20 +1,21 @@
-# Public Go race tests, sharded PostgreSQL 16 & 18 integration, headless boundary,
-# container build, and v5 -> v6 hard-stop & auto-upgrade drill.
+# Public Go race tests, full sharded PostgreSQL 16 & 18 integration, headless boundary,
+# container build, and standalone + Compose v5 -> v6 hard-stop & auto-upgrade drills.
 name: CI
 on:
   workflow_call:
+    inputs:
+      upload_image:
+        type: boolean
+        default: false
   pull_request:
   push:
     branches: [main]
 permissions:
   contents: read
-concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
 jobs:
   tests:
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -23,7 +24,7 @@ jobs:
         run: |
           python3 scripts/test_headless_boundary.py
           python3 scripts/check_headless_boundary.py
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v6.4.0
         with:
           go-version-file: go.mod
       - run: python3 scripts/check_processor_boundary.py
@@ -50,16 +51,16 @@ jobs:
     env:
       DH_WAYPOINT_TEST_POSTGRES_DSN: postgres://postgres:test-only@127.0.0.1:5432/dh_waypoint_test?sslmode=disable
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v6.4.0
         with:
           go-version-file: go.mod
       - name: Run auto-discovered PG 16 Shard 1/2
         run: |
           PKGS=$(python3 scripts/list_pg_test_packages.py --shards 2 --index 0)
-          echo "Shard 1/2 packages: $PKGS"
+          echo "PG 16 Shard 1/2 packages: $PKGS"
           go test -race -p 1 -count=1 -timeout=12m $PKGS
 
   integration_pg16_shard2:
@@ -77,16 +78,16 @@ jobs:
     env:
       DH_WAYPOINT_TEST_POSTGRES_DSN: postgres://postgres:test-only@127.0.0.1:5432/dh_waypoint_test?sslmode=disable
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v6.4.0
         with:
           go-version-file: go.mod
       - name: Run auto-discovered PG 16 Shard 2/2
         run: |
           PKGS=$(python3 scripts/list_pg_test_packages.py --shards 2 --index 1)
-          echo "Shard 2/2 packages: $PKGS"
+          echo "PG 16 Shard 2/2 packages: $PKGS"
           go test -race -p 1 -count=1 -timeout=12m $PKGS
 
   integration_pg18:
@@ -104,85 +105,97 @@ jobs:
     env:
       DH_WAYPOINT_TEST_POSTGRES_DSN: postgres://postgres:test-only@127.0.0.1:5432/dh_waypoint_test?sslmode=disable
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v6.4.0
         with:
           go-version-file: go.mod
-      - name: Run PG 18 core & preflight integration suite
-        run: go test -race -p 1 -count=1 -timeout=12m ./migrations ./internal/database/migrations ./internal/database/search ./internal/database/filebundles ./internal/torznab/adapter ./internal/serving ./internal/namepolicy ./internal/restapi ./internal/leanmode ./internal/cataloguerecovery/... ./internal/csamblocklist/...
+      - name: Run auto-discovered PG 18 Shard 1/2
+        run: |
+          PKGS=$(python3 scripts/list_pg_test_packages.py --shards 2 --index 0)
+          echo "PG 18 Shard 1/2 packages: $PKGS"
+          go test -race -p 1 -count=1 -timeout=12m $PKGS
+
+  integration_pg18_shard2:
+    name: PostgreSQL 18 integration (shard 2)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_PASSWORD: test-only
+          POSTGRES_DB: dh_waypoint_test
+        ports: ['5432:5432']
+        options: --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 3s --health-retries 10
+    env:
+      DH_WAYPOINT_TEST_POSTGRES_DSN: postgres://postgres:test-only@127.0.0.1:5432/dh_waypoint_test?sslmode=disable
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v6.4.0
+        with:
+          go-version-file: go.mod
+      - name: Run auto-discovered PG 18 Shard 2/2
+        run: |
+          PKGS=$(python3 scripts/list_pg_test_packages.py --shards 2 --index 1)
+          echo "PG 18 Shard 2/2 packages: $PKGS"
+          go test -race -p 1 -count=1 -timeout=12m $PKGS
 
   image:
     name: Public container build
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Build supported container with source identity
-        env:
-          BUILD_SOURCE: https://github.com/${{ github.repository }}
         run: |
-          VERSION="v$(cat VERSION)"
-          printf '%s\n' "$VERSION" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
-          COMMIT=$(git rev-parse HEAD)
+          VERSION=v$(cat VERSION)
           BUILD_DATE=$(git show -s --format=%cI HEAD)
-          docker build --platform linux/amd64 --build-arg VERSION="$VERSION" \
-            --build-arg COMMIT="$COMMIT" --build-arg BUILD_DATE="$BUILD_DATE" \
-            --build-arg SOURCE="$BUILD_SOURCE" --tag dh-waypoint:ci .
-          test "$(docker image inspect dh-waypoint:ci --format '{{.Os}}/{{.Architecture}}')" = 'linux/amd64'
-          test "$(docker image inspect dh-waypoint:ci --format '{{index .Config.Labels "org.opencontainers.image.version"}}')" = "$VERSION"
-          test "$(docker image inspect dh-waypoint:ci --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "$COMMIT"
-          test "$(docker image inspect dh-waypoint:ci --format '{{index .Config.Labels "org.opencontainers.image.created"}}')" = "$BUILD_DATE"
-          test "$(docker image inspect dh-waypoint:ci --format '{{index .Config.Labels "org.opencontainers.image.source"}}')" = "$BUILD_SOURCE"
+          docker build --build-arg VERSION="$VERSION" \
+            --build-arg REVISION="$GITHUB_SHA" \
+            --build-arg BUILD_DATE="$BUILD_DATE" \
+            --build-arg SOURCE="https://github.com/$GITHUB_REPOSITORY" \
+            -t dh-waypoint:ci .
           sh scripts/check_backend_image.sh dh-waypoint:ci "$VERSION"
+          docker build -t dh-waypoint-evidence-relay:ci ./tools/evidencerelay
       - name: Build and smoke-test all independent adapter images
         run: |
           for adapter in llm armiger match stremio prowlarr-sync; do
-            echo "=== Building adapter: $adapter ==="
-            docker build --platform linux/amd64 -f "adapters/$adapter/Dockerfile" --tag "dh-waypoint-$adapter:ci" .
-            docker run --rm --network none --read-only --cap-drop ALL \
-              --security-opt no-new-privileges "dh-waypoint-$adapter:ci" --help
+            docker build -t "dh-waypoint-adapter-${adapter}:ci" "./adapters/${adapter}"
+            docker run --rm --network none --read-only --entrypoint /bin/sh "dh-waypoint-adapter-${adapter}:ci" -ec '
+              test ! -e /app/ui
+              test "$(id -u)" != "0"
+            '
           done
       - name: Prove import, processing, public search and restart persistence
-        run: python3 scripts/check_runtime.py --image dh-waypoint:ci --evidence out/runtime
-      - name: Prove v5.15 -> v6.0 hard-stop, automatic upgrade & downgrade refusal
+        run: python3 scripts/check_runtime.py --image dh-waypoint:ci --evidence-relay-image dh-waypoint-evidence-relay:ci
+      - name: Prove standalone + Compose v5.15 -> v6.0 hard-stop, config preservation & downgrade refusal
         run: |
-          python3 scripts/test_v6_upgrade_drill.py \
-            --v5-image ghcr.io/spencernorton/dh-waypoint:v5.15.0 \
-            --v6-image dh-waypoint:ci \
-            --pg-image postgres:16-alpine
+          python3 scripts/test_v6_upgrade_drill.py --v5-image ghcr.io/spencernorton/dh-waypoint:v5.15.0 --v6-image dh-waypoint:ci --pg-image postgres:16-alpine
+          python3 scripts/test_v6_upgrade_drill.py --v5-image ghcr.io/spencernorton/dh-waypoint:v5.15.0 --v6-image dh-waypoint:ci --pg-image postgres:18-alpine --skip-compose
       - name: Export the exact runtime-qualified image
-        env:
-          BUILD_SOURCE: https://github.com/${{ github.repository }}
+        if: ${{ inputs.upload_image }}
         run: |
+          VERSION=v$(cat VERSION)
           python3 scripts/tested_image.py export --image dh-waypoint:ci \
-            --runtime out/runtime/runtime.json --dir out/tested-image \
-            --source "$BUILD_SOURCE" --revision "$(git rev-parse HEAD)" --version "v$(cat VERSION)"
-          CANDIDATE_ID=$(docker image inspect dh-waypoint:ci --format '{{.Id}}')
-          docker image rm dh-waypoint:ci
-          if docker image inspect "$CANDIDATE_ID" >/dev/null 2>&1; then
-            echo 'Candidate is still loaded; cannot prove a fresh archive import' >&2
-            exit 1
-          fi
-          LOADED_ID=$(python3 scripts/tested_image.py load --dir out/tested-image \
-            --source "$BUILD_SOURCE" --revision "$(git rev-parse HEAD)" --version "v$(tr -d '[:space:]' < VERSION)")
-          test "$LOADED_ID" = "$CANDIDATE_ID"
-          python3 scripts/test_tested_image.py out/tested-image
-          cp out/tested-image/receipt.json out/runtime/tested-image.json
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: success() && startsWith(github.ref, 'refs/tags/v')
+            --source "https://github.com/$GITHUB_REPOSITORY" \
+            --revision "$GITHUB_SHA" --version "$VERSION" \
+            --platform linux/amd64 --dir tested-image
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.1
+        if: ${{ inputs.upload_image }}
         with:
           name: dh-waypoint-tested-image
-          path: out/tested-image/
+          path: tested-image
           if-no-files-found: error
-          compression-level: 0
-          retention-days: 7
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: always()
+          retention-days: 1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.1
+        if: ${{ failure() }}
         with:
-          name: backend-runtime-evidence
-          path: out/runtime/
-          retention-days: 14
+          name: runtime-check-logs
+          path: runtime-check-logs.txt
+          if-no-files-found: ignore

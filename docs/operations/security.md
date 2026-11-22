@@ -188,9 +188,8 @@ All logs go to stdout. No telemetry, no upstream phone-home — except `CSAM_BLO
 
 The bundled Dockerfile already does most of what you'd want:
 
-- Retains root for compatibility with the optional `/root/.config/bitmagnet` and
-  `/root/.local/share/bitmagnet` state mounts. An operator can use a non-root
-  UID after arranging writable state paths; this is a separate migration.
+- Runs as non-root `UID 1000:1000` (`dhwaypoint`) with writable state directories
+  under `/var/lib/dh-waypoint/config/bitmagnet` and `/var/lib/dh-waypoint/data/bitmagnet`.
 - The image is small (Alpine base, multi-stage build).
 - No build tooling in the runtime layer.
 
