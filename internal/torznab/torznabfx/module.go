@@ -3,11 +3,14 @@ package torznabfx
 import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/spencernorton/DH-Waypoint/internal/config/configfx"
+	"github.com/spencernorton/DH-Waypoint/internal/database/dhtms"
 	"github.com/spencernorton/DH-Waypoint/internal/database/search"
 	"github.com/spencernorton/DH-Waypoint/internal/evidence"
 	"github.com/spencernorton/DH-Waypoint/internal/evidence/liveness"
 	"github.com/spencernorton/DH-Waypoint/internal/evidence/priors"
 	"github.com/spencernorton/DH-Waypoint/internal/lazy"
+	"github.com/spencernorton/DH-Waypoint/internal/leanmode"
+	"github.com/spencernorton/DH-Waypoint/internal/serving"
 	"github.com/spencernorton/DH-Waypoint/internal/torznab"
 	"github.com/spencernorton/DH-Waypoint/internal/torznab/adapter"
 	"github.com/spencernorton/DH-Waypoint/internal/torznab/httpserver"
@@ -29,6 +32,10 @@ type torznabClientDeps struct {
 	VerdictsStore   *verdicts.Store
 	VerdictsConfig  verdicts.Config
 	VerdictsMetrics *verdicts.Metrics
+	DHTMSClient     *dhtms.Client   `optional:"true"`
+	ServingPolicy   *serving.Policy `optional:"true"`
+	DHTMSMetrics    *dhtms.Metrics  `optional:"true"`
+	LeanStore       *leanmode.Store `optional:"true"`
 }
 
 func New() fx.Option {
@@ -66,6 +73,11 @@ func New() fx.Option {
 						deps.VerdictsStore,
 						deps.VerdictsConfig.ReadersEnabled,
 						deps.VerdictsMetrics,
+					).WithDHTMS(
+						deps.DHTMSClient,
+						deps.ServingPolicy,
+						deps.DHTMSMetrics,
+						deps.LeanStore,
 					), nil
 				})
 			},

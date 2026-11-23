@@ -272,7 +272,7 @@ def drill(v5_image, v6_image, pg_image):
         run("docker", "network", "rm", net, check=False)
 
 
-def compose_drill(v5_image, v6_image):
+def compose_drill(v5_image, v6_image, tms_image=None):
     """Real `docker compose` v5.15.0 -> v6.0 upgrade drill proving PG16 volume preservation
     and root-owned v5 config.yml API key preservation under non-root UID 1000:1000."""
     project = f"dhwcmp{uuid.uuid4().hex[:8]}"
@@ -281,7 +281,15 @@ def compose_drill(v5_image, v6_image):
     (tmp_dir / "plugins").mkdir()
     env_file = tmp_dir / ".env"
 
+    tms_token = f"compose-tms-{uuid.uuid4().hex[:12]}"
+
     def write_env(extra=""):
+        tms_lines = (
+            f"DH_TMS_AUTH_TOKEN={tms_token}\n"
+            "DH_TMS_SYNC_INTERVAL_MS=500\n"
+            if tms_image
+            else "DH_TMS_READ_MODE=off\n"
+        )
         env_file.write_text(
             "POSTGRES_PASSWORD=compose-drill-pass\n"
             "TORZNAB_API_KEY=compose-torznab-key\n"
@@ -292,6 +300,7 @@ def compose_drill(v5_image, v6_image):
             "TRACKER_ENABLED=false\n"
             "DHT_CRAWLER_ENABLED=false\n"
             "TMDB_ENABLED=false\n"
+            + tms_lines
             + extra
         )
 
@@ -341,22 +350,48 @@ volumes:
 
     # Override ONLY local test image, dynamic ports, container_name collision removal, and non-DHT worker keys
     # while testing the REAL repository docker-compose.yml verbatim (PG image, mount targets, volumes, env).
+    tms_override_block = (
+        f"""  dh-tmsd:
+    image: {tms_image}
+    container_name: {project}-tmsd
+    restart: "no"
+"""
+        if tms_image
+        else f"""  dh-tmsd:
+    profiles: [disabled]
+    container_name: {project}-tmsd
+"""
+    )
+    tms_worker_keys = (
+        '["worker", "run", "--keys", "http_server", "--keys", "queue_server", "--keys", "processors", "--keys", "dhtms_sync"]'
+        if tms_image
+        else '["worker", "run", "--keys", "http_server", "--keys", "queue_server", "--keys", "processors"]'
+    )
     v6_override = tmp_dir / "v6-override.yml"
+    deps_override = (
+        ""
+        if tms_image
+        else """    depends_on: !override
+      postgres:
+        condition: service_healthy
+"""
+    )
     v6_override.write_text(f"""services:
   dh-waypoint:
     image: {v6_image}
     container_name: {project}-app
     restart: "no"
-    command: ["worker", "run", "--keys", "http_server", "--keys", "queue_server", "--keys", "processors"]
+{deps_override}    command: {tms_worker_keys}
     ports: !override
       - "127.0.0.1:0:3333"
     environment:
       CSAM_BLOCKLIST_ENABLED: "false"
       CSAM_BLOCKLIST_EXPORT_ENABLED: "false"
       TRACKER_ENABLED: "false"
+      DH_TMS_SYNC_INTERVAL_MS: "500"
   postgres:
     container_name: {project}-pg
-""")
+{tms_override_block}""")
 
     def compose(files, *args, check=True, input_text=None):
         cmd = ["docker", "compose", "-p", project, "--env-file", str(env_file)]
@@ -450,11 +485,38 @@ volumes:
 
         # CRITICAL P0-B PROOF: v5 root-owned config.yml API key STILL enforced under non-root UID 1000!
         assert http_status(base6, "/api/v1/search?q=Waypoint") == 401, "REGRESSION: v5 config.yml api_key was ignored after v6 non-root remap!"
+        if tms_image:
+            # Wait for dhtms_sync to auto-bootstrap dh-tmsd from the upgraded PostgreSQL DB (gen >= 1, lease active).
+            tms_cid = compose(v6_files, "ps", "-q", "dh-tmsd").stdout.strip()
+            assert tms_cid, "default-on dh-tmsd service did not start in 3-service Compose stack!"
+            deadline = time.monotonic() + 60
+            tms_health = {}
+            while time.monotonic() < deadline:
+                h_res = run("docker", "exec", tms_cid, "curl", "-sf", "http://127.0.0.1:7841/v1/health", check=False)
+                if h_res.returncode == 0 and h_res.stdout.strip():
+                    tms_health = json.loads(h_res.stdout)
+                    if tms_health.get("generation_id", 0) >= 1 and tms_health.get("lease_active") is True and tms_health.get("num_docs", 0) >= 2:
+                        break
+                time.sleep(0.5)
+            else:
+                logs_app = run("docker", "logs", cid6, check=False)
+                raise AssertionError(f"dhtms_sync did not auto-bootstrap dh-tmsd: health={tms_health}\nAPP LOGS:\n{logs_app.stderr}")
+
         st, raw6 = http_req(base6, "/api/v1/search?q=Waypoint%20Upgrade%20Drill", headers={"X-API-Key": api_key})
         assert st == 200
         body6 = json.loads(raw6)
         assert len(body6["items"]) == 1 and body6["items"][0]["info_hash"] == PUBLIC_HASH
-        print("[COMPOSE 4/4] root-owned v5 config.yml API key enforced under non-root UID 1000 VERIFIED", flush=True)
+
+        if tms_image:
+            st_tz, raw_tz = http_req(base6, "/torznab/api?t=search&q=Waypoint%20Upgrade%20Drill&apikey=compose-torznab-key")
+            assert st_tz == 200 and PUBLIC_HASH.encode() in raw_tz and PRIVATE_HASH.encode() not in raw_tz, f"unexpected torznab response: {raw_tz[:400]!r}"
+            _, metrics_raw = http_req(base6, "/metrics", headers={"X-API-Key": api_key})
+            metrics_txt = metrics_raw.decode("utf-8", errors="replace")
+            assert 'dh_waypoint_dhtms_reads_total{outcome="hit",surface="rest_v1"}' in metrics_txt, f"REST v1 did not serve from dh-tmsd!\n{metrics_txt}"
+            assert 'dh_waypoint_dhtms_reads_total{outcome="hit",surface="torznab"}' in metrics_txt, f"Torznab did not serve from dh-tmsd!\n{metrics_txt}"
+            print(f"[COMPOSE 4/4] root-owned v5 config.yml API key + automatic 3-service dh-tmsd sync (gen={tms_health['generation_id']}, docs={tms_health['num_docs']}) & live REST+Torznab serving VERIFIED", flush=True)
+        else:
+            print("[COMPOSE 4/4] root-owned v5 config.yml API key enforced under non-root UID 1000 VERIFIED", flush=True)
         print("ALL COMPOSE v5.15 -> v6.0 UPGRADE & CONFIG-PRESERVATION CHECKS PASSED")
     finally:
         compose(v6_files, "down", "-v", "--remove-orphans", check=False)
@@ -485,20 +547,43 @@ def tms_compose_smoke(tms_image):
     files = [ROOT / "docker-compose.yml", override]
 
     def compose(*args, check=True):
-        cmd = ["docker", "compose", "-p", project, "--env-file", str(env_file), "--profile", "dhtms"]
+        cmd = ["docker", "compose", "-p", project, "--env-file", str(env_file)]
         for f in files:
             cmd.extend(["-f", str(f)])
         cmd.extend(args)
         return run(*cmd, check=check, timeout=180)
 
     try:
-        # 1. Non-root UID 1000 initializes a synthetic generation directly onto the named volume
+        # 1. Boot companion dh-tmsd on a brand-new EMPTY volume -> healthy gen=0, fail-closed 503 before sync!
+        compose("up", "-d", "dh-tmsd")
+        cid = compose("ps", "-q", "dh-tmsd").stdout.strip()
+        assert cid, "dh-tmsd container did not start on empty volume"
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline:
+            status = run("docker", "inspect", "--format", "{{.State.Health.Status}}", cid).stdout.strip()
+            if status == "healthy":
+                break
+            time.sleep(0.5)
+        else:
+            logs = run("docker", "logs", cid, check=False)
+            raise AssertionError(f"dh-tmsd unhealthy on empty volume:\n{logs.stdout}\n{logs.stderr}")
+        empty_health = json.loads(run("docker", "exec", cid, "curl", "-sf", "http://127.0.0.1:7841/v1/health").stdout)
+        assert empty_health.get("generation_id") == 0 and empty_health.get("lease_active") is False, f"unexpected empty health: {empty_health}"
+        net_name = f"{project}_default"
+        empty_probe = run(
+            "docker", "run", "--rm", "--network", net_name,
+            "-e", f"TMS_VALID={token}",
+            "--entrypoint", "/bin/sh", tms_image, "-ec",
+            """code=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' -H "X-DHTMS-Token: $TMS_VALID" -d '{"query":"usual","tier":"base"}' http://dh-tmsd:7841/v1/search); test "$code" = 503""",
+        )
+        assert empty_probe.returncode == 0
+        print("[TMS 1/4] empty-volume boot healthy (gen=0, lease_active=false) & fail-closed 503 VERIFIED", flush=True)
+
+        # 2. Non-root UID 1000 initializes a synthetic generation and restarts dh-tmsd
+        compose("stop", "dh-tmsd")
         init_res = compose("run", "--rm", "dh-tmsd", "init-fixture", "--out", "/var/lib/dh-tms/db")
         manifest = json.loads(init_res.stdout)
         assert manifest.get("generation_id"), f"unexpected init-fixture manifest: {manifest}"
-        print(f"[TMS 1/4] non-root UID 1000 init-fixture on Compose volume VERIFIED (gen={manifest['generation_id']})", flush=True)
-
-        # 2. Boot companion dh-tmsd and wait for Compose healthcheck (/v1/health)
         compose("up", "-d", "dh-tmsd")
         cid = compose("ps", "-q", "dh-tmsd").stdout.strip()
         assert cid, "dh-tmsd container did not start"
@@ -571,6 +656,6 @@ if __name__ == "__main__":
             ap.error("--v5-image and --v6-image are required unless --tms-only is set")
         drill(args.v5_image, args.v6_image, args.pg_image)
         if not args.skip_compose:
-            compose_drill(args.v5_image, args.v6_image)
+            compose_drill(args.v5_image, args.v6_image, tms_image=args.tms_image)
         if args.tms_image:
             tms_compose_smoke(args.tms_image)

@@ -20,6 +20,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      dh-tmsd:
+        condition: service_healthy
     command:
       - worker
       - run
@@ -75,10 +77,10 @@ services:
       LEAN_MODE_SERVE_GLOBALLY: "${LEAN_MODE_SERVE_GLOBALLY:-false}"
       METAINFO_REQUESTER_ENABLE_MSE: "${METAINFO_REQUESTER_ENABLE_MSE:-true}"
       VERDICTS_READERS_ENABLED: "${VERDICTS_READERS_ENABLED:-true}"
-      # DH-TMS companion sidecar (opt-in via COMPOSE_PROFILES=dhtms during Stage 2 rollout;
-      # defaults to off until a generation is seeded).
-      DH_TMS_READ_MODE: "${DH_TMS_READ_MODE:-off}"
-      DH_TMS_ENDPOINT: "${DH_TMS_ENDPOINT:-}"
+      # DH-TMS search/serving sidecar (default-on in v6.0; auto-syncs from PostgreSQL
+      # and fails closed back to PostgreSQL if unavailable. Set DH_TMS_READ_MODE=off to disable).
+      DH_TMS_READ_MODE: "${DH_TMS_READ_MODE:-serve}"
+      DH_TMS_ENDPOINT: "${DH_TMS_ENDPOINT:-http://dh-tmsd:7841}"
       DH_TMS_AUTH_TOKEN: "${DH_TMS_AUTH_TOKEN:-}"
       DH_TMS_TIMEOUT_MS: "${DH_TMS_TIMEOUT_MS:-500}"
       # One-time backup acknowledgement when upgrading an existing v5.12-v5.15 DB (see docs/migration-v6.md)
@@ -223,7 +225,6 @@ services:
       PROWLARR_IMPORT_SOURCE: ${PROWLARR_IMPORT_SOURCE:-prowlarr-sync}
 
   dh-tmsd:
-    profiles: [dhtms]
     image: ghcr.io/spencernorton/dh-waypoint-tms:${DH_WAYPOINT_VERSION:-v6.0.0}
     container_name: dh-waypoint-tmsd
     init: true

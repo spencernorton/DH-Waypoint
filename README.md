@@ -82,8 +82,9 @@ docker compose up -d
 docker compose exec dh-waypoint dh-waypoint doctor
 ```
 
-This runs the published `ghcr.io/spencernorton/dh-waypoint` image (pin a
-release with `DH_WAYPOINT_VERSION`) and PostgreSQL 16, with HTTP on port 3333
+This runs the published `ghcr.io/spencernorton/dh-waypoint` image, the companion
+`ghcr.io/spencernorton/dh-waypoint-tms` (`dh-tmsd`) Rust search sidecar (pin a
+release with `DH_WAYPOINT_VERSION`), and PostgreSQL 16, with HTTP on port 3333
 and the peer protocol on 3334 TCP and UDP. Add `http://<host>:3333/torznab/`
 as a Torznab indexer in Prowlarr or each \*arr ([per-app guides](docs/integrations/prowlarr.md)),
 and point their webhooks at `http://<host>:3333/evidence/arr/<instance>` with
@@ -97,7 +98,7 @@ another Compose project, set `TORZNAB_API_KEY` and `HTTP_SERVER_API_KEY`, then
 `examples/docker-compose.public.yml` builds the image from your checkout and
 runs in `full` mode; [the quickstart](docs/quickstart.md) covers both stacks.
 
-The published image is `linux/amd64` only, and there is no browser interface,
+The published `dh-waypoint` and `dh-waypoint-tms` images are multi-arch (`linux/amd64` and `linux/arm64`), and there is no browser interface,
 account system or hosted site here. The optional plugin services build from
 your checkout when their Compose profile is on; they have no published images.
 
@@ -110,6 +111,7 @@ Migrating to [ParadeDB (`paradedb/paradedb:0.26.6-pg18`)](docs/paradedb-bm25.md)
 ## Documentation
 
 - [Documentation index](docs/index.md): every guide in one place
+- [Upgrading to v6.0](docs/migration-v6.md): fail-closed upgrade guard, zero-manual-step `v5.12`–`v5.15` upgrade, and default-on `dh-tmsd` search sidecar
 - [ParadeDB BM25 search & optional PG 16 → PG 18 migration](docs/paradedb-bm25.md): why to migrate, step-by-step cutover, rollback, and measured timings
 - [Quickstart](docs/quickstart.md) and [configuration](docs/configuration.md)
 - [API guide](docs/api-guide.md), with [Torznab](docs/reference/torznab-api.md), [GraphQL](docs/reference/graphql-api.md), [metrics](docs/reference/metrics.md) and [CLI](docs/reference/cli.md) references
@@ -129,6 +131,7 @@ Migrating to [ParadeDB (`paradedb/paradedb:0.26.6-pg18`)](docs/paradedb-bm25.md)
 | `dh-waypoint-postgres` volume | The database: catalogue, evidence ledger, queues and processor state |
 | `dh-waypoint-config` volume, `/var/lib/dh-waypoint/config/bitmagnet` | Optional `config.yml` and `classifier.yml` |
 | `dh-waypoint-data` volume, `/var/lib/dh-waypoint/data/bitmagnet` | Rotated log files, when file logging is enabled |
+| `dh-waypoint-tms-db` & `dh-waypoint-tms-wal` volumes | Compact mmap search index and WALs for the default-on `dh-tmsd` sidecar (rebuilt automatically from PostgreSQL if empty) |
 | `./plugins`, read-only | The plugin files that register processors |
 
 The crawler joins the public DHT and connects to peers, which see this host's

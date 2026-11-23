@@ -68,6 +68,11 @@ func (a *API) handleV2Search(c *gin.Context) {
 		c.JSON(400, gin.H{"error": "q must contain 3-4096 valid UTF-8 characters/bytes"})
 		return
 	}
+	if text != "" && c.Query("after") == "" && c.Query("hash") == "" {
+		if a.tryHandleV2SearchDHTMS(c, text, limit) {
+			return
+		}
+	}
 	// With a substring filter, order by an expression that evaluates to the
 	// same bytes as info_hash. The plain column order lets a generic plan
 	// walk torrents_pkey expecting the ILIKE filter to match early; for

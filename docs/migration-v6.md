@@ -1,9 +1,10 @@
 # Upgrading to DH-Waypoint 6.0
 
-Version 6.0 is a major release of the Go backend built around a leaner codebase
-(`-103K+` lines of removed legacy/dead/orphaned code), non-root container
-execution (`UID 1000:1000`), PostgreSQL 16 & 18 support, and a fail-closed
-pre-flight upgrade guard.
+Version 6.0 is a major release pairing a leaner, faster Go backend (`-103K+`
+lines of removed legacy/dead/orphaned code, zero-alloc lexer, gated debug SQL
+logging, batched persistence locking) with the default-on **`dh-tmsd`** Rust
+search and serving sidecar, non-root container execution (`UID 1000:1000`),
+PostgreSQL 16 & 18 support, and a fail-closed pre-flight upgrade guard.
 
 ## Who needs to take action?
 
@@ -87,6 +88,10 @@ lock), `v6.0.0` inspects the database strictly read-only:
 
 5. Once started, `schema_major = 6` and `v6_upgrade_receipt` are recorded in
    `key_values`; you can remove `UPGRADE_CONFIRM_V6_BACKUP` from `.env`.
+   The companion `dh-tmsd` service boots automatically on its fresh empty
+   volume (failing closed back to PostgreSQL until the initial snapshot finishes)
+   and `dhtms_sync` builds and maintains its search index automatically with
+   zero manual steps. To run PostgreSQL-only, set `DH_TMS_READ_MODE=off`.
 
 ## Rollback
 
