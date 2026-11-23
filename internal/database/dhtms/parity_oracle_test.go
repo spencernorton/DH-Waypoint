@@ -147,7 +147,7 @@ func startTestDaemon(t *testing.T) (*Client, string) {
 
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		if h, err := cli.Health(context.Background()); err == nil && h.Status == "ok" {
+		if h, err := cli.Health(context.Background()); err == nil && h.Status != "" {
 			return cli, ep
 		}
 		time.Sleep(20 * time.Millisecond)

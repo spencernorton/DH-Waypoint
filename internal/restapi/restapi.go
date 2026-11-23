@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/spencernorton/DH-Waypoint/internal/database/dhtms"
 	"github.com/spencernorton/DH-Waypoint/internal/database/query"
 	"github.com/spencernorton/DH-Waypoint/internal/database/search"
 	"github.com/spencernorton/DH-Waypoint/internal/httpserver"
@@ -24,6 +25,7 @@ import (
 	"github.com/spencernorton/DH-Waypoint/internal/leanmode"
 	"github.com/spencernorton/DH-Waypoint/internal/model"
 	"github.com/spencernorton/DH-Waypoint/internal/protocol"
+	"github.com/spencernorton/DH-Waypoint/internal/serving"
 	"go.uber.org/zap"
 )
 
@@ -34,8 +36,12 @@ var openAPISpec []byte
 var openAPIV2Spec []byte
 
 type API struct {
-	search lazy.Lazy[search.ServingSearch]
-	logger *zap.SugaredLogger
+	search        lazy.Lazy[search.ServingSearch]
+	logger        *zap.SugaredLogger
+	dhtms         *dhtms.Client
+	servingPolicy *serving.Policy
+	dhtmsMetrics  *dhtms.Metrics
+	leanStore     *leanmode.Store
 }
 
 func New(s lazy.Lazy[search.ServingSearch], logger *zap.SugaredLogger) *API {
@@ -408,6 +414,9 @@ func (a *API) fail(c *gin.Context, err error) {
 }
 
 func (a *API) handleSearch(c *gin.Context) {
+	if a.tryHandleV1SearchDHTMS(c) {
+		return
+	}
 	result, meta, ok := a.runSearch(c)
 	if !ok {
 		return

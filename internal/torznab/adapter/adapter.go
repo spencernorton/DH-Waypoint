@@ -4,9 +4,12 @@ import (
 	"context"
 	"time"
 
+	"github.com/spencernorton/DH-Waypoint/internal/database/dhtms"
 	"github.com/spencernorton/DH-Waypoint/internal/database/query"
 	"github.com/spencernorton/DH-Waypoint/internal/database/search"
+	"github.com/spencernorton/DH-Waypoint/internal/leanmode"
 	"github.com/spencernorton/DH-Waypoint/internal/model"
+	"github.com/spencernorton/DH-Waypoint/internal/serving"
 	"github.com/spencernorton/DH-Waypoint/internal/torznab"
 )
 
@@ -175,6 +178,10 @@ type Adapter struct {
 	verdictsMetrics VerdictsMetrics
 	freshness       FreshnessConfig
 	reranker        Reranker
+	dhtms           *dhtms.Client
+	servingPolicy   *serving.Policy
+	dhtmsMetrics    *dhtms.Metrics
+	leanStore       *leanmode.Store
 	// now is injected for deterministic staleness tests; production
 	// callers use the zero value, which falls back to time.Now.
 	now func() time.Time
@@ -206,6 +213,11 @@ func (a Adapter) Search(ctx context.Context, req torznab.SearchRequest) (torznab
 	options = append(options, reqOptions...)
 
 	limit, baseOffset := requestPagination(req)
+	if a.canServeFromDHTMS(req) {
+		if res, ok := a.trySearchDHTMS(ctx, req, identifiers, limit, baseOffset); ok {
+			return torrentContentResultToTorznabResult(req, res, a.freshness.AuthoritativeZeroOnly), nil
+		}
+	}
 	hasPostFilters := a.liveness != nil || a.verdicts != nil || !a.freshness.IsZero()
 	fetchFilteredPage := func(pageOffset uint) (search.TorrentContentResult, int, error) {
 		pageReq := req

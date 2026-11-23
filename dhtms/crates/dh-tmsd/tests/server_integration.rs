@@ -327,11 +327,12 @@ fn empty_volume_boot_ndjson_generation_build_and_hot_reload() {
         std::thread::sleep(Duration::from_millis(10));
     }
 
-    // 1. Empty volume health & search return cleanly with 0 docs
+    // 1. Empty volume health is 200 OK (lease_active=false) and reads fail closed (503) until built
     let (st, h0) = unix_req(&sock_path, "GET", "/v1/health", None, None);
     assert_eq!(st, 200);
     assert_eq!(h0["generation_id"], 0);
     assert_eq!(h0["num_docs"], 0);
+    assert_eq!(h0["lease_active"], false);
 
     let (st, s0) = unix_req(
         &sock_path,
@@ -340,8 +341,8 @@ fn empty_volume_boot_ndjson_generation_build_and_hot_reload() {
         Some(r#"{"query":"horizon","tier":"base"}"#),
         Some(tok),
     );
-    assert_eq!(st, 200);
-    assert_eq!(s0["docs"].as_array().unwrap().len(), 0);
+    assert_eq!(st, 503);
+    assert_eq!(s0["code"], "lease_expired");
 
     // 2. Unauthenticated /v1/generation/build rejected immediately with 401
     let (st, _) = unix_req(&sock_path, "POST", "/v1/generation/build", Some(""), None);

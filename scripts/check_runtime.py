@@ -89,13 +89,15 @@ def qualify(image, evidence):
         if app["image"] != expected_image:
             raise AssertionError(f"docker-compose.yml default image {app['image']!r} disagrees with VERSION ({expected_image!r})")
         app["image"] = image
+        if isinstance(app.get("depends_on"), dict):
+            app["depends_on"].pop("dh-tmsd", None)
         app["command"] = ["worker", "run", "--keys", "http_server", "--keys", "queue_server", "--keys", "processors"]
         app["ports"] = [{"target": 3333, "published": "0", "host_ip": "127.0.0.1"}]
         app["environment"].update({"PROCESSING_MODE": "basic", "CSAM_BLOCKLIST_ENABLED": "false",
                                    "CSAM_BLOCKLIST_EXPORT_ENABLED": "false", "TMDB_API_KEY": "",
                                    "TORZNAB_API_KEY": "ci-only-key", "EVIDENCE_WEBHOOK_SECRET": "",
                                    "CONTENT_FILTER_ENABLED": "false", "RETENTION_ENABLED": "false",
-                                   "TRACKER_ENABLED": "false", "PROCESSORS_ADMIN_TOKEN": "", "LOG_LEVEL": "info"})
+                                   "TRACKER_ENABLED": "false", "PROCESSORS_ADMIN_TOKEN": "", "DH_TMS_READ_MODE": "off", "LOG_LEVEL": "info"})
         for mount in app["volumes"]:
             if mount["target"] == "/plugins":
                 mount["source"] = str(plugins)

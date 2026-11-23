@@ -179,11 +179,21 @@ jobs:
           done
       - name: Prove import, processing, public search and restart persistence
         run: python3 scripts/check_runtime.py --image dh-waypoint:ci --evidence out/runtime
-      - name: Prove v5.15 -> v6.0 hard-stop, automatic upgrade & downgrade refusal
+      - name: Build dh-tmsd companion container for 3-service Compose drill
+        env:
+          BUILD_SOURCE: https://github.com/${{ github.repository }}
+        run: |
+          VERSION="v$(cat VERSION)"
+          COMMIT=$(git rev-parse HEAD)
+          BUILD_DATE=$(git show -s --format=%cI HEAD)
+          docker build --platform linux/amd64 -f dhtms/Dockerfile             --build-arg VERSION="$VERSION" --build-arg COMMIT="$COMMIT"             --build-arg BUILD_DATE="$BUILD_DATE" --build-arg SOURCE="$BUILD_SOURCE"             --tag dh-waypoint-tms:ci dhtms
+          test "$(docker image inspect dh-waypoint-tms:ci --format '{{.Config.User}}')" = '1000:1000'
+      - name: Prove v5.15 -> v6.0 hard-stop, automatic upgrade, live dh-tmsd serving & downgrade refusal
         run: |
           python3 scripts/test_v6_upgrade_drill.py \
             --v5-image ghcr.io/spencernorton/dh-waypoint:v5.15.0 \
             --v6-image dh-waypoint:ci \
+            --tms-image dh-waypoint-tms:ci \
             --pg-image postgres:16-alpine
           python3 scripts/test_v6_upgrade_drill.py \
             --v5-image ghcr.io/spencernorton/dh-waypoint:v5.15.0 \

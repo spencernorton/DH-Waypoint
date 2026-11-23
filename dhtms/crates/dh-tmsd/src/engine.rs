@@ -1183,10 +1183,16 @@ impl EngineHost {
         initial_lease_ttl_ms: u64,
         allow_clock_override: bool,
     ) -> Result<Self, DaemonError> {
-        if !db_root.join("CURRENT.json").exists() {
+        let initialized_empty = !db_root.join("CURRENT.json").exists();
+        if initialized_empty {
             build_empty_generation(db_root)?;
         }
         let mut eng = DaemonEngine::open(db_root, wal_dir, initial_pg_lsn, initial_lease_ttl_ms)?;
+        if initialized_empty || eng.generation_id == 0 {
+            // Unbootstrapped generation 0 must fail closed on data reads until the sync worker
+            // completes its initial /v1/generation/build, while /v1/health stays 200 OK.
+            eng.policy.lease().expire_now();
+        }
         eng.allow_clock_override = allow_clock_override;
         Ok(Self {
             engine: ArcSwap::from_pointee(eng),
