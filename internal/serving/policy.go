@@ -300,6 +300,41 @@ func (p *Policy) RequiresPublicationReview() bool {
 
 // PublicationGateCondition returns the positive publication-review semi-join
 // clause for table when required publication review is active.
+// RequiredProcessor returns the configured publication reviewer processor ID, or "".
+func (p *Policy) RequiredProcessor() string {
+	if p == nil {
+		return ""
+	}
+	return p.requiredProcessor
+}
+
+// PublicationApprovedSQL returns a correlated EXISTS predicate for table.info_hash
+// matching PublicationGateCondition. Suitable for SELECT-list evaluation on small
+// or filtered batches without forcing PostgreSQL to materialize an unhashed
+// semi-join SubPlan over all approved reviews on every row.
+func (p *Policy) PublicationApprovedSQL(table string) (clause.Expr, bool) {
+	if !p.RequiresPublicationReview() {
+		return clause.Expr{}, false
+	}
+	validateServingTable(table)
+	root := table + ".info_hash"
+	return clause.Expr{
+		SQL: `EXISTS (
+ SELECT 1 FROM processor_publication_reviews review
+ JOIN processor_publication_sources reviewed_t ON reviewed_t.info_hash=review.info_hash
+ JOIN processor_registry reviewer ON reviewer.id=review.processor_id
+ WHERE review.info_hash=` + root + ` AND review.processor_id=? AND review.approved
+ AND review.policy_contract=?
+ AND review.source_revision=reviewed_t.revision
+ AND reviewer.mode='apply' AND reviewer.state='active'
+ AND reviewer.execution_generation=review.execution_generation
+ AND reviewer.manifest->'processor'=review.processor_identity
+ AND review.processor_identity->>'artifact_digest'=?
+ AND jsonb_exists(reviewer.manifest->'capabilities','policy'))`,
+		Vars: []any{p.requiredProcessor, PublicationReviewPolicy, p.requiredArtifact},
+	}, true
+}
+
 func (p *Policy) PublicationGateCondition(table string) (clause.Expr, bool) {
 	if !p.RequiresPublicationReview() {
 		return clause.Expr{}, false

@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## 6.0.2 — 2026-11-23
+
+High-selectivity serving-gate snapshot exports, correlated publication checks, and zero-noise incremental outbox syncing for `dh-tmsd`.
+
+### Fixed
+
+- **Drive gated `dh-tmsd` snapshot exports from active serving gates (`internal/serving/policy.go`, `internal/database/dhtms/sync.go`).** When `SERVING_REQUIRED_PAYLOAD_VERIFIER_ARTIFACT_DIGEST` or `SERVING_REQUIRED_PROCESSOR` is enabled, `FullBuild` now drives its PostgreSQL snapshot query from `PayloadGateCondition` or `PublicationGateCondition` instead of scanning tens of millions of unverified backlog torrents, cutting initial build time on `30M+` gated catalogues from hours/timeouts to seconds while preserving automatic trigram indexing (`DH_TMS_INDEX_TRIGRAMS=auto`) for sub-millisecond REST v2 searches.
+- **Correlated `PublicationApprovedSQL` & non-nested-loop ungated exports (`internal/serving/policy.go`, `internal/database/dhtms/sync.go`).** Evaluates `pub_ok` via correlated `EXISTS` instead of an unhashed `IN (SELECT ...)` `SubPlan` over all approved reviews, and uses `SELECT DISTINCT ON (info_hash)` on ungated full-catalogue exports so PostgreSQL streams sequentially instead of probing `torrent_contents` per row.
+- **Zero-noise gated outbox sync & `processor_registry` change detection (`internal/database/dhtms/sync.go`).** Checks local `dh-tmsd` hash membership before querying PostgreSQL so unapproved raw DHT crawl inserts incur zero PostgreSQL export queries and zero L0 writes under active serving gates, live-ingests newly approved/verified torrents into L0 immediately on governance triggers, and automatically rebuilds when `processor_registry` `execution_generation`, `mode`, `state`, or `artifact_digest` changes.
+
 ## 6.0.1 — 2026-11-23
 
 Large-catalogue (`30M+` torrents) scaling and live-crawl hardening for the `dh-tmsd` search sidecar and PostgreSQL sync worker.
