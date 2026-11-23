@@ -178,12 +178,13 @@ func TestEnvBinding_EventPruneRetentions(t *testing.T) {
 		"EVENTPRUNE_APPLICATION_RESULTS_RETENTION": "1440h",
 		"EVENTPRUNE_BATCH_SIZE":                    "100",
 		"EVENTPRUNE_INTERVAL":                      "6h",
+		"EVENTPRUNE_DHTMS_OUTBOX_RETENTION":        "12h",
 	})
 	cfg, ok := resolved.(eventprune.Config)
 	if !ok {
 		t.Fatalf("resolved value is %T, want eventprune.Config", resolved)
 	}
-	want := eventprune.Config{Interval: 6 * time.Hour, BatchSize: 100, FeedbackRetention: 48 * time.Hour, VerdictEventRetention: 720 * time.Hour, ApplicationResultsRetention: 1440 * time.Hour}
+	want := eventprune.Config{Interval: 6 * time.Hour, BatchSize: 100, FeedbackRetention: 48 * time.Hour, VerdictEventRetention: 720 * time.Hour, ApplicationResultsRetention: 1440 * time.Hour, DHTMSOutboxRetention: 12 * time.Hour}
 	if cfg != want {
 		t.Fatalf("EVENTPRUNE_* did not bind: got %+v, want %+v", cfg, want)
 	}

@@ -202,7 +202,7 @@ func TestV6PreFlightStateMachineMatrixPostgres(t *testing.T) {
 	// Non-empty v6 down migration refuses destructive downgrade.
 	_, err = db.ExecContext(ctx, `INSERT INTO torrents (info_hash, name, size, private, created_at, updated_at) VALUES (decode('a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1','hex'), 'fixture', 100, false, now(), now())`)
 	require.NoError(t, err)
-	err = m.Down(ctx)
+	err = m.DownTo(ctx, migrations.MaxV5SchemaVersion)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "refusing destructive v6 -> v5")
 

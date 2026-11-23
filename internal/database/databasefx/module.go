@@ -7,6 +7,7 @@ import (
 	"github.com/spencernorton/DH-Waypoint/internal/database"
 	"github.com/spencernorton/DH-Waypoint/internal/database/cache"
 	"github.com/spencernorton/DH-Waypoint/internal/database/dao"
+	"github.com/spencernorton/DH-Waypoint/internal/database/dhtms"
 	"github.com/spencernorton/DH-Waypoint/internal/database/healthcheck"
 	"github.com/spencernorton/DH-Waypoint/internal/database/migrations"
 	"github.com/spencernorton/DH-Waypoint/internal/database/pgstats/pgstatsfx"
@@ -42,6 +43,15 @@ func New() fx.Option {
 			migrations.New,
 			postgres.New,
 			search.New,
+			dhtms.ConfigFromEnv,
+			dhtms.NewMetrics,
+			func(cfg dhtms.Config) (*dhtms.Client, error) {
+				if !cfg.Enabled() {
+					return nil, nil
+				}
+				return dhtms.NewClient(cfg)
+			},
+			dhtms.NewSyncWorker,
 		),
 		fx.Provide(fx.Annotated{
 			Group:  "http_server_options",
@@ -54,6 +64,10 @@ func New() fx.Option {
 		fx.Provide(fx.Annotated{
 			Group:  "prometheus_collectors,flatten",
 			Target: search.PrometheusCollectors,
+		}),
+		fx.Provide(fx.Annotated{
+			Group:  "prometheus_collectors,flatten",
+			Target: func(m *dhtms.Metrics) []prometheus.Collector { return m.Collectors() },
 		}),
 		fx.Decorate(
 			cache.NewDecorator,

@@ -328,3 +328,83 @@ func (e *APIError) Error() string {
 	}
 	return fmt.Sprintf("dh-tmsd http %d: %s", e.StatusCode, e.Message)
 }
+
+// BuildHeaderLine is the leading NDJSON record streamed to POST /v1/generation/build.
+type BuildHeaderLine struct {
+	Kind       string `json:"kind"`
+	PGLSN      uint64 `json:"pg_lsn"`
+	LeaseTTLMS uint64 `json:"lease_ttl_ms"`
+	PGLSNText  string `json:"pg_lsn_text,omitempty"`
+}
+
+// BuildCatalogLine is a content catalog NDJSON record streamed to POST /v1/generation/build.
+type BuildCatalogLine struct {
+	Kind           string      `json:"kind"`
+	EntityID       uint32      `json:"entity_id"`
+	ContentType    uint8       `json:"content_type"`
+	Source         string      `json:"source"`
+	ID             string      `json:"id"`
+	Title          string      `json:"title"`
+	OriginalTitle  string      `json:"original_title,omitempty"`
+	Year           uint16      `json:"year,omitempty"`
+	Adult          bool        `json:"adult,omitempty"`
+	AltIdentifiers [][2]string `json:"alt_identifiers,omitempty"`
+}
+
+// BuildFileInput is a single file entry inside BuildDocLine.
+type BuildFileInput struct {
+	Path      string `json:"path"`
+	Size      uint64 `json:"size,omitempty"`
+	Extension string `json:"extension,omitempty"`
+}
+
+// BuildDocLine is a torrent document NDJSON record streamed to POST /v1/generation/build.
+type BuildDocLine struct {
+	Kind                string           `json:"kind"`
+	InfoHashV1          string           `json:"info_hash_v1,omitempty"`
+	InfoHashV2          string           `json:"info_hash_v2,omitempty"`
+	Name                string           `json:"name"`
+	SizeBytes           uint64           `json:"size_bytes"`
+	ContentType         uint8            `json:"content_type"`
+	EntityID            uint32           `json:"entity_id,omitempty"`
+	Year                uint16           `json:"year,omitempty"`
+	PublishedEpoch      uint32           `json:"published_epoch"`
+	CreatedEpoch        uint32           `json:"created_epoch"`
+	Resolution          uint8            `json:"resolution,omitempty"`
+	Files               []BuildFileInput `json:"files,omitempty"`
+	IsPrivate           bool             `json:"is_private,omitempty"`
+	Quarantined         bool             `json:"quarantined,omitempty"`
+	PrivacyTainted      bool             `json:"privacy_tainted,omitempty"`
+	Excluded            bool             `json:"excluded,omitempty"`
+	Held                bool             `json:"held,omitempty"`
+	AuthoritativePolicy bool             `json:"authoritative_policy,omitempty"`
+	Adult               bool             `json:"adult,omitempty"`
+	NameBlocked         bool             `json:"name_blocked,omitempty"`
+	PubApproved         bool             `json:"pub_approved,omitempty"`
+	PayloadExpiresEpoch uint32           `json:"payload_expires_epoch,omitempty"`
+	Seeders             int32            `json:"seeders"`
+	Leechers            int32            `json:"leechers"`
+	CheckedEpochMin     uint32           `json:"checked_epoch_min,omitempty"`
+}
+
+// BuildGenerationResponse mirrors POST /v1/generation/build.
+type BuildGenerationResponse struct {
+	OK           bool   `json:"ok"`
+	GenerationID uint64 `json:"generation_id"`
+	NumDocs      int    `json:"num_docs"`
+	PGLSN        uint64 `json:"pg_lsn"`
+}
+
+// ReloadRequest mirrors POST /v1/reload.
+type ReloadRequest struct {
+	PGLSN      *uint64 `json:"pg_lsn,omitempty"`
+	LeaseTTLMS uint64  `json:"lease_ttl_ms,omitempty"`
+}
+
+// ReloadResponse mirrors POST /v1/reload.
+type ReloadResponse struct {
+	OK           bool   `json:"ok"`
+	GenerationID uint64 `json:"generation_id"`
+	NumDocs      int    `json:"num_docs"`
+	PGLSN        uint64 `json:"pg_lsn"`
+}

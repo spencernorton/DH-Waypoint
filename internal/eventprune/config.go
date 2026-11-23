@@ -29,6 +29,9 @@ type Config struct {
 	// processor_applications.results are kept before compacting results to '[]'
 	// while preserving revision columns for queue idempotency.
 	ApplicationResultsRetention time.Duration
+	// DHTMSOutboxRetention bounds dhtms_outbox rows on PostgreSQL-only installs
+	// where no dh-tmsd sync worker drains the outbox.
+	DHTMSOutboxRetention time.Duration
 }
 
 func NewDefaultConfig() Config {
@@ -39,6 +42,7 @@ func NewDefaultConfig() Config {
 		QBStateRetention:            90 * 24 * time.Hour,
 		VerdictEventRetention:       180 * 24 * time.Hour,
 		ApplicationResultsRetention: 90 * 24 * time.Hour,
+		DHTMSOutboxRetention:        24 * time.Hour,
 	}
 }
 
@@ -48,10 +52,11 @@ const (
 	minFeedbackRetention = 24 * time.Hour
 	// The availability policy reads up to a week of qBittorrent history.
 	minHistoryRetention = 30 * 24 * time.Hour
+	minOutboxRetention  = time.Hour
 )
 
 func (c Config) enabled() bool {
-	return c.FeedbackRetention > 0 || c.QBStateRetention > 0 || c.VerdictEventRetention > 0 || c.ApplicationResultsRetention > 0
+	return c.FeedbackRetention > 0 || c.QBStateRetention > 0 || c.VerdictEventRetention > 0 || c.ApplicationResultsRetention > 0 || c.DHTMSOutboxRetention > 0
 }
 
 func (c Config) Validate() error {
@@ -65,6 +70,9 @@ func (c Config) Validate() error {
 		(c.VerdictEventRetention != 0 && c.VerdictEventRetention < minHistoryRetention) ||
 		(c.ApplicationResultsRetention != 0 && c.ApplicationResultsRetention < minHistoryRetention) {
 		return errors.New("eventprune: qb_state_retention, verdict_event_retention and application_results_retention must be 0 (off) or at least 720h")
+	}
+	if c.DHTMSOutboxRetention != 0 && c.DHTMSOutboxRetention < minOutboxRetention {
+		return errors.New("eventprune: dhtms_outbox_retention must be 0 (off) or at least 1h")
 	}
 	return nil
 }

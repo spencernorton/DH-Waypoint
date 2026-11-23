@@ -30,10 +30,13 @@ const maxResponseBytes = 32 * 1024 * 1024
 
 // Client speaks HTTP/1.1 JSON over a local Unix domain socket or loopback HTTP endpoint to dh-tmsd.
 type Client struct {
-	httpClient *http.Client
-	transport  *http.Transport
-	baseURL    string
-	authToken  string
+	cfg             Config
+	httpClient      *http.Client
+	streamClient    *http.Client
+	transport       *http.Transport
+	streamTransport *http.Transport
+	baseURL         string
+	authToken       string
 }
 
 // NewClient constructs a Client from Config.
@@ -73,22 +76,46 @@ func NewClient(cfg Config) (*Client, error) {
 		return nil, fmt.Errorf("dhtms: unsupported endpoint scheme in %q", ep)
 	}
 
+	streamTr := &http.Transport{
+		DisableKeepAlives:     true,
+		ResponseHeaderTimeout: 0,
+		DialContext:           tr.DialContext,
+	}
 	return &Client{
+		cfg: cfg,
 		httpClient: &http.Client{
 			Transport: tr,
 			Timeout:   cfg.Timeout,
 		},
-		transport: tr,
-		baseURL:   baseURL,
-		authToken: strings.TrimSpace(cfg.AuthToken),
+		streamClient: &http.Client{
+			Transport: streamTr,
+		},
+		transport:       tr,
+		streamTransport: streamTr,
+		baseURL:         baseURL,
+		authToken:       strings.TrimSpace(cfg.AuthToken),
 	}, nil
 }
 
 // Close releases idle transport connections.
 func (c *Client) Close() {
-	if c != nil && c.transport != nil {
+	if c == nil {
+		return
+	}
+	if c.transport != nil {
 		c.transport.CloseIdleConnections()
 	}
+	if c.streamTransport != nil {
+		c.streamTransport.CloseIdleConnections()
+	}
+}
+
+// Config returns the client's runtime configuration.
+func (c *Client) Config() Config {
+	if c == nil {
+		return DefaultConfig()
+	}
+	return c.cfg
 }
 
 func (c *Client) doJSON(ctx context.Context, method, path string, reqBody any, respBody any) error {
@@ -283,6 +310,64 @@ func (c *Client) SwarmCheckpoint(ctx context.Context) (*SwarmCheckpointResponse,
 func (c *Client) L0Upsert(ctx context.Context, req L0UpsertRequest) (*L0UpsertResponse, error) {
 	var out L0UpsertResponse
 	if err := c.doJSON(ctx, http.MethodPost, "/v1/l0/upsert", req, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// BuildGeneration streams an NDJSON generation payload to POST /v1/generation/build
+// and atomically swaps dh-tmsd onto the newly built generation. Pass contentLen < 0
+// to stream using HTTP/1.1 chunked transfer encoding without buffering in memory.
+func (c *Client) BuildGeneration(ctx context.Context, body io.Reader, contentLen int64) (*BuildGenerationResponse, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/generation/build", body)
+	if err != nil {
+		return nil, fmt.Errorf("dhtms: build request /v1/generation/build: %w", err)
+	}
+	if contentLen >= 0 {
+		req.ContentLength = contentLen
+	}
+	req.Header.Set("Content-Type", "application/x-ndjson")
+	req.Header.Set("Accept", "application/json")
+	if c.authToken != "" {
+		req.Header.Set("X-DHTMS-Token", c.authToken)
+	}
+
+	resp, err := c.streamClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("%w: POST /v1/generation/build: %v", ErrUnavailable, err)
+	}
+	defer resp.Body.Close()
+
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
+	if err != nil {
+		return nil, fmt.Errorf("%w: read /v1/generation/build: %v", ErrUnavailable, err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		apiErr := &APIError{StatusCode: resp.StatusCode}
+		_ = json.Unmarshal(data, apiErr)
+		if apiErr.Message == "" {
+			apiErr.Message = strings.TrimSpace(string(data))
+		}
+		switch resp.StatusCode {
+		case http.StatusUnauthorized:
+			return nil, fmt.Errorf("%w: %v", ErrUnauthorized, apiErr)
+		case http.StatusBadRequest:
+			return nil, fmt.Errorf("%w: %v", ErrBadRequest, apiErr)
+		default:
+			return nil, apiErr
+		}
+	}
+	var out BuildGenerationResponse
+	if err := json.Unmarshal(data, &out); err != nil {
+		return nil, fmt.Errorf("dhtms: decode /v1/generation/build response: %w", err)
+	}
+	return &out, nil
+}
+
+// Reload executes POST /v1/reload to hot-swap dh-tmsd onto the latest CURRENT.json generation.
+func (c *Client) Reload(ctx context.Context, req ReloadRequest) (*ReloadResponse, error) {
+	var out ReloadResponse
+	if err := c.doJSON(ctx, http.MethodPost, "/v1/reload", req, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil

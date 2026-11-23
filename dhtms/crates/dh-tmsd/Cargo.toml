@@ -7,6 +7,8 @@ rust-version.workspace = true
 
 [dependencies]
 ahash.workspace = true
+arc-swap.workspace = true
+parking_lot.workspace = true
 dh-tms-core.workspace = true
 dh-tms-format.workspace = true
 dh-tms-grammar.workspace = true

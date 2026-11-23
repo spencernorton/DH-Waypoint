@@ -7,6 +7,8 @@ on:
       - 'internal/database/dhtms/**'
       - '.github/workflows/dhtms.yml'
       - 'scripts/test_v6_upgrade_drill.py'
+      - 'migrations/**'
+      - 'internal/serving/**'
   push:
     branches: [main]
     paths:
@@ -14,6 +16,8 @@ on:
       - 'internal/database/dhtms/**'
       - '.github/workflows/dhtms.yml'
       - 'scripts/test_v6_upgrade_drill.py'
+      - 'migrations/**'
+      - 'internal/serving/**'
 permissions:
   contents: read
 jobs:
@@ -21,6 +25,20 @@ jobs:
     name: Rust workspace & Go Unix-socket E2E
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres-ci-password
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -53,6 +71,7 @@ jobs:
       - name: Run Go client unit and live dh-tmsd Unix-socket E2E tests
         env:
           DH_TMSD_BIN: ${{ github.workspace }}/dhtms/target/release/dh-tmsd
+          DH_WAYPOINT_TEST_POSTGRES_DSN: postgres://postgres:postgres-ci-password@127.0.0.1:5432/postgres?sslmode=disable
         run: |
           go vet ./internal/database/dhtms/...
           go test -race -count=1 -v ./internal/database/dhtms/...

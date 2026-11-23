@@ -61,6 +61,8 @@ var protectingTables = []string{
 // namelessTables were read column by column and hold no name, path or text
 // copied from them: ids, digests, counters, states and fixed reason codes.
 var namelessTables = []string{
+	// Outbox records only fixed op codes and info_hash so dh-tmsd revokes deleted hashes.
+	"dhtms_outbox",
 	"junkpurge_student_releases",
 	"lean_tombstones",
 	"lean_winners",

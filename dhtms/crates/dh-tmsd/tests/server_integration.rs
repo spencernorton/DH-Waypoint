@@ -1,4 +1,4 @@
-use dh_tmsd::engine::DaemonEngine;
+use dh_tmsd::engine::EngineHost;
 use dh_tmsd::fixture::build_synthetic_fixture;
 use dh_tmsd::http::serve_unix;
 use serde_json::Value;
@@ -59,7 +59,9 @@ fn unix_socket_full_contract_auth_policy_egress_v2_swarm_and_fail_closed_lease()
     let tok = "test-shared-secret-token";
 
     build_synthetic_fixture(&db_root).expect("build fixture");
-    let engine = Arc::new(DaemonEngine::open(&db_root, &wal_dir, 42, 60_000).expect("open engine"));
+    let engine = Arc::new(
+        EngineHost::open_or_init(&db_root, &wal_dir, 42, 60_000, true).expect("open host"),
+    );
     let shutdown = Arc::new(AtomicBool::new(false));
     let sh_srv = Arc::clone(&shutdown);
     let sock_srv = sock_path.clone();
@@ -281,5 +283,148 @@ fn unix_socket_full_contract_auth_policy_egress_v2_swarm_and_fail_closed_lease()
 
     shutdown.store(true, Ordering::Release);
     srv_handle.join().unwrap();
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+fn empty_volume_boot_ndjson_generation_build_and_hot_reload() {
+    let base = std::env::temp_dir().join(format!(
+        "dh_tmsd_empty_build_{}_{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let _ = std::fs::remove_dir_all(&base);
+    let db_root = base.join("db");
+    let wal_dir = base.join("wal");
+    let sock_path = base.join("dh-tmsd.sock");
+    let tok = "build-test-token";
+
+    // Boot directly on an empty directory with NO prior init-fixture!
+    let host = Arc::new(
+        EngineHost::open_or_init(&db_root, &wal_dir, 1, 60_000, false)
+            .expect("empty volume open_or_init must succeed"),
+    );
+    let shutdown = Arc::new(AtomicBool::new(false));
+    let sock_clone = sock_path.clone();
+    let host_clone = Arc::clone(&host);
+    let shut_clone = Arc::clone(&shutdown);
+    let srv = std::thread::spawn(move || {
+        serve_unix(
+            host_clone,
+            &sock_clone,
+            Some(Arc::new(tok.to_string())),
+            shut_clone,
+        )
+        .unwrap();
+    });
+    for _ in 0..100 {
+        if sock_path.exists() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    // 1. Empty volume health & search return cleanly with 0 docs
+    let (st, h0) = unix_req(&sock_path, "GET", "/v1/health", None, None);
+    assert_eq!(st, 200);
+    assert_eq!(h0["generation_id"], 0);
+    assert_eq!(h0["num_docs"], 0);
+
+    let (st, s0) = unix_req(
+        &sock_path,
+        "POST",
+        "/v1/search",
+        Some(r#"{"query":"horizon","tier":"base"}"#),
+        Some(tok),
+    );
+    assert_eq!(st, 200);
+    assert_eq!(s0["docs"].as_array().unwrap().len(), 0);
+
+    // 2. Unauthenticated /v1/generation/build rejected immediately with 401
+    let (st, _) = unix_req(&sock_path, "POST", "/v1/generation/build", Some(""), None);
+    assert_eq!(st, 401);
+
+    // 3. Stream NDJSON generation with >12 files (file #20 token), private doc, and authoritative Go policy flags
+    let mut files_json = Vec::new();
+    for idx in 0..24 {
+        let fname = if idx == 20 {
+            "Bonus/DeepNeedleEpisode20.mkv".to_string()
+        } else {
+            format!("Disc1/Track_{idx:02}.mkv")
+        };
+        files_json.push(format!(
+            r#"{{"path":"{fname}","size":1048576,"extension":"mkv"}}"#
+        ));
+    }
+    let now_s = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as u32;
+    let ndjson = format!(
+        concat!(
+            r#"{{"kind":"header","pg_lsn":42,"lease_ttl_ms":60000,"pg_lsn_text":"0/2A"}}"#,
+            "\n",
+            r#"{{"kind":"catalog","entity_id":1,"content_type":1,"source":"tmdb","id":"550","title":"Horizon Zero","year":2025}}"#,
+            "\n",
+            r#"{{"kind":"doc","info_hash_v1":"1111111111111111111111111111111111111111","name":"Horizon.Zero.2025.2160p.WEB-DL-GRP","content_type":1,"entity_id":1,"year":2025,"published_epoch":{now},"created_epoch":{now},"files":[{files}],"authoritative_policy":true,"pub_approved":true,"payload_expires_epoch":{exp},"seeders":42,"leechers":3}}"#,
+            "\n",
+            r#"{{"kind":"doc","info_hash_v1":"2222222222222222222222222222222222222222","name":"Horizon.Zero.Private.2025.1080p","content_type":1,"entity_id":1,"year":2025,"published_epoch":{now},"created_epoch":{now},"is_private":true,"authoritative_policy":true,"pub_approved":true}}"#,
+            "\n",
+            r#"{{"kind":"doc","info_hash_v1":"3333333333333333333333333333333333333333","name":"Horizon.Zero.Blocked.2025.1080p","content_type":1,"entity_id":1,"year":2025,"published_epoch":{now},"created_epoch":{now},"authoritative_policy":true,"adult":true,"pub_approved":true}}"#,
+            "\n"
+        ),
+        now = now_s,
+        exp = now_s + 3600,
+        files = files_json.join(","),
+    );
+    let (st, built) = unix_req(
+        &sock_path,
+        "POST",
+        "/v1/generation/build",
+        Some(&ndjson),
+        Some(tok),
+    );
+    assert_eq!(st, 200, "build failed: {built}");
+    assert_eq!(built["generation_id"], 1);
+    assert_eq!(built["num_docs"], 3);
+    assert_eq!(built["pg_lsn"], 42);
+
+    // 4. Verify live hot-swapped search: only public non-adult doc returned, and >12 file token matches!
+    let (st, s1) = unix_req(
+        &sock_path,
+        "POST",
+        "/v1/search",
+        Some(r#"{"query":"deepneedleepisode20","tier":"payload"}"#),
+        Some(tok),
+    );
+    assert_eq!(st, 200);
+    let docs = s1["docs"].as_array().unwrap();
+    assert_eq!(
+        docs.len(),
+        1,
+        "expected >12 file token match in payload tier: {s1}"
+    );
+    assert_eq!(
+        docs[0]["info_hash_v1"],
+        "1111111111111111111111111111111111111111"
+    );
+
+    // 5. Verify /v1/reload preserves generation cleanly
+    let (st, rel) = unix_req(
+        &sock_path,
+        "POST",
+        "/v1/reload",
+        Some(r#"{"pg_lsn":43,"lease_ttl_ms":60000}"#),
+        Some(tok),
+    );
+    assert_eq!(st, 200, "reload failed: {rel}");
+    assert_eq!(rel["generation_id"], 1);
+    assert_eq!(rel["pg_lsn"], 43);
+
+    shutdown.store(true, Ordering::Release);
+    srv.join().unwrap();
     let _ = std::fs::remove_dir_all(&base);
 }

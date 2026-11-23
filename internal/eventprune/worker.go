@@ -106,6 +106,7 @@ func (w *pruner) runCycle(ctx context.Context, pool *pgxpool.Pool, now time.Time
 		{"label_evidence", w.cfg.QBStateRetention, w.pruneQBState},
 		{"torrent_verdict_events", w.cfg.VerdictEventRetention, w.pruneVerdictEvents},
 		{"processor_applications", w.cfg.ApplicationResultsRetention, w.pruneApplicationResults},
+		{"dhtms_outbox", w.cfg.DHTMSOutboxRetention, w.pruneDHTMSOutbox},
 	} {
 		if step.keep <= 0 {
 			continue
@@ -238,3 +239,13 @@ SELECT (SELECT count(*) FROM updated), (SELECT count(*) FROM scan), (SELECT info
 	return compacted, true, nil
 }
 
+// pruneDHTMSOutbox bounds dhtms_outbox on installations running without a
+// connected dh-tmsd sync worker.
+func (w *pruner) pruneDHTMSOutbox(ctx context.Context, pool *pgxpool.Pool, cutoff time.Time) (int64, bool, error) {
+	tag, err := pool.Exec(ctx, `DELETE FROM dhtms_outbox
+WHERE seq IN (SELECT seq FROM dhtms_outbox ORDER BY seq LIMIT $2) AND created_at < $1`, cutoff, w.cfg.BatchSize)
+	if err != nil {
+		return 0, false, err
+	}
+	return tag.RowsAffected(), tag.RowsAffected() == int64(w.cfg.BatchSize), nil
+}
