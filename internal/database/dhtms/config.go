@@ -26,6 +26,8 @@ const (
 	defaultSyncInterval    = 2 * time.Second
 	defaultLeaseTTL        = 60 * time.Second
 	defaultRebuildDebounce = 15 * time.Second
+	defaultCompactDocs     = 50_000
+	defaultIndexTrigrams   = "auto"
 )
 
 // Config holds runtime settings for the DH-TMS sidecar client and sync worker.
@@ -38,6 +40,8 @@ type Config struct {
 	SyncInterval     time.Duration
 	LeaseTTL         time.Duration
 	RebuildDebounce  time.Duration
+	CompactDocs      int
+	IndexTrigrams    string
 }
 
 // DefaultConfig returns a disabled client configuration.
@@ -49,6 +53,8 @@ func DefaultConfig() Config {
 		SyncInterval:     defaultSyncInterval,
 		LeaseTTL:         defaultLeaseTTL,
 		RebuildDebounce:  defaultRebuildDebounce,
+		CompactDocs:      defaultCompactDocs,
+		IndexTrigrams:    defaultIndexTrigrams,
 	}
 }
 
@@ -109,6 +115,16 @@ func ConfigFromEnv() (Config, error) {
 		}
 		cfg.RebuildDebounce = time.Duration(ms) * time.Millisecond
 	}
+	if raw := strings.TrimSpace(os.Getenv("DH_TMS_COMPACT_DOCS")); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 0 {
+			return Config{}, fmt.Errorf("invalid DH_TMS_COMPACT_DOCS %q: must be non-negative integer", raw)
+		}
+		cfg.CompactDocs = n
+	}
+	if raw := strings.ToLower(strings.TrimSpace(os.Getenv("DH_TMS_INDEX_TRIGRAMS"))); raw != "" {
+		cfg.IndexTrigrams = raw
+	}
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
 	}
@@ -127,6 +143,14 @@ func (c Config) Validate() error {
 	}
 	if c.ShadowSampleRate < 0 || c.ShadowSampleRate > 1 {
 		return fmt.Errorf("invalid DH-TMS shadow sample rate %v: must be in [0, 1]", c.ShadowSampleRate)
+	}
+	if c.CompactDocs < 0 {
+		return fmt.Errorf("invalid DH-TMS compact docs %d: must be >= 0", c.CompactDocs)
+	}
+	switch strings.ToLower(strings.TrimSpace(c.IndexTrigrams)) {
+	case "", "auto", "true", "false":
+	default:
+		return fmt.Errorf("invalid DH_TMS_INDEX_TRIGRAMS %q: expected auto, true, or false", c.IndexTrigrams)
 	}
 	if c.Mode != ReadModeOff {
 		ep := strings.TrimSpace(c.Endpoint)

@@ -298,7 +298,7 @@ impl NamePolicyMatcher {
                 }
             }
         }
-        let explicit_pair = (matched_porn && matched_xxx) || (matched_porno && matched_xxx);
+        let explicit_pair = (matched_porn || matched_porno) && matched_xxx;
         (count >= 2 && strong) || explicit_pair
     }
 }

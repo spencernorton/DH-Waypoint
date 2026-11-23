@@ -1,9 +1,9 @@
 use crc32fast::Hasher as Crc32;
 use dh_tms_format::{FileHeader, FileKind, FormatError, FORMAT_VERSION, HEADER_LEN};
 use memmap2::MmapRaw;
-use parking_lot::Mutex;
+use parking_lot::{Mutex, RwLock};
 use roaring::RoaringBitmap;
-use std::collections::{BinaryHeap, HashSet};
+use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::fmt;
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{fence, AtomicU32, AtomicU64, Ordering};
 
 const SWARM_WAL_MAGIC: [u8; 4] = *b"SWAL";
+pub const DYNAMIC_L0_CAPACITY: usize = 262_144;
 
 pub const UNKNOWN_COUNT_24: u32 = 0x00FF_FFFF; // 24-bit sentinel distinguishing unknown from authoritative 0
 pub const MAX_COUNT_24: u32 = 0x00FF_FFFE; // 16,777,214 max seeders/leechers
@@ -119,9 +120,11 @@ struct SwarmWriterState {
 pub struct SwarmPlane {
     pub generation_id: u64,
     pub num_docs: usize,
+    pub max_docs: usize,
     raw_mmap: MmapRaw,
     wal_path: PathBuf,
     writer: Mutex<SwarmWriterState>,
+    dynamic: RwLock<HashMap<u32, SwarmReading>>,
     stale_cursor: AtomicU32,
 }
 
@@ -263,6 +266,7 @@ impl SwarmPlane {
         let mut sp = Self {
             generation_id,
             num_docs,
+            max_docs: num_docs.saturating_add(DYNAMIC_L0_CAPACITY),
             raw_mmap,
             wal_path: wal_path.to_path_buf(),
             writer: Mutex::new(SwarmWriterState {
@@ -274,6 +278,7 @@ impl SwarmPlane {
                 next_seq: ckpt_seq + 1,
                 wal_bytes_since_ckpt: 0,
             }),
+            dynamic: RwLock::new(HashMap::new()),
             stale_cursor: AtomicU32::new(0),
         };
 
@@ -306,9 +311,22 @@ impl SwarmPlane {
     #[inline]
     pub fn read(&self, doc_id: u32) -> Result<SwarmReading, SwarmError> {
         if (doc_id as usize) >= self.num_docs {
+            if (doc_id as usize) < self.max_docs {
+                if let Some(r) = self.dynamic.read().get(&doc_id).copied() {
+                    return Ok(r);
+                }
+                return Ok(SwarmReading {
+                    seeders: None,
+                    leechers: None,
+                    peak_seeders: 0,
+                    checked_epoch_min: 0,
+                    tracker_known: false,
+                    tracker_id: 0,
+                });
+            }
             return Err(SwarmError::OutOfRange {
                 doc_id,
-                num_docs: self.num_docs,
+                num_docs: self.max_docs,
             });
         }
         let slot = unsafe { &*self.slot_ptr(doc_id) };
@@ -352,6 +370,35 @@ impl SwarmPlane {
     /// Internal serialized seqlock mutation — called ONLY while holding `self.writer` lock (or during single-threaded replay).
     /// Rejects stale out-of-order scrapes (`checked_epoch_min < prev_checked`) and preserves monotonic `peak_seeders`.
     fn apply_slot_serialized(&self, u: SwarmUpdate) {
+        if (u.doc_id as usize) >= self.num_docs {
+            if (u.doc_id as usize) >= self.max_docs {
+                return;
+            }
+            let mut dyn_map = self.dynamic.write();
+            let prev = dyn_map.get(&u.doc_id).copied();
+            if let Some(p) = prev {
+                if u.checked_epoch_min < p.checked_epoch_min {
+                    return;
+                }
+            }
+            let prev_peak = prev.map(|p| p.peak_seeders).unwrap_or(0);
+            let new_peak = u
+                .seeders
+                .map(|x| prev_peak.max(x.min(u16::MAX as u32) as u16))
+                .unwrap_or(prev_peak);
+            dyn_map.insert(
+                u.doc_id,
+                SwarmReading {
+                    seeders: u.seeders.map(|v| v.min(MAX_COUNT_24)),
+                    leechers: u.leechers.map(|v| v.min(MAX_COUNT_24)),
+                    peak_seeders: new_peak,
+                    checked_epoch_min: u.checked_epoch_min,
+                    tracker_known: u.seeders.is_some(),
+                    tracker_id: u.tracker_id,
+                },
+            );
+            return;
+        }
         let slot = unsafe { &*self.slot_ptr(u.doc_id) };
         let prev_w0 = slot.word0.load(Ordering::Relaxed);
         let prev_w1 = slot.word1.load(Ordering::Relaxed);
@@ -405,10 +452,10 @@ impl SwarmPlane {
             return Ok(0);
         }
         for u in updates {
-            if (u.doc_id as usize) >= self.num_docs {
+            if (u.doc_id as usize) >= self.max_docs {
                 return Err(SwarmError::OutOfRange {
                     doc_id: u.doc_id,
-                    num_docs: self.num_docs,
+                    num_docs: self.max_docs,
                 });
             }
         }
@@ -454,7 +501,7 @@ impl SwarmPlane {
         ws.chk_file.write_all(&hdr.to_bytes())?;
         ws.chk_file.sync_data()?;
 
-        // 3. Truncate WAL cleanly
+        // 3. Truncate WAL cleanly and re-persist any dynamic L0 swarm entries so restarts stay lossless.
         let f = OpenOptions::new().write(true).open(&self.wal_path)?;
         f.set_len(0)?;
         f.sync_data()?;
@@ -463,6 +510,27 @@ impl SwarmPlane {
             .append(true)
             .open(&self.wal_path)?;
         ws.wal_bytes_since_ckpt = 0;
+        let dyn_updates: Vec<SwarmUpdate> = self
+            .dynamic
+            .read()
+            .iter()
+            .map(|(&doc_id, r)| SwarmUpdate {
+                doc_id,
+                seeders: r.seeders,
+                leechers: r.leechers,
+                checked_epoch_min: r.checked_epoch_min,
+                tracker_id: r.tracker_id,
+            })
+            .collect();
+        if !dyn_updates.is_empty() {
+            let seq = ws.next_seq;
+            let frame = encode_swarm_wal_frame(self.generation_id, seq, &dyn_updates);
+            ws.wal_file.write_all(&frame)?;
+            ws.wal_file.flush()?;
+            ws.wal_file.sync_data()?;
+            ws.next_seq += 1;
+            ws.wal_bytes_since_ckpt = frame.len() as u64;
+        }
         Ok(ckpt_seq)
     }
 
@@ -535,7 +603,7 @@ impl SwarmPlane {
                     let l_raw = u32::from_le_bytes(rec[8..12].try_into().unwrap());
                     let checked_epoch_min = u32::from_le_bytes(rec[12..16].try_into().unwrap());
                     let tracker_id = rec[16];
-                    if (doc_id as usize) < self.num_docs {
+                    if (doc_id as usize) < self.max_docs {
                         self.apply_slot_serialized(SwarmUpdate {
                             doc_id,
                             seeders: if s_raw == UNKNOWN_COUNT_24 {

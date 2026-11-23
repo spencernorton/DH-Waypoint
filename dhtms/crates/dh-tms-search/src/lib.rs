@@ -27,7 +27,7 @@ use xxhash_rust::xxh3::xxh3_64_with_seed;
 
 pub const WAND_BLOCK_SIZE: usize = 128;
 pub const DENSE_TERM_DF_THRESHOLD: usize = 50_000;
-const POSTING_FLUSH_THRESHOLD: usize = 45_000_000;
+const POSTING_FLUSH_THRESHOLD: usize = 15_000_000;
 const TERM_FLAG_INLINE_SINGLE: u32 = 1 << 0;
 const FLOAT_BOUND_EPS: f32 = 1e-4;
 
@@ -142,6 +142,7 @@ unsafe impl Pod for BlockMeta {}
 pub enum SearchError {
     Format(FormatError),
     Policy(PolicyError),
+    TrigramsDisabled,
 }
 
 impl std::fmt::Display for SearchError {
@@ -149,6 +150,9 @@ impl std::fmt::Display for SearchError {
         match self {
             Self::Format(e) => write!(f, "search format error: {e}"),
             Self::Policy(e) => write!(f, "search policy error: {e}"),
+            Self::TrigramsDisabled => {
+                write!(f, "trigram substring index is disabled for this generation")
+            }
         }
     }
 }
@@ -1142,9 +1146,9 @@ impl CustomSearchPlane {
 
         // Merge L0 live delta segment (deduplicating superseded base docs!)
         if self.l0.has_entries() {
+            res.retain(|sd| !self.l0.is_superseded(sd.doc_id));
             let l0_hits = self.l0.search_terms(&term_hashes, mode != QueryMode::Or);
             if !l0_hits.is_empty() {
-                res.retain(|sd| !self.l0.is_superseded(sd.doc_id));
                 let mut seen: HashSet<u32> = res.iter().map(|s| s.doc_id).collect();
                 for (doc_id, score) in l0_hits {
                     if seen.insert(doc_id)
@@ -1167,8 +1171,12 @@ impl CustomSearchPlane {
         if mode == QueryMode::Phrase && raw_toks.len() >= 2 {
             let mut filtered = Vec::with_capacity(top_k);
             for sd in res {
-                let name = core.get_name(sd.doc_id)?;
-                let ntoks = tokenize_alnum(name);
+                let name_owned = if let Some(ov) = self.l0.get_doc(sd.doc_id) {
+                    ov.name
+                } else {
+                    core.get_name(sd.doc_id)?.to_owned()
+                };
+                let ntoks = tokenize_alnum(&name_owned);
                 if contains_subslice(&ntoks, &raw_toks) {
                     filtered.push(sd);
                     if filtered.len() >= top_k {
@@ -1688,54 +1696,94 @@ impl CustomSearchPlane {
         let mask = snap.bitmap_for(tier);
         let mut out = Vec::with_capacity(limit);
 
+        let has_l0 = self.l0.has_entries();
+        let l0_recent: Vec<(u32, u32)> = if has_l0 {
+            let mut v = Vec::new();
+            for (d, ep) in self.l0.recent_docs(ct_filter) {
+                if policy.authorize_egress_one(d, tier, now_epoch_sec, now_ms)? {
+                    v.push((d, ep));
+                }
+            }
+            v
+        } else {
+            Vec::new()
+        };
+        let mut l0_idx = 0usize;
+        let need_total = offset.saturating_add(limit);
+
         if let Some(ct) = ct_filter {
             let ci = ct as usize;
             if ci >= NUM_CONTENT_TYPES {
                 return Ok(Vec::new());
             }
             let (start, end) = self.ct_ranges[ci];
-            if start >= end {
-                return Ok(Vec::new());
+            let mut merged: Vec<(u32, u32)> = Vec::with_capacity(need_total.min(1024));
+            if start < end {
+                let mut base_it = mask.range(start..end);
+                while merged.len() < need_total {
+                    let mut next_base: Option<(u32, u32)> = None;
+                    for doc_id in base_it.by_ref() {
+                        if (has_l0 && self.l0.is_superseded(doc_id))
+                            || policy.is_denied_atomic(doc_id)
+                            || (tier == PolicyTier::Payload
+                                && policy.payload_expires_at(doc_id) <= now_epoch_sec)
+                        {
+                            continue;
+                        }
+                        next_base = Some((doc_id, metas[doc_id as usize].published_epoch));
+                        break;
+                    }
+                    let Some((bd, bep)) = next_base else {
+                        break;
+                    };
+                    while l0_idx < l0_recent.len() && merged.len() < need_total {
+                        let (ld, lep) = l0_recent[l0_idx];
+                        if lep > bep || (lep == bep && ld < bd) {
+                            merged.push((ld, lep));
+                            l0_idx += 1;
+                        } else {
+                            break;
+                        }
+                    }
+                    if merged.len() < need_total {
+                        merged.push((bd, bep));
+                    }
+                }
             }
-            let mut skipped = 0usize;
-            for doc_id in mask.range(start..end) {
-                if policy.is_denied_atomic(doc_id)
-                    || (tier == PolicyTier::Payload
-                        && policy.payload_expires_at(doc_id) <= now_epoch_sec)
-                {
-                    continue;
-                }
-                if skipped < offset {
-                    skipped += 1;
-                    continue;
-                }
-                out.push(doc_id);
-                if out.len() >= limit {
-                    break;
-                }
+            while l0_idx < l0_recent.len() && merged.len() < need_total {
+                merged.push(l0_recent[l0_idx]);
+                l0_idx += 1;
             }
+            out.extend(merged.into_iter().skip(offset).take(limit).map(|(d, _)| d));
             policy.filter_egress_docs(&mut out, tier, now_epoch_sec, now_ms)?;
             return Ok(out);
         }
 
-        // Global newest across all 11 content_types: O((offset + limit) log 11) k-way merge!
+        // Global newest across all 11 content_types + L0 stream: O((offset + limit) log 12) k-way merge!
         let mut iters: Vec<_> = (0..NUM_CONTENT_TYPES)
             .map(|ci| {
                 let (s, e) = self.ct_ranges[ci];
                 mask.range(s..e)
             })
             .collect();
+        let l0_stream_idx = NUM_CONTENT_TYPES;
         let mut heap: BinaryHeap<(u32, std::cmp::Reverse<u32>, usize)> =
-            BinaryHeap::with_capacity(NUM_CONTENT_TYPES);
+            BinaryHeap::with_capacity(NUM_CONTENT_TYPES + 1);
         for (ci, it) in iters.iter_mut().enumerate() {
             for d in it.by_ref() {
-                if !policy.is_denied_atomic(d)
+                if (!has_l0 || !self.l0.is_superseded(d))
+                    && !policy.is_denied_atomic(d)
                     && (tier != PolicyTier::Payload || policy.payload_expires_at(d) > now_epoch_sec)
                 {
                     heap.push((metas[d as usize].published_epoch, std::cmp::Reverse(d), ci));
                     break;
                 }
             }
+        }
+        if l0_idx < l0_recent.len() {
+            let (ld, lep) = l0_recent[l0_idx];
+            l0_idx += 1;
+            heap.push((lep, std::cmp::Reverse(ld), l0_stream_idx));
         }
         let mut skipped = 0usize;
         while let Some((_, std::cmp::Reverse(doc_id), ci)) = heap.pop() {
@@ -1747,12 +1795,22 @@ impl CustomSearchPlane {
                     break;
                 }
             }
-            for d in iters[ci].by_ref() {
-                if !policy.is_denied_atomic(d)
-                    && (tier != PolicyTier::Payload || policy.payload_expires_at(d) > now_epoch_sec)
-                {
-                    heap.push((metas[d as usize].published_epoch, std::cmp::Reverse(d), ci));
-                    break;
+            if ci == l0_stream_idx {
+                if l0_idx < l0_recent.len() {
+                    let (ld, lep) = l0_recent[l0_idx];
+                    l0_idx += 1;
+                    heap.push((lep, std::cmp::Reverse(ld), l0_stream_idx));
+                }
+            } else {
+                for d in iters[ci].by_ref() {
+                    if (!has_l0 || !self.l0.is_superseded(d))
+                        && !policy.is_denied_atomic(d)
+                        && (tier != PolicyTier::Payload
+                            || policy.payload_expires_at(d) > now_epoch_sec)
+                    {
+                        heap.push((metas[d as usize].published_epoch, std::cmp::Reverse(d), ci));
+                        break;
+                    }
                 }
             }
         }
@@ -1820,18 +1878,60 @@ impl CustomSearchPlane {
         };
         linked_bm &= mask;
 
+        let has_l0 = self.l0.has_entries();
+        let doc_pub_epoch = |d: u32| -> u32 {
+            if let Some(ov) = self.l0.get_doc(d) {
+                ov.published_epoch
+            } else {
+                metas
+                    .get(d as usize)
+                    .map(|m| m.published_epoch)
+                    .unwrap_or(0)
+            }
+        };
+        let doc_ct_year = |d: u32| -> (u8, u16) {
+            if let Some(ov) = self.l0.get_doc(d) {
+                (ov.content_type, ov.year)
+            } else if let Some(m) = metas.get(d as usize) {
+                (m.content_type, m.year)
+            } else {
+                (CT_UNKNOWN, 0)
+            }
+        };
+
         // Already ordered newest-first within each content_type! Collect and sort by (published_epoch DESC, doc_id ASC)
         let mut linked: Vec<u32> = linked_bm
             .iter()
             .filter(|&d| {
-                !policy.is_denied_atomic(d)
+                (!has_l0 || !self.l0.is_superseded(d))
+                    && !policy.is_denied_atomic(d)
                     && (tier != PolicyTier::Payload || policy.payload_expires_at(d) > now_epoch_sec)
             })
             .collect();
+        if has_l0 && entity_id != 0 {
+            let mut seen_linked: HashSet<u32> = linked.iter().copied().collect();
+            for d in self.l0.lookup_entity(entity_id) {
+                if !seen_linked.insert(d) {
+                    continue;
+                }
+                if !policy.authorize_egress_one(d, tier, now_epoch_sec, now_ms)? {
+                    continue;
+                }
+                if let Some((s, ep_opt)) = season_ep {
+                    let ok = self
+                        .l0
+                        .get_doc(d)
+                        .is_some_and(|ov| l0::doc_matches_episode(&ov.episodes, s, ep_opt));
+                    if !ok {
+                        continue;
+                    }
+                }
+                linked.push(d);
+            }
+        }
         linked.sort_unstable_by(|&a, &b| {
-            metas[b as usize]
-                .published_epoch
-                .cmp(&metas[a as usize].published_epoch)
+            doc_pub_epoch(b)
+                .cmp(&doc_pub_epoch(a))
                 .then_with(|| a.cmp(&b))
         });
         linked.truncate(limit);
@@ -1910,23 +2010,21 @@ impl CustomSearchPlane {
         let mut t1_docs: Vec<u32> = unlinked_cands
             .iter()
             .filter(|&d| {
-                if seen_unlinked.contains(&d)
+                if (has_l0 && self.l0.is_superseded(d))
+                    || seen_unlinked.contains(&d)
                     || policy.is_denied_atomic(d)
                     || (tier == PolicyTier::Payload
                         && policy.payload_expires_at(d) <= now_epoch_sec)
                 {
                     return false;
                 }
-                let m = &metas[d as usize];
-                if ct_filter != CT_UNKNOWN
-                    && m.content_type != ct_filter
-                    && m.content_type != CT_UNKNOWN
-                {
+                let (dct, dyr) = doc_ct_year(d);
+                if ct_filter != CT_UNKNOWN && dct != ct_filter && dct != CT_UNKNOWN {
                     return false;
                 }
                 // Per-candidate year check (ZERO whole-corpus year bitmap unions!)
-                if canonical_year > 0 && m.year > 0 {
-                    let diff = (m.year as i32) - (canonical_year as i32);
+                if canonical_year > 0 && dyr > 0 {
+                    let diff = (dyr as i32) - (canonical_year as i32);
                     if ct_filter == CT_MOVIE && !(-1..=1).contains(&diff) {
                         return false;
                     }
@@ -1937,15 +2035,58 @@ impl CustomSearchPlane {
                 true
             })
             .collect();
+        if has_l0 {
+            let mut seen_t1: HashSet<u32> = t1_docs.iter().copied().collect();
+            let mut l0_cands: Vec<u32> = Vec::new();
+            for &sh in &strict_set {
+                l0_cands.extend(self.l0.lookup_strict_title(sh));
+            }
+            for &fh in &multi_family_set {
+                l0_cands.extend(self.l0.lookup_family(fh));
+            }
+            for d in l0_cands {
+                if seen_unlinked.contains(&d) || !seen_t1.insert(d) {
+                    continue;
+                }
+                let Some(ov) = self.l0.get_doc(d) else {
+                    continue;
+                };
+                if ov.entity_id != 0 {
+                    continue;
+                }
+                if !policy.authorize_egress_one(d, tier, now_epoch_sec, now_ms)? {
+                    continue;
+                }
+                if let Some((s, ep_opt)) = season_ep {
+                    if !l0::doc_matches_episode(&ov.episodes, s, ep_opt) {
+                        continue;
+                    }
+                }
+                if ct_filter != CT_UNKNOWN
+                    && ov.content_type != ct_filter
+                    && ov.content_type != CT_UNKNOWN
+                {
+                    continue;
+                }
+                if canonical_year > 0 && ov.year > 0 {
+                    let diff = (ov.year as i32) - (canonical_year as i32);
+                    if ct_filter == CT_MOVIE && !(-1..=1).contains(&diff) {
+                        continue;
+                    }
+                    if ct_filter == CT_TV_SHOW && diff < -1 {
+                        continue;
+                    }
+                }
+                t1_docs.push(d);
+            }
+        }
         t1_docs.sort_unstable_by(|&a, &b| {
-            let ta = (ct_filter != CT_UNKNOWN && metas[a as usize].content_type == ct_filter) as u8;
-            let tb = (ct_filter != CT_UNKNOWN && metas[b as usize].content_type == ct_filter) as u8;
+            let (cta, _) = doc_ct_year(a);
+            let (ctb, _) = doc_ct_year(b);
+            let ta = (ct_filter != CT_UNKNOWN && cta == ct_filter) as u8;
+            let tb = (ct_filter != CT_UNKNOWN && ctb == ct_filter) as u8;
             tb.cmp(&ta)
-                .then_with(|| {
-                    metas[b as usize]
-                        .published_epoch
-                        .cmp(&metas[a as usize].published_epoch)
-                })
+                .then_with(|| doc_pub_epoch(b).cmp(&doc_pub_epoch(a)))
                 .then_with(|| a.cmp(&b))
         });
 
@@ -1953,10 +2094,16 @@ impl CustomSearchPlane {
             if unlinked.len() >= needed {
                 break;
             }
+            let (_, dyr) = doc_ct_year(d);
             // Refine TV S1-only year rule if needed via fast name parse
-            if ct_filter == CT_TV_SHOW && canonical_year > 0 && metas[d as usize].year > 0 {
-                if let Ok(name) = core.get_name(d) {
-                    let pr = parse_release_name(name);
+            if ct_filter == CT_TV_SHOW && canonical_year > 0 && dyr > 0 {
+                let name_opt = if let Some(ov) = self.l0.get_doc(d) {
+                    Some(ov.name)
+                } else {
+                    core.get_name(d).ok().map(str::to_owned)
+                };
+                if let Some(name) = name_opt {
+                    let pr = parse_release_name(&name);
                     if !unlinked_year_compatible(ct_filter, canonical_year, pr.year, &pr.episodes) {
                         continue;
                     }
@@ -2089,13 +2236,22 @@ impl CustomSearchPlane {
                 .get_bitmap(ep_key_global_any_season(season))?
                 .unwrap_or_default(),
         };
-        if ep_bm.is_empty() {
-            return Ok(Vec::new());
-        }
         // Allow TV_SHOW OR CT_UNKNOWN so unclassified new TV episodes aren't hidden!
         let mut ct_ok = self.facet_ct[CT_TV_SHOW as usize].clone();
         ct_ok |= &self.facet_ct[CT_UNKNOWN as usize];
         ep_bm &= &ct_ok;
+        if self.l0.has_entries() {
+            for d in self.l0.matching_episode_docs(season, episode) {
+                if let Some(ov) = self.l0.get_doc(d) {
+                    if ov.content_type == CT_TV_SHOW || ov.content_type == CT_UNKNOWN {
+                        ep_bm.insert(d);
+                    }
+                }
+            }
+        }
+        if ep_bm.is_empty() {
+            return Ok(Vec::new());
+        }
         self.search_text(
             title,
             QueryMode::And,
@@ -2122,6 +2278,9 @@ impl CustomSearchPlane {
         now_ms: u64,
     ) -> Result<Vec<u32>, SearchError> {
         policy.lease().check(now_ms)?;
+        if self.trigrams.is_empty() && core.num_docs > 0 {
+            return Err(SearchError::TrigramsDisabled);
+        }
         let needle = fold_accents_lowercase(substring);
         if needle.is_empty() || limit == 0 {
             return Ok(Vec::new());
@@ -2193,12 +2352,14 @@ impl CustomSearchPlane {
             }
         }
         recent &= mask;
-        // Exact movie & TV counts (excluding any atomically denied docs!)
+        let has_l0 = self.l0.has_entries();
+        // Exact movie & TV counts (excluding any atomically denied or L0-superseded base docs!)
         let movies = &recent & &self.facet_ct[CT_MOVIE as usize];
         let mut movies_30d = 0u64;
         let mut movies_linked_30d = 0u64;
         for d in movies.iter() {
-            if !policy.is_denied_atomic(d)
+            if (!has_l0 || !self.l0.is_superseded(d))
+                && !policy.is_denied_atomic(d)
                 && (tier != PolicyTier::Payload || policy.payload_expires_at(d) > now_epoch_sec)
             {
                 movies_30d += 1;
@@ -2211,12 +2372,31 @@ impl CustomSearchPlane {
         let mut tv_30d = 0u64;
         let mut tv_linked_30d = 0u64;
         for d in tv.iter() {
-            if !policy.is_denied_atomic(d)
+            if (!has_l0 || !self.l0.is_superseded(d))
+                && !policy.is_denied_atomic(d)
                 && (tier != PolicyTier::Payload || policy.payload_expires_at(d) > now_epoch_sec)
             {
                 tv_30d += 1;
                 if self.facet_linked.contains(d) {
                     tv_linked_30d += 1;
+                }
+            }
+        }
+        if has_l0 {
+            for (d, ct, eid) in self.l0.docs_since(cutoff_sec) {
+                if !policy.authorize_egress_one(d, tier, now_epoch_sec, now_ms)? {
+                    continue;
+                }
+                if ct == CT_MOVIE {
+                    movies_30d += 1;
+                    if eid != 0 {
+                        movies_linked_30d += 1;
+                    }
+                } else if ct == CT_TV_SHOW {
+                    tv_30d += 1;
+                    if eid != 0 {
+                        tv_linked_30d += 1;
+                    }
                 }
             }
         }

@@ -11,12 +11,17 @@ use dh_tms_policy::PolicyState;
 use dh_tms_search::{trigram_key, CustomSearchBuilder};
 use dh_tms_swarm::SwarmPlane;
 use serde::Deserialize;
-use std::io::BufRead;
-use std::path::Path;
+use std::cmp::Ordering;
+use std::collections::BinaryHeap;
+use std::fs::File;
+use std::io::{BufRead, BufReader, BufWriter, Read, Write};
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const MAX_FILE_TOKENS_PER_DOC: usize = 2048;
 const MAX_GENERATIONS_TO_KEEP: usize = 2;
+const DEFAULT_SORT_CHUNK_DOCS: usize = 200_000;
+const DEFAULT_SORT_CHUNK_BYTES: usize = 128 * 1024 * 1024;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct BuildFileInput {
@@ -107,6 +112,10 @@ fn default_neg1() -> i32 {
     -1
 }
 
+fn default_true() -> bool {
+    true
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum NdjsonLine {
@@ -117,6 +126,12 @@ enum NdjsonLine {
         lease_ttl_ms: u64,
         #[serde(default)]
         pg_lsn_text: String,
+        #[serde(default = "default_true")]
+        index_trigrams: bool,
+        #[serde(default)]
+        unique_hashes: bool,
+        #[serde(default)]
+        estimated_docs: usize,
     },
     Catalog(BuildCatalogRecord),
     Doc(BuildDocRecord),
@@ -178,17 +193,386 @@ pub fn build_empty_generation(out_root: &Path) -> Result<CurrentManifest, Format
     Ok(manifest)
 }
 
-/// Build and atomically publish a generation from an NDJSON stream of header, catalog, and doc lines.
+struct ParsedDoc {
+    doc: BuildDocRecord,
+    v1: [u8; 20],
+    has_v1: bool,
+    v2: Option<[u8; 32]>,
+    seq: u64,
+}
+
+impl ParsedDoc {
+    fn est_bytes(&self) -> usize {
+        let fbytes: usize = self
+            .doc
+            .files
+            .iter()
+            .map(|f| 32 + f.path.len() + f.extension.len())
+            .sum();
+        192 + self.doc.name.len() + fbytes
+    }
+
+    fn cmp_physical(&self, other: &Self) -> Ordering {
+        self.doc
+            .content_type
+            .min(11)
+            .cmp(&other.doc.content_type.min(11))
+            .then_with(|| other.doc.published_epoch.cmp(&self.doc.published_epoch))
+            .then_with(|| self.v1.cmp(&other.v1))
+            .then_with(|| self.v2.cmp(&other.v2))
+            .then_with(|| other.seq.cmp(&self.seq))
+    }
+}
+
+fn parse_doc_record(mut d: BuildDocRecord, seq: u64) -> Result<ParsedDoc, FormatError> {
+    let v1_opt = if d.info_hash_v1.is_empty() {
+        None
+    } else {
+        match parse_info_hash_hex(&d.info_hash_v1) {
+            Some(InfoHash::V1(b)) => Some(b),
+            _ => {
+                return Err(FormatError::CorruptPayload(format!(
+                    "invalid info_hash_v1: {}",
+                    d.info_hash_v1
+                )))
+            }
+        }
+    };
+    let v2_opt = if d.info_hash_v2.is_empty() {
+        None
+    } else {
+        match parse_info_hash_hex(&d.info_hash_v2) {
+            Some(InfoHash::V2(b)) => Some(b),
+            _ => {
+                return Err(FormatError::CorruptPayload(format!(
+                    "invalid info_hash_v2: {}",
+                    d.info_hash_v2
+                )))
+            }
+        }
+    };
+    if v1_opt.is_none() && v2_opt.is_none() {
+        return Err(FormatError::CorruptPayload(
+            "doc missing both info_hash_v1 and info_hash_v2".into(),
+        ));
+    }
+    // Release raw hex strings immediately once parsed into fixed-size arrays.
+    d.info_hash_v1 = String::new();
+    d.info_hash_v2 = String::new();
+    Ok(ParsedDoc {
+        doc: d,
+        v1: v1_opt.unwrap_or([0u8; 20]),
+        has_v1: v1_opt.is_some(),
+        v2: v2_opt,
+        seq,
+    })
+}
+
+fn write_u8<W: Write>(w: &mut W, v: u8) -> Result<(), FormatError> {
+    w.write_all(&[v])?;
+    Ok(())
+}
+fn write_u16<W: Write>(w: &mut W, v: u16) -> Result<(), FormatError> {
+    w.write_all(&v.to_le_bytes())?;
+    Ok(())
+}
+fn write_u32<W: Write>(w: &mut W, v: u32) -> Result<(), FormatError> {
+    w.write_all(&v.to_le_bytes())?;
+    Ok(())
+}
+fn write_i32<W: Write>(w: &mut W, v: i32) -> Result<(), FormatError> {
+    w.write_all(&v.to_le_bytes())?;
+    Ok(())
+}
+fn write_u64<W: Write>(w: &mut W, v: u64) -> Result<(), FormatError> {
+    w.write_all(&v.to_le_bytes())?;
+    Ok(())
+}
+fn write_str<W: Write>(w: &mut W, s: &str) -> Result<(), FormatError> {
+    let b = s.as_bytes();
+    write_u32(w, b.len() as u32)?;
+    w.write_all(b)?;
+    Ok(())
+}
+
+fn read_exact_or_eof<R: Read>(r: &mut R, buf: &mut [u8]) -> Result<bool, FormatError> {
+    let mut off = 0usize;
+    while off < buf.len() {
+        let n = r.read(&mut buf[off..])?;
+        if n == 0 {
+            if off == 0 {
+                return Ok(false);
+            }
+            return Err(FormatError::CorruptPayload(
+                "truncated external sort run record".into(),
+            ));
+        }
+        off += n;
+    }
+    Ok(true)
+}
+
+fn read_u8<R: Read>(r: &mut R) -> Result<u8, FormatError> {
+    let mut b = [0u8; 1];
+    r.read_exact(&mut b)?;
+    Ok(b[0])
+}
+fn read_u16<R: Read>(r: &mut R) -> Result<u16, FormatError> {
+    let mut b = [0u8; 2];
+    r.read_exact(&mut b)?;
+    Ok(u16::from_le_bytes(b))
+}
+fn read_u32<R: Read>(r: &mut R) -> Result<u32, FormatError> {
+    let mut b = [0u8; 4];
+    r.read_exact(&mut b)?;
+    Ok(u32::from_le_bytes(b))
+}
+fn read_i32<R: Read>(r: &mut R) -> Result<i32, FormatError> {
+    let mut b = [0u8; 4];
+    r.read_exact(&mut b)?;
+    Ok(i32::from_le_bytes(b))
+}
+fn read_u64<R: Read>(r: &mut R) -> Result<u64, FormatError> {
+    let mut b = [0u8; 8];
+    r.read_exact(&mut b)?;
+    Ok(u64::from_le_bytes(b))
+}
+fn read_str<R: Read>(r: &mut R) -> Result<String, FormatError> {
+    let len = read_u32(r)? as usize;
+    let mut buf = vec![0u8; len];
+    r.read_exact(&mut buf)?;
+    String::from_utf8(buf).map_err(|e| FormatError::CorruptPayload(format!("utf8 sort run: {e}")))
+}
+
+fn write_parsed_doc<W: Write>(w: &mut W, p: &ParsedDoc) -> Result<(), FormatError> {
+    write_u64(w, p.seq)?;
+    let mut flags: u16 = 0;
+    if p.has_v1 {
+        flags |= 1 << 0;
+    }
+    if p.v2.is_some() {
+        flags |= 1 << 1;
+    }
+    if p.doc.is_private {
+        flags |= 1 << 2;
+    }
+    if p.doc.quarantined {
+        flags |= 1 << 3;
+    }
+    if p.doc.privacy_tainted {
+        flags |= 1 << 4;
+    }
+    if p.doc.excluded {
+        flags |= 1 << 5;
+    }
+    if p.doc.held {
+        flags |= 1 << 6;
+    }
+    if p.doc.authoritative_policy {
+        flags |= 1 << 7;
+    }
+    if p.doc.adult {
+        flags |= 1 << 8;
+    }
+    if p.doc.name_blocked {
+        flags |= 1 << 9;
+    }
+    if p.doc.pub_approved {
+        flags |= 1 << 10;
+    }
+    write_u16(w, flags)?;
+    w.write_all(&p.v1)?;
+    if let Some(v2) = p.v2 {
+        w.write_all(&v2)?;
+    }
+    write_u8(w, p.doc.content_type)?;
+    write_u8(w, p.doc.resolution)?;
+    write_u16(w, p.doc.year)?;
+    write_u32(w, p.doc.entity_id)?;
+    write_u32(w, p.doc.published_epoch)?;
+    write_u32(w, p.doc.created_epoch)?;
+    write_u64(w, p.doc.size_bytes)?;
+    write_u32(w, p.doc.payload_expires_epoch)?;
+    write_i32(w, p.doc.seeders)?;
+    write_i32(w, p.doc.leechers)?;
+    write_u32(w, p.doc.checked_epoch_min)?;
+    write_str(w, &p.doc.name)?;
+    write_u32(w, p.doc.files.len() as u32)?;
+    for f in &p.doc.files {
+        write_str(w, &f.path)?;
+        write_u64(w, f.size)?;
+        write_str(w, &f.extension)?;
+    }
+    Ok(())
+}
+
+fn read_parsed_doc<R: Read>(r: &mut R) -> Result<Option<ParsedDoc>, FormatError> {
+    let mut seq_b = [0u8; 8];
+    if !read_exact_or_eof(r, &mut seq_b)? {
+        return Ok(None);
+    }
+    let seq = u64::from_le_bytes(seq_b);
+    let flags = read_u16(r)?;
+    let has_v1 = (flags & (1 << 0)) != 0;
+    let has_v2 = (flags & (1 << 1)) != 0;
+    let mut v1 = [0u8; 20];
+    r.read_exact(&mut v1)?;
+    let v2 = if has_v2 {
+        let mut b = [0u8; 32];
+        r.read_exact(&mut b)?;
+        Some(b)
+    } else {
+        None
+    };
+    let content_type = read_u8(r)?;
+    let resolution = read_u8(r)?;
+    let year = read_u16(r)?;
+    let entity_id = read_u32(r)?;
+    let published_epoch = read_u32(r)?;
+    let created_epoch = read_u32(r)?;
+    let size_bytes = read_u64(r)?;
+    let payload_expires_epoch = read_u32(r)?;
+    let seeders = read_i32(r)?;
+    let leechers = read_i32(r)?;
+    let checked_epoch_min = read_u32(r)?;
+    let name = read_str(r)?;
+    let fcnt = read_u32(r)? as usize;
+    let mut files = Vec::with_capacity(fcnt.min(1024));
+    for _ in 0..fcnt {
+        let path = read_str(r)?;
+        let size = read_u64(r)?;
+        let extension = read_str(r)?;
+        files.push(BuildFileInput {
+            path,
+            size,
+            extension,
+        });
+    }
+    Ok(Some(ParsedDoc {
+        doc: BuildDocRecord {
+            info_hash_v1: String::new(),
+            info_hash_v2: String::new(),
+            name,
+            size_bytes,
+            content_type,
+            entity_id,
+            year,
+            published_epoch,
+            created_epoch,
+            resolution,
+            files,
+            is_private: (flags & (1 << 2)) != 0,
+            quarantined: (flags & (1 << 3)) != 0,
+            privacy_tainted: (flags & (1 << 4)) != 0,
+            excluded: (flags & (1 << 5)) != 0,
+            held: (flags & (1 << 6)) != 0,
+            authoritative_policy: (flags & (1 << 7)) != 0,
+            adult: (flags & (1 << 8)) != 0,
+            name_blocked: (flags & (1 << 9)) != 0,
+            pub_approved: (flags & (1 << 10)) != 0,
+            payload_expires_epoch,
+            seeders,
+            leechers,
+            checked_epoch_min,
+        },
+        v1,
+        has_v1,
+        v2,
+        seq,
+    }))
+}
+
+struct TempRunsGuard {
+    paths: Vec<PathBuf>,
+}
+
+impl Drop for TempRunsGuard {
+    fn drop(&mut self) {
+        for p in &self.paths {
+            let _ = std::fs::remove_file(p);
+        }
+    }
+}
+
+struct MergeEntry {
+    doc: ParsedDoc,
+    run_idx: usize,
+}
+
+impl PartialEq for MergeEntry {
+    fn eq(&self, other: &Self) -> bool {
+        self.doc.cmp_physical(&other.doc) == Ordering::Equal && self.run_idx == other.run_idx
+    }
+}
+impl Eq for MergeEntry {}
+impl PartialOrd for MergeEntry {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl Ord for MergeEntry {
+    fn cmp(&self, other: &Self) -> Ordering {
+        // Min-heap on physical order via BinaryHeap (max-heap): reverse comparator!
+        other
+            .doc
+            .cmp_physical(&self.doc)
+            .then_with(|| other.run_idx.cmp(&self.run_idx))
+    }
+}
+
+fn spill_sort_run(
+    staged_dir: &Path,
+    run_idx: usize,
+    chunk: &mut Vec<ParsedDoc>,
+) -> Result<PathBuf, FormatError> {
+    chunk.sort_unstable_by(|a, b| a.cmp_physical(b));
+    let path = staged_dir.join(format!("_sort_run_{run_idx:05}.bin"));
+    let mut w = BufWriter::with_capacity(4 * 1024 * 1024, File::create(&path)?);
+    for p in chunk.iter() {
+        write_parsed_doc(&mut w, p)?;
+    }
+    w.flush()?;
+    chunk.clear();
+    Ok(path)
+}
+
+/// Build and atomically publish a generation from an NDJSON stream of header, catalog, and doc lines
+/// using bounded-RAM external disk-spilled chunk sorting and streaming posting flushes.
 pub fn build_generation_from_ndjson<R: BufRead>(
     reader: R,
     out_root: &Path,
     next_gen_id: u64,
 ) -> Result<BuildOutcome, FormatError> {
+    build_generation_from_ndjson_with_limits(
+        reader,
+        out_root,
+        next_gen_id,
+        DEFAULT_SORT_CHUNK_DOCS,
+        DEFAULT_SORT_CHUNK_BYTES,
+    )
+}
+
+pub(crate) fn build_generation_from_ndjson_with_limits<R: BufRead>(
+    reader: R,
+    out_root: &Path,
+    next_gen_id: u64,
+    chunk_max_docs: usize,
+    chunk_max_bytes: usize,
+) -> Result<BuildOutcome, FormatError> {
     let mut pg_lsn = 1u64;
     let mut lease_ttl_ms = 60_000u64;
     let mut pg_lsn_text = String::new();
+    let mut index_trigrams = true;
+    let mut unique_hashes = false;
+    let mut estimated_docs = 0usize;
     let mut catalog_recs: Vec<ContentRecord> = Vec::new();
-    let mut docs: Vec<BuildDocRecord> = Vec::new();
+
+    std::fs::create_dir_all(out_root)?;
+    let staged_dir = stage_generation_dir(out_root, next_gen_id)?;
+    let mut temp_runs = TempRunsGuard { paths: Vec::new() };
+    let mut chunk: Vec<ParsedDoc> = Vec::new();
+    let mut chunk_bytes = 0usize;
+    let mut seq = 0u64;
 
     for (line_no, line_res) in reader.lines().enumerate() {
         let line = line_res?;
@@ -204,10 +588,16 @@ pub fn build_generation_from_ndjson<R: BufRead>(
                 pg_lsn: lsn,
                 lease_ttl_ms: ttl,
                 pg_lsn_text: txt,
+                index_trigrams: idx_tri,
+                unique_hashes: uniq,
+                estimated_docs: est,
             } => {
                 pg_lsn = lsn;
                 lease_ttl_ms = ttl.max(1_000);
                 pg_lsn_text = txt;
+                index_trigrams = idx_tri;
+                unique_hashes = uniq;
+                estimated_docs = est;
             }
             NdjsonLine::Catalog(c) => {
                 catalog_recs.push(ContentRecord {
@@ -224,21 +614,122 @@ pub fn build_generation_from_ndjson<R: BufRead>(
                     alt_identifiers: c.alt_identifiers,
                 });
             }
-            NdjsonLine::Doc(d) => docs.push(d),
+            NdjsonLine::Doc(d) => {
+                seq += 1;
+                let pd = parse_doc_record(d, seq)?;
+                chunk_bytes = chunk_bytes.saturating_add(pd.est_bytes());
+                chunk.push(pd);
+                if chunk.len() >= chunk_max_docs || chunk_bytes >= chunk_max_bytes {
+                    let run_path = spill_sort_run(&staged_dir, temp_runs.paths.len(), &mut chunk)?;
+                    temp_runs.paths.push(run_path);
+                    chunk_bytes = 0;
+                }
+            }
         }
     }
 
-    let manifest = build_generation_records(
-        out_root,
-        next_gen_id,
-        if pg_lsn_text.is_empty() {
-            format!("0/{pg_lsn:X}")
+    let total_seen = seq as usize;
+    let cap_hint = if estimated_docs > 0 {
+        estimated_docs
+    } else {
+        total_seen
+    };
+    let final_lsn_text = if pg_lsn_text.is_empty() {
+        format!("0/{pg_lsn:X}")
+    } else {
+        pg_lsn_text
+    };
+
+    let manifest = if temp_runs.paths.is_empty() {
+        // Fast in-memory path for <= chunk_max_docs (zero temp run files).
+        if !unique_hashes {
+            // Preserve exact last-write-wins dedup before physical sort.
+            let mut seen_v1: AHashSet<[u8; 20]> = AHashSet::with_capacity(chunk.len());
+            let mut seen_v2: AHashSet<[u8; 32]> = AHashSet::new();
+            let mut deduped: Vec<ParsedDoc> = Vec::with_capacity(chunk.len());
+            for pd in chunk.drain(..).rev() {
+                if pd.has_v1 && !seen_v1.insert(pd.v1) {
+                    continue;
+                }
+                if let Some(v2) = pd.v2 {
+                    if !seen_v2.insert(v2) {
+                        continue;
+                    }
+                }
+                deduped.push(pd);
+            }
+            deduped.sort_unstable_by(|a, b| a.cmp_physical(b));
+            build_generation_streaming(
+                out_root,
+                &staged_dir,
+                next_gen_id,
+                final_lsn_text,
+                &catalog_recs,
+                deduped.len(),
+                index_trigrams,
+                true,
+                deduped.into_iter().map(Ok),
+                temp_runs,
+            )?
         } else {
-            pg_lsn_text
-        },
-        &catalog_recs,
-        docs,
-    )?;
+            chunk.sort_unstable_by(|a, b| a.cmp_physical(b));
+            let n = chunk.len();
+            build_generation_streaming(
+                out_root,
+                &staged_dir,
+                next_gen_id,
+                final_lsn_text,
+                &catalog_recs,
+                n,
+                index_trigrams,
+                true,
+                chunk.into_iter().map(Ok),
+                temp_runs,
+            )?
+        }
+    } else {
+        if !chunk.is_empty() {
+            let run_path = spill_sort_run(&staged_dir, temp_runs.paths.len(), &mut chunk)?;
+            temp_runs.paths.push(run_path);
+        }
+        drop(chunk);
+
+        let mut readers: Vec<BufReader<File>> = Vec::with_capacity(temp_runs.paths.len());
+        for rp in &temp_runs.paths {
+            readers.push(BufReader::with_capacity(256 * 1024, File::open(rp)?));
+        }
+        let mut heap: BinaryHeap<MergeEntry> = BinaryHeap::with_capacity(readers.len());
+        for (ri, r) in readers.iter_mut().enumerate() {
+            if let Some(doc) = read_parsed_doc(r)? {
+                heap.push(MergeEntry { doc, run_idx: ri });
+            }
+        }
+        let merge_iter = std::iter::from_fn(move || {
+            let entry = heap.pop()?;
+            match read_parsed_doc(&mut readers[entry.run_idx]) {
+                Ok(Some(next_doc)) => heap.push(MergeEntry {
+                    doc: next_doc,
+                    run_idx: entry.run_idx,
+                }),
+                Ok(None) => {}
+                Err(e) => return Some(Err(e)),
+            }
+            Some(Ok(entry.doc))
+        });
+
+        build_generation_streaming(
+            out_root,
+            &staged_dir,
+            next_gen_id,
+            final_lsn_text,
+            &catalog_recs,
+            cap_hint,
+            index_trigrams,
+            unique_hashes,
+            merge_iter,
+            temp_runs,
+        )?
+    };
 
     Ok(BuildOutcome {
         manifest,
@@ -247,78 +738,26 @@ pub fn build_generation_from_ndjson<R: BufRead>(
     })
 }
 
-fn build_generation_records(
+#[allow(clippy::too_many_arguments)]
+fn build_generation_streaming<I>(
     out_root: &Path,
+    staged_dir: &Path,
     gen_id: u64,
     pg_lsn_text: String,
     catalog_recs: &[ContentRecord],
-    mut docs: Vec<BuildDocRecord>,
-) -> Result<CurrentManifest, FormatError> {
+    cap_hint: usize,
+    index_trigrams: bool,
+    unique_hashes: bool,
+    docs_iter: I,
+    temp_runs: TempRunsGuard,
+) -> Result<CurrentManifest, FormatError>
+where
+    I: Iterator<Item = Result<ParsedDoc, FormatError>>,
+{
     let now = now_sec();
     let hash_seed = 0xD470_5EED_0000_0000u64 ^ gen_id.wrapping_mul(0x9E37_79B9_7F4A_7C15);
     let term_seed = 0xD470_7E20_0000_0000u64 ^ gen_id.wrapping_mul(0xBF58_476D_1CE4_E5B9);
 
-    // Deduplicate by canonical v1/v2 info_hash (last write wins) before physical sort.
-    let mut seen_v1: AHashSet<[u8; 20]> = AHashSet::with_capacity(docs.len());
-    let mut seen_v2: AHashSet<[u8; 32]> = AHashSet::new();
-    let mut parsed_docs: Vec<(BuildDocRecord, [u8; 20], Option<[u8; 32]>)> =
-        Vec::with_capacity(docs.len());
-
-    for d in docs.drain(..).rev() {
-        let v1_opt = if d.info_hash_v1.is_empty() {
-            None
-        } else {
-            match parse_info_hash_hex(&d.info_hash_v1) {
-                Some(InfoHash::V1(b)) => Some(b),
-                _ => {
-                    return Err(FormatError::CorruptPayload(format!(
-                        "invalid info_hash_v1: {}",
-                        d.info_hash_v1
-                    )))
-                }
-            }
-        };
-        let v2_opt = if d.info_hash_v2.is_empty() {
-            None
-        } else {
-            match parse_info_hash_hex(&d.info_hash_v2) {
-                Some(InfoHash::V2(b)) => Some(b),
-                _ => {
-                    return Err(FormatError::CorruptPayload(format!(
-                        "invalid info_hash_v2: {}",
-                        d.info_hash_v2
-                    )))
-                }
-            }
-        };
-        if v1_opt.is_none() && v2_opt.is_none() {
-            return Err(FormatError::CorruptPayload(
-                "doc missing both info_hash_v1 and info_hash_v2".into(),
-            ));
-        }
-        if let Some(v1) = v1_opt {
-            if !seen_v1.insert(v1) {
-                continue;
-            }
-        }
-        if let Some(v2) = v2_opt {
-            if !seen_v2.insert(v2) {
-                continue;
-            }
-        }
-        parsed_docs.push((d, v1_opt.unwrap_or([0u8; 20]), v2_opt));
-    }
-
-    // Physical order: (content_type ASC, published_epoch DESC, info_hash ASC) for O(1) ct_ranges RSS.
-    parsed_docs.sort_by(|a, b| {
-        a.0.content_type
-            .cmp(&b.0.content_type)
-            .then_with(|| b.0.published_epoch.cmp(&a.0.published_epoch))
-            .then_with(|| a.1.cmp(&b.1))
-    });
-
-    std::fs::create_dir_all(out_root)?;
-    let staged_dir = stage_generation_dir(out_root, gen_id)?;
     MmapContentCatalog::build_and_save(&staged_dir.join("catalog.bin"), gen_id, catalog_recs)?;
 
     let mut entity_tokens: AHashMap<u32, Vec<String>> = AHashMap::with_capacity(catalog_recs.len());
@@ -330,54 +769,72 @@ fn build_generation_records(
         entity_tokens.insert(c.entity_id, t);
     }
 
-    let num_docs = parsed_docs.len();
     let mut ext_vocab: Vec<String> = vec![String::new()];
     let mut ext_map: AHashMap<String, u16> = AHashMap::new();
     ext_map.insert(String::new(), 0);
-    for (doc, _, _) in &parsed_docs {
-        for f in &doc.files {
-            let ext = f.extension.to_ascii_lowercase();
-            if !ext_map.contains_key(&ext) && ext_vocab.len() < u16::MAX as usize {
-                let id = ext_vocab.len() as u16;
-                ext_vocab.push(ext.clone());
-                ext_map.insert(ext, id);
-            }
-        }
-    }
 
-    let mut core_w = StreamingCoreWriter::new(&staged_dir, gen_id, num_docs, Vec::new())?;
-    let mut sb = CustomSearchBuilder::new(gen_id, term_seed, num_docs as u32, &staged_dir, true);
-    let mut ps = PolicyState::new(num_docs);
-    let mut v1_hashes: Vec<[u8; 20]> = Vec::with_capacity(num_docs);
+    let mut core_w = StreamingCoreWriter::new(staged_dir, gen_id, cap_hint, Vec::new())?;
+    let mut sb = CustomSearchBuilder::new(
+        gen_id,
+        term_seed,
+        cap_hint as u32,
+        staged_dir,
+        index_trigrams,
+    );
+    let mut ps = PolicyState::new(0);
+    ps.payload_expires.reserve(cap_hint);
+    let mut v1_hashes: Vec<[u8; 20]> = Vec::with_capacity(cap_hint);
     let mut v2_aliases: Vec<(u32, [u8; 32])> = Vec::new();
-    let mut metas: Vec<MetaRow> = Vec::with_capacity(num_docs);
-    let mut swarm_init: Vec<(i32, i32, u32)> = Vec::with_capacity(num_docs);
+    let mut metas: Vec<MetaRow> = Vec::with_capacity(cap_hint);
+    let mut swarm_init: Vec<(i32, i32, u32)> = Vec::with_capacity(cap_hint);
     let mut max_created = 0u64;
 
-    let mut cur_ct: Option<u8> = None;
-    for (i, (doc, _, _)) in parsed_docs.iter().enumerate() {
-        let ct = doc.content_type.min(11);
-        if cur_ct != Some(ct) {
-            if let Some(prev) = cur_ct {
-                sb.ct_ranges[prev as usize].1 = i as u32;
-            }
-            sb.ct_ranges[ct as usize].0 = i as u32;
-            cur_ct = Some(ct);
-        }
-    }
-    if let Some(prev) = cur_ct {
-        sb.ct_ranges[prev as usize].1 = num_docs as u32;
-    }
+    let mut seen_v1: AHashSet<[u8; 20]> = if unique_hashes {
+        AHashSet::new()
+    } else {
+        AHashSet::with_capacity(cap_hint)
+    };
+    let mut seen_v2: AHashSet<[u8; 32]> = AHashSet::new();
+    let mut last_key: Option<(bool, [u8; 20], Option<[u8; 32]>)> = None;
 
     let np = NamePolicyMatcher::global();
     let mut file_tuples: Vec<(String, u64, String)> = Vec::new();
     let mut file_toks: Vec<String> = Vec::new();
+    let mut cur_ct: Option<u8> = None;
+    let mut doc_idx: usize = 0;
 
-    for (i, (doc, v1, v2_opt)) in parsed_docs.into_iter().enumerate() {
-        let d = i as u32;
+    for pd_res in docs_iter {
+        let pd = pd_res?;
+        if unique_hashes {
+            let key = (pd.has_v1, pd.v1, pd.v2);
+            if last_key.as_ref() == Some(&key) {
+                continue;
+            }
+            last_key = Some(key);
+        } else {
+            if pd.has_v1 && !seen_v1.insert(pd.v1) {
+                continue;
+            }
+            if let Some(v2) = pd.v2 {
+                if !seen_v2.insert(v2) {
+                    continue;
+                }
+            }
+        }
+
+        let d = doc_idx as u32;
+        let doc = pd.doc;
         let ct = doc.content_type.min(11);
-        v1_hashes.push(v1);
-        if let Some(v2) = v2_opt {
+        if cur_ct != Some(ct) {
+            if let Some(prev) = cur_ct {
+                sb.ct_ranges[prev as usize].1 = d;
+            }
+            sb.ct_ranges[ct as usize].0 = d;
+            cur_ct = Some(ct);
+        }
+
+        v1_hashes.push(pd.v1);
+        if let Some(v2) = pd.v2 {
             v2_aliases.push((d, v2));
         }
 
@@ -386,7 +843,13 @@ fn build_generation_records(
         let mut files_sum = 0u64;
         for f in &doc.files {
             files_sum = files_sum.saturating_add(f.size);
-            file_tuples.push((f.path.clone(), f.size, f.extension.to_ascii_lowercase()));
+            let ext = f.extension.to_ascii_lowercase();
+            if !ext_map.contains_key(&ext) && ext_vocab.len() < u16::MAX as usize {
+                let id = ext_vocab.len() as u16;
+                ext_vocab.push(ext.clone());
+                ext_map.insert(ext.clone(), id);
+            }
+            file_tuples.push((f.path.clone(), f.size, ext));
         }
         let total_size = if doc.size_bytes > 0 {
             doc.size_bytes
@@ -434,7 +897,7 @@ fn build_generation_records(
         if doc.pub_approved {
             ps.pub_approved.insert(d);
         }
-        ps.payload_expires[i] = doc.payload_expires_epoch;
+        ps.payload_expires.push(doc.payload_expires_epoch);
 
         let created_ep = if doc.created_epoch > 0 {
             doc.created_epoch
@@ -523,31 +986,60 @@ fn build_generation_records(
             &parsed.raw_tokens,
             &file_toks,
         );
-        for tri in extract_trigrams(&doc.name) {
-            sb.trigram_to_docs
-                .entry(trigram_key(tri))
-                .or_default()
-                .insert(d);
+        // Spill posting runs periodically so peak RAM stays bounded at 30M+ torrents.
+        sb.flush_run_if_needed()?;
+
+        if index_trigrams {
+            for tri in extract_trigrams(&doc.name) {
+                sb.trigram_to_docs
+                    .entry(trigram_key(tri))
+                    .or_default()
+                    .insert(d);
+            }
         }
+        doc_idx += 1;
     }
 
+    if let Some(prev) = cur_ct {
+        sb.ct_ranges[prev as usize].1 = doc_idx as u32;
+    }
+    ps.num_docs = doc_idx;
+
+    // Release temporary sort files and dedup/entity maps before disk finalization.
+    drop(temp_runs);
+    drop(seen_v1);
+    drop(seen_v2);
+    drop(entity_tokens);
+
+    // Save and immediately drop each large structure sequentially to minimize peak RSS.
     core_w.finish(&metas, &ext_vocab)?;
-    build_and_save_hash_dir(&staged_dir, gen_id, hash_seed, &v1_hashes, &v2_aliases)?;
-    ps.save(&staged_dir, gen_id)?;
-    SwarmPlane::create(&staged_dir, gen_id, &swarm_init)
+    drop(metas);
+    drop(ext_vocab);
+    drop(ext_map);
+
+    build_and_save_hash_dir(staged_dir, gen_id, hash_seed, &v1_hashes, &v2_aliases)?;
+    drop(v1_hashes);
+    drop(v2_aliases);
+
+    ps.save(staged_dir, gen_id)?;
+    drop(ps);
+
+    SwarmPlane::create(staged_dir, gen_id, &swarm_init)
         .map_err(|e| FormatError::CorruptPayload(e.to_string()))?;
-    sb.build_and_save(&staged_dir, num_docs as u32)?;
+    drop(swarm_init);
+
+    sb.build_and_save(staged_dir, doc_idx as u32)?;
 
     let manifest = CurrentManifest {
         generation_id: gen_id,
         engine_kind: "custom-v0.3".into(),
-        num_docs: num_docs as u64,
+        num_docs: doc_idx as u64,
         pg_lsn: pg_lsn_text,
         created_epoch_sec: now,
         max_created_epoch_sec: if max_created > 0 { max_created } else { now },
         hash_seed,
     };
-    publish_generation(out_root, &staged_dir, &manifest)?;
+    publish_generation(out_root, staged_dir, &manifest)?;
     prune_old_generations(out_root, gen_id);
     Ok(manifest)
 }
@@ -560,21 +1052,111 @@ fn prune_old_generations(out_root: &Path, current_gen: u64) {
     let mut dirs: Vec<(u64, std::path::PathBuf)> = Vec::new();
     for ent in entries.flatten() {
         let name = ent.file_name();
-        let s = name.to_string_lossy();
-        if let Some(hex) = s.strip_prefix("gen-") {
-            if let Ok(id) = u64::from_str_radix(hex, 16) {
-                if id != current_gen {
-                    dirs.push((id, ent.path()));
-                }
+        let Some(s) = name.to_str() else { continue };
+        if let Some(hex_id) = s.strip_prefix("gen-") {
+            if let Ok(gid) = u64::from_str_radix(hex_id, 16) {
+                dirs.push((gid, ent.path()));
             }
         }
     }
-    dirs.sort_by_key(|(id, _)| *id);
-    let keep_old = MAX_GENERATIONS_TO_KEEP.saturating_sub(1);
-    if dirs.len() > keep_old {
-        let drop_n = dirs.len() - keep_old;
-        for (_, path) in dirs.into_iter().take(drop_n) {
+    dirs.sort_by_key(|(gid, _)| *gid);
+    if dirs.len() <= MAX_GENERATIONS_TO_KEEP {
+        return;
+    }
+    let to_remove = dirs.len() - MAX_GENERATIONS_TO_KEEP;
+    for (gid, path) in dirs.into_iter().take(to_remove) {
+        if gid != current_gen {
             let _ = std::fs::remove_dir_all(path);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::DaemonEngine;
+    use std::io::Cursor;
+
+    #[test]
+    fn test_external_sort_spill_matches_in_memory_and_cleans_runs() {
+        let base = std::env::temp_dir().join(format!("dhtms_spill_test_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let dir_mem = base.join("mem");
+        let dir_spill = base.join("spill");
+        let wal_spill = base.join("wal_spill");
+
+        let mut ndjson = String::new();
+        ndjson.push_str(
+            r#"{"kind":"header","pg_lsn":42,"lease_ttl_ms":60000,"pg_lsn_text":"0/2A","index_trigrams":false,"unique_hashes":true}"#,
+        );
+        ndjson.push('\n');
+        for i in 0u32..25 {
+            let ct = (i % 3) + 1;
+            let pub_ep = 1_700_000_000 + ((i * 37) % 1000);
+            let h1 = format!("{:040x}", i + 1);
+            ndjson.push_str(&format!(
+                r#"{{"kind":"doc","info_hash_v1":"{h1}","name":"Spill.Title.{i}.1080p","size_bytes":1000,"content_type":{ct},"published_epoch":{pub_ep},"created_epoch":{pub_ep},"files":[{{"path":"video_{i}.mkv","size":1000,"extension":"mkv"}}]}}"#
+            ));
+            ndjson.push('\n');
+        }
+
+        let out_mem = build_generation_from_ndjson_with_limits(
+            Cursor::new(&ndjson),
+            &dir_mem,
+            1,
+            1000,
+            10_000_000,
+        )
+        .unwrap();
+        let out_spill = build_generation_from_ndjson_with_limits(
+            Cursor::new(&ndjson),
+            &dir_spill,
+            1,
+            4,
+            10_000_000,
+        )
+        .unwrap();
+
+        assert_eq!(out_mem.manifest.num_docs, 25);
+        assert_eq!(out_spill.manifest.num_docs, 25);
+
+        // Verify zero leftover _sort_run_* temp files in published generation dir.
+        let gen_dir = dir_spill.join("generations/gen-0000000000000001");
+        for ent in std::fs::read_dir(&gen_dir).unwrap() {
+            let n = ent.unwrap().file_name().to_string_lossy().to_string();
+            assert!(!n.starts_with("_sort_run_"), "leftover temp run file: {n}");
+        }
+
+        // Open spilled generation and verify search + trigrams_disabled behavior.
+        let eng = DaemonEngine::open(&dir_spill, &wal_spill, 42, 60_000).unwrap();
+        let sr = eng
+            .handle_search(crate::engine::SearchRequest {
+                query: "Spill Title 17".into(),
+                mode: "and".into(),
+                tier: "base".into(),
+                limit: 10,
+                tv_season: None,
+                tv_episode: None,
+                include_facets: false,
+                include_files: true,
+                now_epoch: None,
+            })
+            .unwrap();
+        assert_eq!(sr.docs.len(), 1);
+        assert_eq!(sr.docs[0].name, "Spill.Title.17.1080p");
+
+        let sub_err = eng.handle_substring(crate::engine::SubstringRequest {
+            substring: "Title".into(),
+            tier: "base".into(),
+            limit: 5,
+            include_files: false,
+            now_epoch: None,
+        });
+        assert!(matches!(
+            sub_err,
+            Err(crate::engine::DaemonError::TrigramsDisabled)
+        ));
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

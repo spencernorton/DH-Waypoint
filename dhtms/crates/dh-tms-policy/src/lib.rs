@@ -15,6 +15,10 @@ use std::sync::Arc;
 
 const POLICY_WAL_MAGIC: [u8; 4] = *b"PWAL";
 
+/// Pre-allocated lock-free atomic policy slots above `num_docs` for live L0 inserts
+/// (~1.06 MiB total RAM for 262,144 dynamic docs; fail-closed denied by default).
+pub const DYNAMIC_L0_CAPACITY: usize = 262_144;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PolicyTier {
     /// public & !quarantined & !privacy_tainted & !excluded & !held & !adult & !name_blocked
@@ -60,6 +64,7 @@ pub enum PolicyOp {
     RevokePubApproval { doc_id: u32 },
     GrantPayloadProof { doc_id: u32, expires_epoch_sec: u32 },
     RevokePayloadProof { doc_id: u32 },
+    GrantBase { doc_id: u32 },
 }
 
 #[derive(Debug)]
@@ -328,7 +333,7 @@ impl PolicyState {
             generation_id,
             0,
             0,
-            &self.payload_expires,
+            &self.payload_expires[..self.num_docs],
         )?;
         Ok(b1 + b2)
     }
@@ -441,6 +446,7 @@ impl PolicyReaderHandle {
 pub struct PolicyPlane {
     pub generation_id: u64,
     pub num_docs: usize,
+    pub max_docs: usize,
     deny_bits: Arc<Vec<AtomicU64>>,
     pub_bits: Arc<Vec<AtomicU64>>,
     payload_exp: Arc<Vec<AtomicU32>>,
@@ -462,7 +468,11 @@ impl PolicyPlane {
     ) -> Result<Self, PolicyError> {
         let (mut state, generation_id) = PolicyState::load(gen_dir, expected_gen)?;
         let num_docs = state.num_docs;
-        let words = num_docs.div_ceil(64);
+        let max_docs = num_docs.saturating_add(DYNAMIC_L0_CAPACITY);
+        if state.payload_expires.len() < max_docs {
+            state.payload_expires.resize(max_docs, 0);
+        }
+        let words = max_docs.div_ceil(64);
 
         // Replay checksummed, generation-tagged policy WAL BEFORE serving starts!
         let (replayed_seq, replayed_lsn) = replay_policy_wal(wal_path, generation_id, &mut state)?;
@@ -506,6 +516,7 @@ impl PolicyPlane {
         Ok(Self {
             generation_id,
             num_docs,
+            max_docs,
             deny_bits: Arc::new(deny_bits),
             pub_bits: Arc::new(pub_bits),
             payload_exp: Arc::new(payload_exp),
@@ -544,14 +555,14 @@ impl PolicyPlane {
             snapshot: self.snapshot.load_full(),
             deny_bits: Arc::clone(&self.deny_bits),
             payload_exp: Arc::clone(&self.payload_exp),
-            num_docs: self.num_docs,
+            num_docs: self.max_docs,
         }
     }
 
     #[inline]
     pub fn is_denied_atomic(&self, doc_id: u32) -> bool {
         let idx = doc_id as usize;
-        if idx >= self.num_docs {
+        if idx >= self.max_docs {
             return true; // fail closed on out-of-range doc_id
         }
         let w = self.deny_bits[idx >> 6].load(Ordering::Acquire);
@@ -561,7 +572,7 @@ impl PolicyPlane {
     #[inline]
     pub fn is_pub_approved_atomic(&self, doc_id: u32) -> bool {
         let idx = doc_id as usize;
-        if idx >= self.num_docs {
+        if idx >= self.max_docs {
             return false;
         }
         let w = self.pub_bits[idx >> 6].load(Ordering::Acquire);
@@ -668,12 +679,13 @@ impl PolicyPlane {
                 | PolicyOp::GrantPubApproval { doc_id }
                 | PolicyOp::RevokePubApproval { doc_id }
                 | PolicyOp::GrantPayloadProof { doc_id, .. }
-                | PolicyOp::RevokePayloadProof { doc_id } => doc_id,
+                | PolicyOp::RevokePayloadProof { doc_id }
+                | PolicyOp::GrantBase { doc_id } => doc_id,
             };
-            if (d as usize) >= self.num_docs {
+            if (d as usize) >= self.max_docs {
                 return Err(PolicyError::OutOfRange {
                     doc_id: d,
-                    num_docs: self.num_docs,
+                    num_docs: self.max_docs,
                 });
             }
         }
@@ -718,6 +730,10 @@ impl PolicyPlane {
                 }
                 PolicyOp::RevokePayloadProof { doc_id } => {
                     self.payload_exp[doc_id as usize].store(0, Ordering::Release);
+                }
+                PolicyOp::GrantBase { doc_id } => {
+                    let still_denied = ws.state.is_base_denied(doc_id);
+                    self.set_deny_bit(doc_id, still_denied);
                 }
             }
         }
@@ -860,6 +876,11 @@ fn apply_op_to_state(st: &mut PolicyState, op: PolicyOp) {
                 *slot = 0;
             }
         }
+        PolicyOp::GrantBase { doc_id } => {
+            if !st.tombstoned_for_scrub.contains(doc_id) {
+                st.public.insert(doc_id);
+            }
+        }
     }
 }
 
@@ -880,6 +901,7 @@ fn encode_wal_frame(gen_id: u64, seq: u64, pg_lsn: u64, ops: &[PolicyOp]) -> Vec
                 expires_epoch_sec,
             } => (5u8, 0u8, doc_id, expires_epoch_sec),
             PolicyOp::RevokePayloadProof { doc_id } => (6u8, 0u8, doc_id, 0u32),
+            PolicyOp::GrantBase { doc_id } => (7u8, 0u8, doc_id, 0u32),
         };
         payload.push(kind);
         payload.push(reason);
@@ -995,6 +1017,7 @@ fn replay_policy_wal(
                     expires_epoch_sec: aux,
                 },
                 6 => PolicyOp::RevokePayloadProof { doc_id },
+                7 => PolicyOp::GrantBase { doc_id },
                 _ => return Err(PolicyError::CorruptWal(format!("unknown op kind {kind}"))),
             };
             apply_op_to_state(state, op);

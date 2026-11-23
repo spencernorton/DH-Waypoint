@@ -286,17 +286,22 @@ type SwarmCheckpointResponse struct {
 	CheckpointSeq uint64 `json:"checkpoint_seq"`
 }
 
-// L0UpsertItem describes a live metadata update overlaid on the active generation.
+// L0UpsertItem describes a live insert or metadata update overlaid on the active generation.
 type L0UpsertItem struct {
-	DocID          uint32   `json:"doc_id"`
-	Name           string   `json:"name"`
-	ContentType    uint8    `json:"content_type"`
-	Resolution     uint8    `json:"resolution,omitempty"`
-	EntityID       uint32   `json:"entity_id,omitempty"`
-	Year           uint16   `json:"year,omitempty"`
-	PublishedEpoch uint32   `json:"published_epoch"`
-	CreatedEpoch   uint32   `json:"created_epoch"`
-	FilePaths      []string `json:"file_paths,omitempty"`
+	DocID          *uint32          `json:"doc_id,omitempty"`
+	InfoHashV1     string           `json:"info_hash_v1,omitempty"`
+	InfoHashV2     string           `json:"info_hash_v2,omitempty"`
+	Name           string           `json:"name"`
+	SizeBytes      uint64           `json:"size_bytes,omitempty"`
+	ContentType    uint8            `json:"content_type"`
+	Resolution     uint8            `json:"resolution,omitempty"`
+	EntityID       uint32           `json:"entity_id,omitempty"`
+	Year           uint16           `json:"year,omitempty"`
+	PublishedEpoch uint32           `json:"published_epoch"`
+	CreatedEpoch   uint32           `json:"created_epoch"`
+	FilesCount     uint32           `json:"files_count,omitempty"`
+	FilePaths      []string         `json:"file_paths,omitempty"`
+	Files          []BuildFileInput `json:"files,omitempty"`
 }
 
 // L0UpsertRequest mirrors POST /v1/l0/upsert.
@@ -307,9 +312,10 @@ type L0UpsertRequest struct {
 
 // L0UpsertResponse mirrors POST /v1/l0/upsert.
 type L0UpsertResponse struct {
-	OK       bool `json:"ok"`
-	Upserted int  `json:"upserted"`
-	L0Count  int  `json:"l0_count"`
+	OK       bool     `json:"ok"`
+	Upserted int      `json:"upserted"`
+	L0Count  int      `json:"l0_count"`
+	DocIDs   []uint32 `json:"doc_ids,omitempty"`
 }
 
 // APIError captures structured non-2xx responses from dh-tmsd.
@@ -331,10 +337,13 @@ func (e *APIError) Error() string {
 
 // BuildHeaderLine is the leading NDJSON record streamed to POST /v1/generation/build.
 type BuildHeaderLine struct {
-	Kind       string `json:"kind"`
-	PGLSN      uint64 `json:"pg_lsn"`
-	LeaseTTLMS uint64 `json:"lease_ttl_ms"`
-	PGLSNText  string `json:"pg_lsn_text,omitempty"`
+	Kind          string `json:"kind"`
+	PGLSN         uint64 `json:"pg_lsn"`
+	LeaseTTLMS    uint64 `json:"lease_ttl_ms"`
+	PGLSNText     string `json:"pg_lsn_text,omitempty"`
+	IndexTrigrams *bool  `json:"index_trigrams,omitempty"`
+	UniqueHashes  bool   `json:"unique_hashes,omitempty"`
+	EstimatedDocs int    `json:"estimated_docs,omitempty"`
 }
 
 // BuildCatalogLine is a content catalog NDJSON record streamed to POST /v1/generation/build.

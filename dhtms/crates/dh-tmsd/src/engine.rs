@@ -1,4 +1,4 @@
-use crate::builder::{build_empty_generation, build_generation_from_ndjson};
+use crate::builder::{build_empty_generation, build_generation_from_ndjson, BuildFileInput};
 use arc_swap::ArcSwap;
 use dh_tms_core::CorePlane;
 use dh_tms_format::catalog::MmapContentCatalog;
@@ -22,6 +22,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub enum DaemonError {
     BadRequest(String),
     NotFound,
+    TrigramsDisabled,
     LeaseExpired {
         now_ms: u64,
         valid_until_ms: u64,
@@ -57,6 +58,7 @@ impl From<SearchError> for DaemonError {
     fn from(e: SearchError) -> Self {
         match e {
             SearchError::Policy(pe) => pe.into(),
+            SearchError::TrigramsDisabled => Self::TrigramsDisabled,
             other => Self::Internal(other.to_string()),
         }
     }
@@ -419,8 +421,15 @@ pub struct SwarmSelectStaleResponse {
 
 #[derive(Debug, Deserialize)]
 pub struct L0UpsertItem {
-    pub doc_id: u32,
+    #[serde(default)]
+    pub doc_id: Option<u32>,
+    #[serde(default)]
+    pub info_hash_v1: Option<String>,
+    #[serde(default)]
+    pub info_hash_v2: Option<String>,
     pub name: String,
+    #[serde(default)]
+    pub size_bytes: u64,
     pub content_type: u8,
     #[serde(default)]
     pub resolution: u8,
@@ -431,7 +440,11 @@ pub struct L0UpsertItem {
     pub published_epoch: u32,
     pub created_epoch: u32,
     #[serde(default)]
+    pub files_count: u32,
+    #[serde(default)]
     pub file_paths: Vec<String>,
+    #[serde(default)]
+    pub files: Vec<BuildFileInput>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -446,6 +459,7 @@ pub struct L0UpsertResponse {
     pub ok: bool,
     pub upserted: usize,
     pub l0_count: usize,
+    pub doc_ids: Vec<u32>,
 }
 
 pub struct DaemonEngine {
@@ -545,13 +559,35 @@ impl DaemonEngine {
         }
     }
 
+    fn lookup_hash_any(&self, ih: &InfoHash) -> Option<u32> {
+        if let Some(d) = self.hash_dir.get(ih) {
+            return Some(d);
+        }
+        match ih {
+            InfoHash::V1(h) => self.search.l0.lookup_hash_v1(h),
+            InfoHash::V2(h) => self.search.l0.lookup_hash_v2(h),
+        }
+    }
+
+    fn doc_hashes_any(&self, doc_id: u32) -> (Option<[u8; 20]>, Option<[u8; 32]>) {
+        if (doc_id as usize) < self.core.num_docs {
+            return self.hash_dir.get_hashes_for_doc(doc_id);
+        }
+        if let Some(ov) = self.search.l0.get_doc(doc_id) {
+            return (ov.info_hash_v1, ov.info_hash_v2);
+        }
+        (None, None)
+    }
+
     fn resolve_doc_id(
         &self,
         doc_id: Option<u32>,
         info_hash: Option<&str>,
     ) -> Result<u32, DaemonError> {
         if let Some(d) = doc_id {
-            if (d as usize) >= self.core.num_docs {
+            if (d as usize) >= self.core.num_docs
+                && ((d as usize) >= self.policy.max_docs || self.search.l0.get_doc(d).is_none())
+            {
                 return Err(DaemonError::BadRequest(format!("doc_id {d} out of range")));
             }
             return Ok(d);
@@ -561,8 +597,7 @@ impl DaemonEngine {
         let ih = parse_info_hash_hex(raw).ok_or_else(|| {
             DaemonError::BadRequest("invalid info_hash hex (expected 40 or 64 hex chars)".into())
         })?;
-        self.hash_dir
-            .get(&ih)
+        self.lookup_hash_any(&ih)
             .ok_or_else(|| DaemonError::BadRequest("info_hash not found in generation".into()))
     }
 
@@ -572,8 +607,56 @@ impl DaemonEngine {
         score: f32,
         include_files: bool,
     ) -> Result<DocHit, DaemonError> {
-        let mut meta = self.core.metas()[doc_id as usize];
         let l0_ov = self.search.l0.get_doc(doc_id);
+        if (doc_id as usize) >= self.core.num_docs {
+            let ov = l0_ov
+                .ok_or_else(|| DaemonError::Internal(format!("missing dynamic L0 doc {doc_id}")))?;
+            let (v1, v2) = (ov.info_hash_v1, ov.info_hash_v2);
+            let magnet_xt = if let Some(h1) = v1 {
+                InfoHash::V1(h1).to_magnet_xt()
+            } else if let Some(h2) = v2 {
+                InfoHash::V2(h2).to_magnet_xt()
+            } else {
+                String::new()
+            };
+            let sw = self.swarm.read(doc_id)?;
+            let files = if include_files {
+                Some(
+                    ov.files
+                        .into_iter()
+                        .map(|(path, size, extension)| FileEntryResp {
+                            path,
+                            size,
+                            extension,
+                        })
+                        .collect(),
+                )
+            } else {
+                None
+            };
+            return Ok(DocHit {
+                doc_id,
+                score,
+                info_hash_v1: v1.map(|h| encode_hex(&h)),
+                info_hash_v2: v2.map(|h| encode_hex(&h)),
+                magnet_xt,
+                name: ov.name,
+                size_bytes: ov.size_bytes,
+                content_type: ov.content_type,
+                resolution: ov.resolution,
+                entity_id: ov.entity_id,
+                year: ov.year,
+                published_epoch: ov.published_epoch,
+                created_epoch: ov.created_epoch,
+                files_count: ov.files_count,
+                seeders: sw.seeders,
+                leechers: sw.leechers,
+                peak_seeders: sw.peak_seeders,
+                checked_epoch_min: sw.checked_epoch_min,
+                files,
+            });
+        }
+        let mut meta = self.core.metas()[doc_id as usize];
         if let Some(ref ov) = l0_ov {
             meta.content_type = ov.content_type;
             meta.resolution = ov.resolution;
@@ -581,6 +664,12 @@ impl DaemonEngine {
             meta.year = ov.year;
             meta.published_epoch = ov.published_epoch;
             meta.created_epoch = ov.created_epoch;
+            if ov.size_bytes > 0 {
+                meta.size_bytes = ov.size_bytes;
+            }
+            if ov.files_count > 0 {
+                meta.files_count = ov.files_count;
+            }
         }
         let (v1, v2) = self.hash_dir.get_hashes_for_doc(doc_id);
         let magnet_xt = if let Some(h1) = v1 {
@@ -865,13 +954,15 @@ impl DaemonEngine {
 
         let mut targets: Vec<u32> = Vec::with_capacity(req.doc_ids.len() + req.info_hashes.len());
         for d in req.doc_ids {
-            if (d as usize) < self.core.num_docs {
+            if (d as usize) < self.core.num_docs
+                || ((d as usize) < self.policy.max_docs && self.search.l0.get_doc(d).is_some())
+            {
                 targets.push(d);
             }
         }
         for raw in &req.info_hashes {
             if let Some(ih) = parse_info_hash_hex(raw) {
-                if let Some(d) = self.hash_dir.get(&ih) {
+                if let Some(d) = self.lookup_hash_any(&ih) {
                     targets.push(d);
                 }
             }
@@ -896,7 +987,7 @@ impl DaemonEngine {
 
         let ih = parse_info_hash_hex(&req.info_hash)
             .ok_or_else(|| DaemonError::BadRequest("invalid info_hash hex".into()))?;
-        let Some(doc_id) = self.hash_dir.get(&ih) else {
+        let Some(doc_id) = self.lookup_hash_any(&ih) else {
             return Ok(HashLookupResponse {
                 found: false,
                 doc_id: None,
@@ -909,7 +1000,7 @@ impl DaemonEngine {
         let eligible = self
             .policy
             .authorize_egress_one(doc_id, tier, now_s, now_m)?;
-        let (v1, v2) = self.hash_dir.get_hashes_for_doc(doc_id);
+        let (v1, v2) = self.doc_hashes_any(doc_id);
         let magnet_xt = if let Some(h1) = v1 {
             Some(InfoHash::V1(h1).to_magnet_xt())
         } else {
@@ -1024,13 +1115,73 @@ impl DaemonEngine {
 
     pub fn handle_l0_upsert(&self, req: L0UpsertRequest) -> Result<L0UpsertResponse, DaemonError> {
         let mut batch = Vec::with_capacity(req.docs.len());
+        let mut assigned_ids = Vec::with_capacity(req.docs.len());
         for item in req.docs {
-            if (item.doc_id as usize) >= self.core.num_docs {
-                return Err(DaemonError::BadRequest(format!(
-                    "doc_id {} out of range (num_docs={})",
-                    item.doc_id, self.core.num_docs
-                )));
-            }
+            let v1_opt = match item.info_hash_v1.as_deref() {
+                Some(raw) if !raw.is_empty() => match parse_info_hash_hex(raw) {
+                    Some(InfoHash::V1(h)) => Some(h),
+                    _ => {
+                        return Err(DaemonError::BadRequest(format!(
+                            "invalid info_hash_v1: {raw}"
+                        )))
+                    }
+                },
+                _ => None,
+            };
+            let v2_opt = match item.info_hash_v2.as_deref() {
+                Some(raw) if !raw.is_empty() => match parse_info_hash_hex(raw) {
+                    Some(InfoHash::V2(h)) => Some(h),
+                    _ => {
+                        return Err(DaemonError::BadRequest(format!(
+                            "invalid info_hash_v2: {raw}"
+                        )))
+                    }
+                },
+                _ => None,
+            };
+
+            let doc_id = if let Some(d) = item.doc_id {
+                if (d as usize) >= self.policy.max_docs {
+                    return Err(DaemonError::BadRequest(format!(
+                        "doc_id {} out of range (max_docs={})",
+                        d, self.policy.max_docs
+                    )));
+                }
+                if (d as usize) >= self.core.num_docs
+                    && self.search.l0.get_doc(d).is_none()
+                    && v1_opt.is_none()
+                    && v2_opt.is_none()
+                {
+                    return Err(DaemonError::BadRequest(format!(
+                        "doc_id {} out of range (num_docs={})",
+                        d, self.core.num_docs
+                    )));
+                }
+                d
+            } else {
+                if v1_opt.is_none() && v2_opt.is_none() {
+                    return Err(DaemonError::BadRequest(
+                        "doc_id or info_hash_v1/info_hash_v2 required for l0 upsert".into(),
+                    ));
+                }
+                if let Some(d) = v1_opt
+                    .and_then(|h| self.hash_dir.get(&InfoHash::V1(h)))
+                    .or_else(|| v2_opt.and_then(|h| self.hash_dir.get(&InfoHash::V2(h))))
+                {
+                    d
+                } else {
+                    self.search
+                        .l0
+                        .allocate_or_get_doc_id(
+                            self.core.num_docs as u32,
+                            self.policy.max_docs as u32,
+                            v1_opt,
+                            v2_opt,
+                        )
+                        .map_err(|e| DaemonError::BadRequest(e.to_string()))?
+                }
+            };
+
             let pr = parse_release_name(&item.name);
             let mut terms: Vec<(u64, u16)> = Vec::new();
             for t in &pr.title_tokens {
@@ -1039,14 +1190,33 @@ impl DaemonEngine {
             for t in &pr.raw_tokens {
                 terms.push((term_hash(t, self.search.term_seed), 600));
             }
-            for fp in item.file_paths.iter().take(64) {
+            let files: Vec<(String, u64, String)> = if !item.files.is_empty() {
+                item.files
+                    .into_iter()
+                    .take(256)
+                    .map(|f| (f.path, f.size, f.extension.to_ascii_lowercase()))
+                    .collect()
+            } else {
+                item.file_paths
+                    .into_iter()
+                    .take(256)
+                    .map(|fp| (fp, 0u64, String::new()))
+                    .collect()
+            };
+            for (fp, _, _) in files.iter().take(64) {
                 for t in tokenize_alnum(fp) {
                     terms.push((term_hash(&t, self.search.term_seed), 250));
                 }
             }
+            let files_count = if item.files_count > 0 {
+                item.files_count
+            } else {
+                files.len() as u32
+            };
             let eps: Vec<EpisodeSpec> = pr.episodes;
+            assigned_ids.push(doc_id);
             batch.push(L0Doc {
-                doc_id: item.doc_id,
+                doc_id,
                 name: item.name,
                 content_type: item.content_type,
                 resolution: if item.resolution != 0 {
@@ -1062,6 +1232,11 @@ impl DaemonEngine {
                 strict_title_hashes: pr.strict_title_hashes,
                 family_hashes: pr.family_hashes,
                 terms,
+                info_hash_v1: v1_opt,
+                info_hash_v2: v2_opt,
+                size_bytes: item.size_bytes,
+                files_count,
+                files,
             });
         }
         let upserted = self
@@ -1073,6 +1248,7 @@ impl DaemonEngine {
             ok: true,
             upserted,
             l0_count: self.search.l0.len(),
+            doc_ids: assigned_ids,
         })
     }
 
@@ -1121,6 +1297,7 @@ impl DaemonEngine {
                     expires_epoch_sec: it.expires_epoch,
                 },
                 "revoke_payload" => PolicyOp::RevokePayloadProof { doc_id },
+                "grant_base" => PolicyOp::GrantBase { doc_id },
                 other => {
                     return Err(DaemonError::BadRequest(format!(
                         "unknown policy op: {other}"

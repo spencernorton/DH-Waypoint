@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## 6.0.1 — 2026-11-23
+
+Large-catalogue (`30M+` torrents) scaling and live-crawl hardening for the `dh-tmsd` search sidecar and PostgreSQL sync worker.
+
+### Fixed
+
+- **Bounded-RAM external disk-spilled generation builds in `dh-tmsd` (`dhtms/crates/dh-tmsd/src/builder.rs`, `dhtms/crates/dh-tms-search/src/lib.rs`, `http.rs`).** Replaces whole-corpus in-memory buffering during `/v1/generation/build` with bounded external chunk sorting (`200K` docs / `128 MiB` per run + k-way merge with RAII temp-run cleanup), invokes `CustomSearchBuilder::flush_run_if_needed()` every document (with a `15M`-posting spill threshold), releases finished structures sequentially between save phases, extends streaming build socket read timeouts to `600s`, and makes the trigram substring index configurable (`DH_TMS_INDEX_TRIGRAMS=auto|true|false`, auto-disabled at `>= 2M` torrents with `503 trigrams_disabled` fail-over to PostgreSQL `pg_trgm` on REST `/api/v2/search`).
+- **Live L0 new-document ingestion without rebuild loops (`dhtms/crates/dh-tms-policy`, `dh-tms-swarm`, `dh-tms-search`, `dh-tmsd`, `internal/database/dhtms/`).** Allocates lock-free fail-closed dynamic L0 slots (`262,144` docs above the base generation) with `grant_base` policy support, durable L0 WAL v2 persistence, and full L0 merging across text search, TV search, entity/unlinked lookup, RSS newest-first browse, and 30-day dashstats. Newly crawled torrents now become searchable in `<2s` without triggering full-catalogue rebuilds until `DH_TMS_COMPACT_DOCS` (default `50,000`) is reached.
+- **Skip empty `torrent_files` subqueries during snapshot sync (`internal/database/dhtms/sync.go`).** Probes `EXISTS(SELECT 1 FROM torrent_files LIMIT 1)` once per snapshot and selects `torrent_file_bundles` arrays directly when `torrent_files` is empty, eliminating tens of millions of redundant correlated subqueries on large catalogues.
+
 ## 6.0.0 — 2026-11-23
 
 Major release pairing a leaner, faster Go backend (`-103K+` net LOC removed, non-root `UID 1000:1000`, PostgreSQL 16 & 18 support, fail-closed `v5 -> v6` pre-flight upgrade guard with zero manual PostgreSQL steps) with the default-on `dh-tmsd` Rust search and serving sidecar.
