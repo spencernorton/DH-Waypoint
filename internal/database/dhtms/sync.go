@@ -43,15 +43,16 @@ type Syncer struct {
 	metrics *Metrics
 	logger  *zap.SugaredLogger
 
-	mu               sync.Mutex
-	bootstrapped     bool
-	lastSeq          int64
-	lastLSN          uint64
-	lastGenerationID uint64
+	mu                    sync.Mutex
+	bootstrapped          bool
+	lastSeq               int64
+	lastLSN               uint64
+	lastGenerationID      uint64
 	catalogEntity         map[catalogKey]uint32
 	pendingRebuild        bool
 	firstNewHashAt        time.Time
 	hasLegacyTorrentFiles bool
+	lastRegistrySig       string
 }
 
 // NewSyncer creates a Syncer bound to a PostgreSQL pool, DH-TMS client, and serving policy.
@@ -81,6 +82,39 @@ func NewSyncer(
 		logger:        logger.Named(syncWorkerKey),
 		catalogEntity: make(map[catalogKey]uint32),
 	}
+}
+
+func (s *Syncer) hasServingGate() bool {
+	return s.policy != nil && (s.policy.RequiresPayloadEvidence() || s.policy.RequiresPublicationReview())
+}
+
+func (s *Syncer) shouldIndexNewRecord(rec exportedTorrentRow, nowUnix uint32) bool {
+	if s.policy == nil {
+		return true
+	}
+	if s.policy.RequiresPayloadEvidence() {
+		return rec.payloadExp > nowUnix
+	}
+	if s.policy.RequiresPublicationReview() {
+		return rec.pubOK
+	}
+	return true
+}
+
+func (s *Syncer) queryRegistrySignature(ctx context.Context, q interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+}) (string, error) {
+	if s.policy == nil || !s.policy.RequiresPublicationReview() {
+		return "", nil
+	}
+	var sig string
+	err := q.QueryRow(ctx, `SELECT COALESCE(execution_generation::text, '') || ':' || COALESCE(mode, '') || ':' || COALESCE(state, '') || ':' || COALESCE(manifest->'processor'->>'artifact_digest', '')
+FROM processor_registry
+WHERE id = $1`, s.policy.RequiredProcessor()).Scan(&sig)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "<missing>", nil
+	}
+	return sig, err
 }
 
 // FullBuild takes a REPEATABLE READ READ ONLY snapshot of PostgreSQL, evaluates
@@ -192,6 +226,12 @@ ORDER BY type, source, id`)
 	}
 	catRows.Close()
 
+	regSig, err := s.queryRegistrySignature(ctx, tx)
+	if err != nil {
+		s.metrics.RecordSync("full_build", "error")
+		return nil, fmt.Errorf("dhtms sync: read processor_registry signature: %w", err)
+	}
+
 	var hasLegacyFiles bool
 	var estTorrents int64
 	if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM torrent_files LIMIT 1), COALESCE((SELECT reltuples::bigint FROM pg_class WHERE relname = 'torrents'), 0)`).
@@ -200,6 +240,17 @@ ORDER BY type, source, id`)
 		return nil, fmt.Errorf("dhtms sync: inspect torrent_files/estimate: %w", err)
 	}
 	s.hasLegacyTorrentFiles = hasLegacyFiles
+	if s.policy != nil && s.policy.RequiresPayloadEvidence() {
+		var gatedEst int64
+		if err := tx.QueryRow(ctx, `SELECT COUNT(DISTINCT info_hash) FROM processor_payload_reviews WHERE approved AND expires_at > CURRENT_TIMESTAMP`).Scan(&gatedEst); err == nil {
+			estTorrents = gatedEst
+		}
+	} else if s.policy != nil && s.policy.RequiresPublicationReview() {
+		var gatedEst int64
+		if err := tx.QueryRow(ctx, `SELECT COUNT(*) FROM processor_publication_reviews WHERE processor_id = $1 AND approved`, s.policy.RequiredProcessor()).Scan(&gatedEst); err == nil {
+			estTorrents = gatedEst
+		}
+	}
 	indexTrigrams := true
 	switch strings.ToLower(strings.TrimSpace(s.cfg.IndexTrigrams)) {
 	case "true":
@@ -309,6 +360,7 @@ ORDER BY type, source, id`)
 	s.catalogEntity = entityMap
 	s.pendingRebuild = false
 	s.firstNewHashAt = time.Time{}
+	s.lastRegistrySig = regSig
 
 	if snapshotMaxSeq > 0 {
 		if _, delErr := s.pool.Exec(ctx, `DELETE FROM dhtms_outbox WHERE seq <= $1`, snapshotMaxSeq); delErr != nil {
@@ -343,7 +395,7 @@ func (s *Syncer) buildTorrentExportSQL(filterByHashes bool, includeLegacyTorrent
 
 	pubSQL := "TRUE"
 	if s.policy != nil {
-		if pubExpr, ok := s.policy.PublicationGateCondition("torrents"); ok {
+		if pubExpr, ok := s.policy.PublicationApprovedSQL("torrents"); ok {
 			converted, convertedArgs, nxt := GormExprToPG(pubExpr.SQL, pubExpr.Vars, nextParam)
 			pubSQL = converted
 			args = append(args, convertedArgs...)
@@ -362,8 +414,45 @@ func (s *Syncer) buildTorrentExportSQL(filterByHashes bool, includeLegacyTorrent
 	}
 
 	whereClause := ""
+	gatedFullBuild := false
 	if filterByHashes {
 		whereClause = fmt.Sprintf("WHERE torrents.info_hash = ANY($%d::bytea[]) OR torrents.info_hash_v2 = ANY($%d::bytea[])", nextParam, nextParam)
+	} else if s.policy != nil {
+		// Drive full-generation exports from the most selective positive serving gate
+		// when active so multi-million-row unapproved backlogs never stall generation builds.
+		if payGate, ok := s.policy.PayloadGateCondition("torrents"); ok {
+			converted, convertedArgs, nxt := GormExprToPG(payGate.SQL, payGate.Vars, nextParam)
+			whereClause = "WHERE " + converted
+			args = append(args, convertedArgs...)
+			nextParam = nxt
+			gatedFullBuild = true
+		} else if pubGate, ok := s.policy.PublicationGateCondition("torrents"); ok {
+			converted, convertedArgs, nxt := GormExprToPG(pubGate.SQL, pubGate.Vars, nextParam)
+			whereClause = "WHERE " + converted
+			args = append(args, convertedArgs...)
+			nextParam = nxt
+			gatedFullBuild = true
+		}
+	}
+
+	tcJoinSQL := `LEFT JOIN LATERAL (
+	SELECT tc0.content_type, tc0.content_source, tc0.content_id, tc0.video_resolution,
+	       tc0.published_at, tc0.seeders, tc0.leechers
+	FROM torrent_contents tc0
+	WHERE tc0.info_hash = torrents.info_hash
+	ORDER BY (tc0.content_id IS NOT NULL) DESC, tc0.updated_at DESC
+	LIMIT 1
+) tc ON TRUE`
+	if !filterByHashes && !gatedFullBuild {
+		// For ungated full-table exports, let PostgreSQL merge-join sequentially instead
+		// of probing torrent_contents one random index lookup per row across 30M+ torrents.
+		tcJoinSQL = `LEFT JOIN (
+	SELECT DISTINCT ON (tc0.info_hash)
+	       tc0.info_hash, tc0.content_type, tc0.content_source, tc0.content_id,
+	       tc0.video_resolution, tc0.published_at, tc0.seeders, tc0.leechers
+	FROM torrent_contents tc0
+	ORDER BY tc0.info_hash, (tc0.content_id IS NOT NULL) DESC, tc0.updated_at DESC
+) tc ON tc.info_hash = torrents.info_hash`
 	}
 
 	filePathsExpr := `COALESCE(fb.paths, '{}'::text[])`
@@ -397,19 +486,12 @@ func (s *Syncer) buildTorrentExportSQL(filterByHashes bool, includeLegacyTorrent
 	(%s) AS pub_ok,
 	(%s) AS payload_exp
 FROM torrents
-LEFT JOIN LATERAL (
-	SELECT tc0.content_type, tc0.content_source, tc0.content_id, tc0.video_resolution,
-	       tc0.published_at, tc0.seeders, tc0.leechers
-	FROM torrent_contents tc0
-	WHERE tc0.info_hash = torrents.info_hash
-	ORDER BY (tc0.content_id IS NOT NULL) DESC, tc0.updated_at DESC
-	LIMIT 1
-) tc ON TRUE
+%s
 LEFT JOIN content c
 	ON c.type = tc.content_type AND c.source = tc.content_source AND c.id = tc.content_id
 LEFT JOIN torrent_file_bundles fb
 	ON fb.info_hash = torrents.info_hash
-%s`, filePathsExpr, fileSizesExpr, fileExtsExpr, baseSQL, pubSQL, payloadSQL, whereClause)
+%s`, filePathsExpr, fileSizesExpr, fileExtsExpr, baseSQL, pubSQL, payloadSQL, tcJoinSQL, whereClause)
 
 	return querySQL, args
 }
@@ -560,12 +642,13 @@ func scanBuildDocRow(rows pgx.Rows, entityMap map[catalogKey]uint32) (BuildDocLi
 }
 
 type outboxChangeFlags struct {
-	rawHash []byte
-	deleted bool
-	upsert  bool
-	policy  bool
-	meta    bool
-	swarm   bool
+	rawHash     []byte
+	deleted     bool
+	upsert      bool
+	policy      bool
+	policyTable bool
+	meta        bool
+	swarm       bool
 }
 
 // SyncOnce executes one bounded sync cycle:
@@ -588,6 +671,16 @@ func (s *Syncer) SyncOnce(ctx context.Context) error {
 		return err
 	}
 	s.metrics.SetGeneration(health.GenerationID)
+	if s.policy != nil && s.policy.RequiresPublicationReview() {
+		if curSig, err := s.queryRegistrySignature(ctx, s.pool); err == nil && curSig != s.lastRegistrySig {
+			s.logger.Infow("processor_registry state changed; rebuilding dh-tmsd generation",
+				"previous", s.lastRegistrySig,
+				"current", curSig,
+			)
+			_, err := s.fullBuildLocked(ctx)
+			return err
+		}
+	}
 
 	var lsnText string
 	if err := s.pool.QueryRow(ctx, `SELECT pg_current_wal_lsn()::text`).Scan(&lsnText); err != nil {
@@ -646,6 +739,7 @@ LIMIT $2`, s.lastSeq, outboxBatchLimit)
 			f.meta = true
 		case "policy":
 			f.policy = true
+			f.policyTable = true
 		case "meta":
 			f.meta = true
 			f.policy = true // name or content_type change can affect adult/namepolicy visibility
@@ -708,9 +802,40 @@ func (s *Syncer) applyOutboxBatchLocked(
 	changes map[string]*outboxChangeFlags,
 	pgLSN uint64,
 ) error {
+	hasGate := s.hasServingGate()
+	lookups := make(map[string]*HashLookupResponse, len(changes))
 	hashSlice := make([][]byte, 0, len(changes))
-	for _, f := range changes {
+	for hexHash, f := range changes {
+		hl, err := s.client.HashLookup(ctx, HashLookupRequest{
+			InfoHash: hexHash,
+			Tier:     TierBase,
+		})
+		if errors.Is(err, ErrLeaseExpired) {
+			leaseMS := uint64(s.cfg.LeaseTTL / time.Millisecond)
+			if leaseMS == 0 {
+				leaseMS = uint64(defaultLeaseTTL / time.Millisecond)
+			}
+			if _, lerr := s.client.PolicyLease(ctx, PolicyLeaseRequest{PGLSN: pgLSN, TTLMS: leaseMS}); lerr != nil {
+				return fmt.Errorf("dhtms sync: renew lease before outbox lookup: %w", lerr)
+			}
+			hl, err = s.client.HashLookup(ctx, HashLookupRequest{
+				InfoHash: hexHash,
+				Tier:     TierBase,
+			})
+		}
+		if err != nil {
+			return fmt.Errorf("dhtms sync: hash lookup %s: %w", hexHash, err)
+		}
+		// When a publication or payload serving gate is active, unindexed raw crawl
+		// inserts/meta/swarm churn without a governance-table event cannot satisfy the gate.
+		if hasGate && (!hl.Found || hl.DocID == nil) && !f.policyTable {
+			continue
+		}
+		lookups[hexHash] = hl
 		hashSlice = append(hashSlice, f.rawHash)
+	}
+	if len(hashSlice) == 0 {
+		return nil
 	}
 
 	querySQL, baseArgs := s.buildTorrentExportSQL(true, s.hasLegacyTorrentFiles)
@@ -719,7 +844,7 @@ func (s *Syncer) applyOutboxBatchLocked(
 	if err != nil {
 		return fmt.Errorf("dhtms sync: query changed torrents: %w", err)
 	}
-	present := make(map[string]exportedTorrentRow, len(changes))
+	present := make(map[string]exportedTorrentRow, len(hashSlice))
 	for rows.Next() {
 		rec, err := scanExportedRow(rows, s.catalogEntity)
 		if err != nil {
@@ -743,7 +868,7 @@ func (s *Syncer) applyOutboxBatchLocked(
 		newL0Items []L0UpsertItem
 		newRecords []exportedTorrentRow
 		swarmItems []SwarmUpdateItem
-		seenDocID  = make(map[uint32]struct{}, len(changes))
+		seenDocID  = make(map[uint32]struct{}, len(lookups))
 		seenNew    = make(map[string]struct{})
 	)
 	markRebuild := func() {
@@ -752,30 +877,10 @@ func (s *Syncer) applyOutboxBatchLocked(
 			s.firstNewHashAt = time.Now()
 		}
 	}
+	nowUnix := uint32(time.Now().Unix())
 
-	// Ensure dh-tmsd lease is active during hash lookups if it momentarily lapsed.
-	for hexHash, f := range changes {
-		hl, err := s.client.HashLookup(ctx, HashLookupRequest{
-			InfoHash: hexHash,
-			Tier:     TierBase,
-		})
-		if errors.Is(err, ErrLeaseExpired) {
-			leaseMS := uint64(s.cfg.LeaseTTL / time.Millisecond)
-			if leaseMS == 0 {
-				leaseMS = uint64(defaultLeaseTTL / time.Millisecond)
-			}
-			if _, lerr := s.client.PolicyLease(ctx, PolicyLeaseRequest{PGLSN: pgLSN, TTLMS: leaseMS}); lerr != nil {
-				return fmt.Errorf("dhtms sync: renew lease before outbox lookup: %w", lerr)
-			}
-			hl, err = s.client.HashLookup(ctx, HashLookupRequest{
-				InfoHash: hexHash,
-				Tier:     TierBase,
-			})
-		}
-		if err != nil {
-			return fmt.Errorf("dhtms sync: hash lookup %s: %w", hexHash, err)
-		}
-
+	for hexHash, hl := range lookups {
+		f := changes[hexHash]
 		rec, existsInPG := present[hexHash]
 		if !existsInPG {
 			if hl.Found && hl.DocID != nil {
@@ -793,7 +898,10 @@ func (s *Syncer) applyOutboxBatchLocked(
 		}
 
 		if !hl.Found || hl.DocID == nil {
-			// Brand-new torrent not yet in active generation -> ingest directly into live L0
+			if !s.shouldIndexNewRecord(rec, nowUnix) {
+				continue
+			}
+			// Brand-new eligible torrent not yet in active generation -> ingest directly into live L0
 			// (avoids full-catalogue rebuild loops during continuous DHT crawling!).
 			canonicalKey := hex.EncodeToString(rec.infoHash)
 			if _, dup := seenNew[canonicalKey]; dup {

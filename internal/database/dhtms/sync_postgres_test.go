@@ -288,3 +288,169 @@ WHERE info_hash = decode($1, 'hex')`, hashPub)
 	require.NoError(t, err)
 	require.Len(t, recRes.Docs, 1)
 }
+
+// TestSyncerGatedPayloadAndPublicationE2E proves the gated full-build and outbox
+// fast path for deployments enforcing publication review + payload verification:
+//   - FullBuild drives from the selective payload gate (excluding unverified backlog rows)
+//   - Raw unverified crawl inserts skip L0 and never trigger rebuild churn
+//   - Live payload + publication approval triggers ingest directly into L0 (<1s)
+//   - Live publication hold immediately revokes fail-closed
+//   - processor_registry execution_generation bump automatically triggers a clean rebuild
+func TestSyncerGatedPayloadAndPublicationE2E(t *testing.T) {
+	dsn := strings.TrimSpace(os.Getenv("DH_WAYPOINT_TEST_POSTGRES_DSN"))
+	if dsn == "" {
+		t.Skip("DH_WAYPOINT_TEST_POSTGRES_DSN not set; skipping gated PG + dh-tmsd E2E test")
+	}
+	cli, _ := startTestDaemon(t)
+	ctx := context.Background()
+
+	adminCfg, err := pgx.ParseConfig(dsn)
+	require.NoError(t, err)
+	adminDB := stdlib.OpenDB(*adminCfg)
+	t.Cleanup(func() { _ = adminDB.Close() })
+
+	dbName := fmt.Sprintf("dhw_dhtms_gated_%d", time.Now().UnixNano())
+	quotedDB := pgx.Identifier{dbName}.Sanitize()
+	_, err = adminDB.ExecContext(ctx, "CREATE DATABASE "+quotedDB)
+	require.NoError(t, err)
+
+	testCfg := adminCfg.Copy()
+	testCfg.Database = dbName
+	sqlDB := stdlib.OpenDB(*testCfg)
+	poolCfg, err := pgxpool.ParseConfig(dsn)
+	require.NoError(t, err)
+	poolCfg.ConnConfig.Database = dbName
+	pool, err := pgxpool.NewWithConfig(ctx, poolCfg)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		pool.Close()
+		_ = sqlDB.Close()
+		cleanCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		_, _ = adminDB.ExecContext(cleanCtx, "DROP DATABASE IF EXISTS "+quotedDB+" WITH (FORCE)")
+	})
+
+	provider, err := goose.NewProvider(goose.DialectPostgres, sqlDB, migrationssql.FS)
+	require.NoError(t, err)
+	_, err = provider.Up(ctx)
+	require.NoError(t, err)
+
+	procDigest := strings.Repeat("a", 64)
+	payDigest := strings.Repeat("b", 64)
+	procIdentity := fmt.Sprintf(`{"name":"test-reviewer","artifact_digest":%q}`, procDigest)
+	procManifest := fmt.Sprintf(`{"processor":%s,"capabilities":["policy"]}`, procIdentity)
+
+	_, err = pool.Exec(ctx, `
+INSERT INTO processor_registry (id, generation, execution_generation, endpoint, mode, state, priority, manifest, configuration)
+VALUES ('test-reviewer', 1, 1, 'http://127.0.0.1:9999', 'apply', 'active', 100, $1::jsonb, '{}'::jsonb)`, procManifest)
+	require.NoError(t, err)
+
+	hashVerified := strings.Repeat("11", 20)
+	hashUnverified := strings.Repeat("22", 20)
+	hashCrawl := strings.Repeat("33", 20)
+	hashLateVerified := strings.Repeat("44", 20)
+
+	insertTorrent := func(hHex, name string) {
+		t.Helper()
+		_, err := pool.Exec(ctx, `
+INSERT INTO torrents (info_hash, name, size, private, files_status, created_at, updated_at)
+VALUES (decode($1, 'hex'), $2, 2000000000, false, 'single', now(), now())`, hHex, name)
+		require.NoError(t, err)
+	}
+	approveAll := func(hHex string, gen int) {
+		t.Helper()
+		_, err := pool.Exec(ctx, `
+INSERT INTO processor_publication_sources (info_hash, revision)
+VALUES (decode($1, 'hex'), 1)
+ON CONFLICT (info_hash) DO UPDATE SET revision = 1`, hHex)
+		require.NoError(t, err)
+		_, err = pool.Exec(ctx, `
+INSERT INTO processor_publication_reviews (info_hash, processor_id, source_revision, execution_generation, processor_identity, approved, policy_contract, reason, job_id)
+VALUES (decode($1, 'hex'), 'test-reviewer', 1, $2, $3::jsonb, true, $4, 'ok', $5)`,
+			hHex, gen, procIdentity, serving.PublicationReviewPolicy, strings.Repeat("9", 64))
+		require.NoError(t, err)
+		_, err = pool.Exec(ctx, `
+INSERT INTO processor_payload_reviews (info_hash, source_revision, verifier_artifact, policy, approved, reason, receipt, expires_at)
+VALUES (decode($1, 'hex'), 1, $2, $3, true, 'ok', '{}'::jsonb, now() + interval '7 days')`,
+			hHex, payDigest, serving.PayloadEvidenceContractV2)
+		require.NoError(t, err)
+	}
+
+	insertTorrent(hashVerified, "Gated.Verified.Release.2026.1080p.BluRay")
+	insertTorrent(hashUnverified, "Gated.Unverified.Backlog.2026.1080p.WEB-DL")
+	approveAll(hashVerified, 1)
+
+	strongKW, mediaExt, err := classifier.CoreAdultServingEvidence()
+	require.NoError(t, err)
+	pol, err := serving.NewPolicy(serving.Config{
+		ProcessorExclusions:                   true,
+		ExcludeAdult:                          true,
+		RequiredProcessor:                     "test-reviewer",
+		RequiredProcessorArtifactDigest:       procDigest,
+		RequiredPayloadVerifierArtifactDigest: payDigest,
+	}, strongKW, mediaExt)
+	require.NoError(t, err)
+
+	syncCfg := DefaultConfig()
+	syncCfg.Mode = ReadModeServe
+	syncCfg.LeaseTTL = 60 * time.Second
+	syncCfg.RebuildDebounce = 0
+	syncer := NewSyncer(pool, cli, pol, syncCfg, NewMetrics(), zap.NewNop().Sugar())
+
+	// 1. Gated FullBuild exports ONLY the 1 payload-verified torrent (skipping unverified backlog!).
+	require.NoError(t, syncer.SyncOnce(ctx))
+	h1, err := cli.Health(ctx)
+	require.NoError(t, err)
+	gen1 := h1.GenerationID
+	require.GreaterOrEqual(t, gen1, uint64(1))
+	require.Equal(t, 1, h1.NumDocs, "gated FullBuild must index only payload-verified docs, not unverified backlog")
+	require.Equal(t, uint64(1), h1.PayloadEligible)
+
+	res, err := cli.Search(ctx, SearchRequest{Query: "gated", Mode: ModeAnd, Tier: TierPayload, Limit: 10})
+	require.NoError(t, err)
+	require.Len(t, res.Docs, 1)
+	require.Equal(t, hashVerified, res.Docs[0].InfoHashV1)
+
+	// 2. Unverified DHT crawl insert -> SyncOnce drains outbox with ZERO L0 writes and ZERO rebuilds.
+	insertTorrent(hashCrawl, "Gated.Raw.Crawl.2026.720p")
+	require.NoError(t, syncer.SyncOnce(ctx))
+	h2, err := cli.Health(ctx)
+	require.NoError(t, err)
+	require.Equal(t, gen1, h2.GenerationID)
+	require.Equal(t, 0, h2.L0Count, "unverified raw crawl must not consume L0 slots under active serving gate")
+
+	// 3. New torrent receives live publication + payload proof -> immediately ingested into L0 and served!
+	insertTorrent(hashLateVerified, "Gated.Late.Proof.2026.2160p.REMUX")
+	approveAll(hashLateVerified, 1)
+	require.NoError(t, syncer.SyncOnce(ctx))
+	h3, err := cli.Health(ctx)
+	require.NoError(t, err)
+	require.Equal(t, gen1, h3.GenerationID)
+	require.Equal(t, 1, h3.L0Count)
+
+	res3, err := cli.Search(ctx, SearchRequest{Query: "late proof", Mode: ModeAnd, Tier: TierPayload, Limit: 10})
+	require.NoError(t, err)
+	require.Len(t, res3.Docs, 1)
+	require.Equal(t, hashLateVerified, res3.Docs[0].InfoHashV1)
+
+	// 4. Live publication hold immediately revokes fail-closed.
+	_, err = pool.Exec(ctx, `
+INSERT INTO processor_publication_holds (info_hash, held, reason, request_id)
+VALUES (decode($1, 'hex'), true, 'operator_hold', repeat('3', 64))`, hashLateVerified)
+	require.NoError(t, err)
+	require.NoError(t, syncer.SyncOnce(ctx))
+	res4, err := cli.Search(ctx, SearchRequest{Query: "late proof", Mode: ModeAnd, Tier: TierPayload, Limit: 10})
+	require.NoError(t, err)
+	require.Empty(t, res4.Docs)
+
+	// 5. processor_registry execution_generation bump triggers automatic rebuild revoking old-gen approvals!
+	_, err = pool.Exec(ctx, `UPDATE processor_registry SET execution_generation = 2 WHERE id = 'test-reviewer'`)
+	require.NoError(t, err)
+	require.NoError(t, syncer.SyncOnce(ctx))
+	h5, err := cli.Health(ctx)
+	require.NoError(t, err)
+	require.Greater(t, h5.GenerationID, gen1, "execution_generation bump must trigger automatic generation rebuild")
+	res5, err := cli.Search(ctx, SearchRequest{Query: "verified release", Mode: ModeAnd, Tier: TierPayload, Limit: 10})
+	require.NoError(t, err)
+	require.Empty(t, res5.Docs, "old-generation publication approval must no longer be served after generation bump")
+}
