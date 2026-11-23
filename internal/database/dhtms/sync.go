@@ -48,9 +48,10 @@ type Syncer struct {
 	lastSeq          int64
 	lastLSN          uint64
 	lastGenerationID uint64
-	catalogEntity    map[catalogKey]uint32
-	pendingRebuild   bool
-	firstNewHashAt   time.Time
+	catalogEntity         map[catalogKey]uint32
+	pendingRebuild        bool
+	firstNewHashAt        time.Time
+	hasLegacyTorrentFiles bool
 }
 
 // NewSyncer creates a Syncer bound to a PostgreSQL pool, DH-TMS client, and serving policy.
@@ -191,8 +192,30 @@ ORDER BY type, source, id`)
 	}
 	catRows.Close()
 
+	var hasLegacyFiles bool
+	var estTorrents int64
+	if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM torrent_files LIMIT 1), COALESCE((SELECT reltuples::bigint FROM pg_class WHERE relname = 'torrents'), 0)`).
+		Scan(&hasLegacyFiles, &estTorrents); err != nil {
+		s.metrics.RecordSync("full_build", "error")
+		return nil, fmt.Errorf("dhtms sync: inspect torrent_files/estimate: %w", err)
+	}
+	s.hasLegacyTorrentFiles = hasLegacyFiles
+	indexTrigrams := true
+	switch strings.ToLower(strings.TrimSpace(s.cfg.IndexTrigrams)) {
+	case "true":
+		indexTrigrams = true
+	case "false":
+		indexTrigrams = false
+	default: // "auto"
+		indexTrigrams = estTorrents < 2_000_000
+	}
+	estDocs := 0
+	if estTorrents > 0 {
+		estDocs = int(estTorrents)
+	}
+
 	// Build authoritative PostgreSQL visibility + metadata + file stream query.
-	docSQL, docArgs := s.buildTorrentExportSQL(false)
+	docSQL, docArgs := s.buildTorrentExportSQL(false, hasLegacyFiles)
 	docRows, err := tx.Query(ctx, docSQL, docArgs...)
 	if err != nil {
 		s.metrics.RecordSync("full_build", "error")
@@ -217,10 +240,13 @@ ORDER BY type, source, id`)
 			leaseMS = uint64(defaultLeaseTTL / time.Millisecond)
 		}
 		if err := enc.Encode(BuildHeaderLine{
-			Kind:       "header",
-			PGLSN:      lsnU64,
-			LeaseTTLMS: leaseMS,
-			PGLSNText:  lsnText,
+			Kind:          "header",
+			PGLSN:         lsnU64,
+			LeaseTTLMS:    leaseMS,
+			PGLSNText:     lsnText,
+			IndexTrigrams: &indexTrigrams,
+			UniqueHashes:  true,
+			EstimatedDocs: estDocs,
 		}); err != nil {
 			writeErr(err)
 			return
@@ -302,7 +328,7 @@ ORDER BY type, source, id`)
 
 // buildTorrentExportSQL constructs the authoritative PostgreSQL export query
 // using serving.Policy's canonical SQL predicates verbatim.
-func (s *Syncer) buildTorrentExportSQL(filterByHashes bool) (string, []any) {
+func (s *Syncer) buildTorrentExportSQL(filterByHashes bool, includeLegacyTorrentFiles bool) (string, []any) {
 	var args []any
 	nextParam := 1
 
@@ -340,6 +366,15 @@ func (s *Syncer) buildTorrentExportSQL(filterByHashes bool) (string, []any) {
 		whereClause = fmt.Sprintf("WHERE torrents.info_hash = ANY($%d::bytea[]) OR torrents.info_hash_v2 = ANY($%d::bytea[])", nextParam, nextParam)
 	}
 
+	filePathsExpr := `COALESCE(fb.paths, '{}'::text[])`
+	fileSizesExpr := `COALESCE(fb.sizes, '{}'::bigint[])`
+	fileExtsExpr := `COALESCE(fb.extensions, '{}'::text[])`
+	if includeLegacyTorrentFiles {
+		filePathsExpr = `COALESCE(fb.paths, ARRAY(SELECT f.path FROM torrent_files f WHERE f.info_hash = torrents.info_hash ORDER BY f."index"))`
+		fileSizesExpr = `COALESCE(fb.sizes, ARRAY(SELECT f.size FROM torrent_files f WHERE f.info_hash = torrents.info_hash ORDER BY f."index"))`
+		fileExtsExpr = `COALESCE(fb.extensions, ARRAY(SELECT COALESCE(f.extension, '') FROM torrent_files f WHERE f.info_hash = torrents.info_hash ORDER BY f."index"))`
+	}
+
 	querySQL := fmt.Sprintf(`SELECT
 	torrents.info_hash,
 	torrents.info_hash_v2,
@@ -355,9 +390,9 @@ func (s *Syncer) buildTorrentExportSQL(filterByHashes bool) (string, []any) {
 	COALESCE(tc.seeders, -1) AS seeders,
 	COALESCE(tc.leechers, -1) AS leechers,
 	COALESCE(c.release_year, 0) AS release_year,
-	COALESCE(fb.paths, ARRAY(SELECT f.path FROM torrent_files f WHERE f.info_hash = torrents.info_hash ORDER BY f."index")) AS file_paths,
-	COALESCE(fb.sizes, ARRAY(SELECT f.size FROM torrent_files f WHERE f.info_hash = torrents.info_hash ORDER BY f."index")) AS file_sizes,
-	COALESCE(fb.extensions, ARRAY(SELECT COALESCE(f.extension, '') FROM torrent_files f WHERE f.info_hash = torrents.info_hash ORDER BY f."index")) AS file_exts,
+	%s AS file_paths,
+	%s AS file_sizes,
+	%s AS file_exts,
 	(%s) AS base_ok,
 	(%s) AS pub_ok,
 	(%s) AS payload_exp
@@ -374,7 +409,7 @@ LEFT JOIN content c
 	ON c.type = tc.content_type AND c.source = tc.content_source AND c.id = tc.content_id
 LEFT JOIN torrent_file_bundles fb
 	ON fb.info_hash = torrents.info_hash
-%s`, baseSQL, pubSQL, payloadSQL, whereClause)
+%s`, filePathsExpr, fileSizesExpr, fileExtsExpr, baseSQL, pubSQL, payloadSQL, whereClause)
 
 	return querySQL, args
 }
@@ -678,7 +713,7 @@ func (s *Syncer) applyOutboxBatchLocked(
 		hashSlice = append(hashSlice, f.rawHash)
 	}
 
-	querySQL, baseArgs := s.buildTorrentExportSQL(true)
+	querySQL, baseArgs := s.buildTorrentExportSQL(true, s.hasLegacyTorrentFiles)
 	queryArgs := append(baseArgs, hashSlice)
 	rows, err := s.pool.Query(ctx, querySQL, queryArgs...)
 	if err != nil {
@@ -705,8 +740,11 @@ func (s *Syncer) applyOutboxBatchLocked(
 	var (
 		policyOps  []PolicyBatchOp
 		l0Items    []L0UpsertItem
+		newL0Items []L0UpsertItem
+		newRecords []exportedTorrentRow
 		swarmItems []SwarmUpdateItem
 		seenDocID  = make(map[uint32]struct{}, len(changes))
+		seenNew    = make(map[string]struct{})
 	)
 	markRebuild := func() {
 		if !s.pendingRebuild {
@@ -755,8 +793,29 @@ func (s *Syncer) applyOutboxBatchLocked(
 		}
 
 		if !hl.Found || hl.DocID == nil {
-			// Brand-new torrent not yet in active generation -> schedule debounced rebuild.
-			markRebuild()
+			// Brand-new torrent not yet in active generation -> ingest directly into live L0
+			// (avoids full-catalogue rebuild loops during continuous DHT crawling!).
+			canonicalKey := hex.EncodeToString(rec.infoHash)
+			if _, dup := seenNew[canonicalKey]; dup {
+				continue
+			}
+			seenNew[canonicalKey] = struct{}{}
+			newL0Items = append(newL0Items, L0UpsertItem{
+				InfoHashV1:     rec.doc.InfoHashV1,
+				InfoHashV2:     rec.doc.InfoHashV2,
+				Name:           rec.doc.Name,
+				SizeBytes:      rec.doc.SizeBytes,
+				ContentType:    rec.doc.ContentType,
+				Resolution:     rec.doc.Resolution,
+				EntityID:       rec.doc.EntityID,
+				Year:           rec.doc.Year,
+				PublishedEpoch: rec.doc.PublishedEpoch,
+				CreatedEpoch:   rec.doc.CreatedEpoch,
+				FilesCount:     uint32(len(rec.doc.Files)),
+				FilePaths:      rec.filePaths,
+				Files:          rec.doc.Files,
+			})
+			newRecords = append(newRecords, rec)
 			continue
 		}
 
@@ -779,6 +838,7 @@ func (s *Syncer) applyOutboxBatchLocked(
 				})
 			} else {
 				policyOps = append(policyOps,
+					PolicyBatchOp{Op: "grant_base", DocID: &docID},
 					PolicyBatchOp{Op: "unrevoke", DocID: &docID, Reason: ReasonExcluded},
 					PolicyBatchOp{Op: "unrevoke", DocID: &docID, Reason: ReasonPrivacy},
 				)
@@ -800,16 +860,22 @@ func (s *Syncer) applyOutboxBatchLocked(
 		}
 
 		if f.meta {
+			idCopy := docID
 			l0Items = append(l0Items, L0UpsertItem{
-				DocID:          docID,
+				DocID:          &idCopy,
+				InfoHashV1:     rec.doc.InfoHashV1,
+				InfoHashV2:     rec.doc.InfoHashV2,
 				Name:           rec.doc.Name,
+				SizeBytes:      rec.doc.SizeBytes,
 				ContentType:    rec.doc.ContentType,
 				Resolution:     rec.doc.Resolution,
 				EntityID:       rec.doc.EntityID,
 				Year:           rec.doc.Year,
 				PublishedEpoch: rec.doc.PublishedEpoch,
 				CreatedEpoch:   rec.doc.CreatedEpoch,
+				FilesCount:     uint32(len(rec.doc.Files)),
 				FilePaths:      rec.filePaths,
+				Files:          rec.doc.Files,
 			})
 		}
 
@@ -834,6 +900,82 @@ func (s *Syncer) applyOutboxBatchLocked(
 		}
 	}
 
+	// 1. Insert brand-new torrents into live L0 first so we obtain their assigned dynamic doc_ids
+	// before applying policy grants/revocations and swarm counts in the same cycle.
+	if len(newL0Items) > 0 {
+		newResp, err := s.client.L0Upsert(ctx, L0UpsertRequest{
+			Docs: newL0Items,
+			Sync: true,
+		})
+		if err != nil {
+			// If dynamic L0 capacity is exhausted, schedule compaction rebuild cleanly.
+			if strings.Contains(err.Error(), "capacity exhausted") {
+				markRebuild()
+			} else {
+				return fmt.Errorf("dhtms sync: apply new l0 insert (%d docs): %w", len(newL0Items), err)
+			}
+		} else {
+			if s.cfg.CompactDocs > 0 && newResp.L0Count >= s.cfg.CompactDocs {
+				markRebuild()
+			}
+			for i, assignedID := range newResp.DocIDs {
+				if i >= len(newRecords) {
+					break
+				}
+				rec := newRecords[i]
+				idCopy := assignedID
+				if !rec.baseOK {
+					reason := ReasonExcluded
+					if rec.isPrivate {
+						reason = ReasonPrivacy
+					}
+					policyOps = append(policyOps, PolicyBatchOp{
+						Op:     "revoke",
+						DocID:  &idCopy,
+						Reason: reason,
+					})
+				} else {
+					policyOps = append(policyOps,
+						PolicyBatchOp{Op: "grant_base", DocID: &idCopy},
+						PolicyBatchOp{Op: "unrevoke", DocID: &idCopy, Reason: ReasonExcluded},
+						PolicyBatchOp{Op: "unrevoke", DocID: &idCopy, Reason: ReasonPrivacy},
+					)
+					if rec.pubOK {
+						policyOps = append(policyOps, PolicyBatchOp{Op: "grant_pub", DocID: &idCopy})
+					} else {
+						policyOps = append(policyOps, PolicyBatchOp{Op: "revoke_pub", DocID: &idCopy})
+					}
+					if rec.payloadExp > 0 {
+						policyOps = append(policyOps, PolicyBatchOp{
+							Op:           "grant_payload",
+							DocID:        &idCopy,
+							ExpiresEpoch: rec.payloadExp,
+						})
+					} else {
+						policyOps = append(policyOps, PolicyBatchOp{Op: "revoke_payload", DocID: &idCopy})
+					}
+				}
+				var sPtr, lPtr *uint32
+				if rec.seeders >= 0 {
+					v := uint32(rec.seeders)
+					sPtr = &v
+				}
+				if rec.leechers >= 0 {
+					v := uint32(rec.leechers)
+					lPtr = &v
+				}
+				if sPtr != nil || lPtr != nil {
+					swarmItems = append(swarmItems, SwarmUpdateItem{
+						DocID:           &idCopy,
+						Seeders:         sPtr,
+						Leechers:        lPtr,
+						CheckedEpochMin: rec.checkedMin,
+					})
+				}
+			}
+		}
+	}
+
 	if len(policyOps) > 0 {
 		if _, err := s.client.PolicyBatch(ctx, PolicyBatchRequest{
 			Ops:             policyOps,
@@ -845,11 +987,15 @@ func (s *Syncer) applyOutboxBatchLocked(
 		}
 	}
 	if len(l0Items) > 0 {
-		if _, err := s.client.L0Upsert(ctx, L0UpsertRequest{
+		l0Resp, err := s.client.L0Upsert(ctx, L0UpsertRequest{
 			Docs: l0Items,
 			Sync: true,
-		}); err != nil {
+		})
+		if err != nil {
 			return fmt.Errorf("dhtms sync: apply l0 upsert (%d docs): %w", len(l0Items), err)
+		}
+		if s.cfg.CompactDocs > 0 && l0Resp.L0Count >= s.cfg.CompactDocs {
+			markRebuild()
 		}
 	}
 	if len(swarmItems) > 0 {
@@ -858,23 +1004,6 @@ func (s *Syncer) applyOutboxBatchLocked(
 			Sync:    false,
 		}); err != nil {
 			return fmt.Errorf("dhtms sync: apply swarm update (%d items): %w", len(swarmItems), err)
-		}
-	}
-
-	// If a previously private doc became base-eligible in PG, its base bitmap
-	// omitted it from public_bm at build time; verify and schedule rebuild if needed.
-	for hexHash, f := range changes {
-		if !f.policy {
-			continue
-		}
-		rec, ok := present[hexHash]
-		if !ok || !rec.baseOK {
-			continue
-		}
-		hl, err := s.client.HashLookup(ctx, HashLookupRequest{InfoHash: hexHash, Tier: TierBase})
-		if err == nil && hl.Found && !hl.Eligible {
-			markRebuild()
-			break
 		}
 	}
 

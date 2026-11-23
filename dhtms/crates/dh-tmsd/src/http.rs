@@ -318,6 +318,11 @@ fn dispatch(
             "Not Found",
             br#"{"error":"not_found","code":"not_found"}"#.to_vec(),
         ),
+        Err(DaemonError::TrigramsDisabled) => (
+            503,
+            "Service Unavailable",
+            br#"{"error":"trigrams_disabled","code":"trigrams_disabled"}"#.to_vec(),
+        ),
         Err(DaemonError::LeaseExpired {
             now_ms,
             valid_until_ms,
@@ -347,7 +352,29 @@ fn dispatch(
     }
 }
 
-pub fn handle_connection<S: Read + Write>(
+pub trait StreamTimeoutControl {
+    fn set_streaming_timeouts(&mut self) {}
+}
+
+impl StreamTimeoutControl for std::net::TcpStream {
+    fn set_streaming_timeouts(&mut self) {
+        let _ = self.set_read_timeout(Some(Duration::from_secs(600)));
+        let _ = self.set_write_timeout(Some(Duration::from_secs(60)));
+    }
+}
+
+#[cfg(unix)]
+impl StreamTimeoutControl for std::os::unix::net::UnixStream {
+    fn set_streaming_timeouts(&mut self) {
+        let _ = self.set_read_timeout(Some(Duration::from_secs(600)));
+        let _ = self.set_write_timeout(Some(Duration::from_secs(60)));
+    }
+}
+
+impl<T: AsRef<[u8]>> StreamTimeoutControl for std::io::Cursor<T> {}
+impl StreamTimeoutControl for &mut [u8] {}
+
+pub fn handle_connection<S: Read + Write + StreamTimeoutControl>(
     host: &EngineHost,
     auth_token: Option<&str>,
     mut stream: S,
@@ -443,7 +470,7 @@ pub fn handle_connection<S: Read + Write>(
 
     let route_path = path.split('?').next().unwrap_or(path);
     if let Some(expected) = auth_token {
-        if !expected.is_empty() && !(method == "GET" && route_path == "/v1/health") {
+        if !(expected.is_empty() || method == "GET" && route_path == "/v1/health") {
             let ok = provided_token
                 .as_deref()
                 .is_some_and(|got| ct_eq(got.as_bytes(), expected.as_bytes()));
@@ -461,6 +488,7 @@ pub fn handle_connection<S: Read + Write>(
 
     // Stream NDJSON generation builds directly from the socket without buffering whole payloads.
     if method == "POST" && route_path == "/v1/generation/build" {
+        reader.get_mut().set_streaming_timeouts();
         if !is_chunked && content_length > MAX_BUILD_STREAM_BYTES {
             let _ = write_json_response(
                 reader.into_inner(),

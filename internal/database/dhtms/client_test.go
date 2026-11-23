@@ -410,7 +410,7 @@ func TestEndToEndWithRealDaemon(t *testing.T) {
 	l0Target := rss.Docs[0].DocID
 	l0Resp, err := cli.L0Upsert(ctx, L0UpsertRequest{
 		Docs: []L0UpsertItem{{
-			DocID:          l0Target,
+			DocID:          &l0Target,
 			Name:           "Reclassified.Overlay.2026.2160p",
 			ContentType:    1,
 			EntityID:       9999,

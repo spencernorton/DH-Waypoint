@@ -1,6 +1,6 @@
 use ahash::{AHashMap, AHashSet};
 use crc32fast::Hasher as Crc32;
-use dh_tms_grammar::{parse_release_name, EpisodeSpec};
+use dh_tms_grammar::{parse_release_name, tokenize_alnum, EpisodeSpec};
 use parking_lot::RwLock;
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Write};
@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use xxhash_rust::xxh3::xxh3_64_with_seed;
 
 const L0_WAL_MAGIC: [u8; 4] = *b"L0WL";
+const L0_EXT_V2_MAGIC: [u8; 4] = *b"L0V2";
 
 #[derive(Debug, Clone)]
 pub struct L0Doc {
@@ -23,6 +24,11 @@ pub struct L0Doc {
     pub strict_title_hashes: Vec<u64>,
     pub family_hashes: Vec<u64>,
     pub terms: Vec<(u64, u16)>,
+    pub info_hash_v1: Option<[u8; 20]>,
+    pub info_hash_v2: Option<[u8; 32]>,
+    pub size_bytes: u64,
+    pub files_count: u32,
+    pub files: Vec<(String, u64, String)>,
 }
 
 struct L0Inner {
@@ -32,6 +38,10 @@ struct L0Inner {
     inv: AHashMap<u64, Vec<(u32, u16)>>,
     entity_idx: AHashMap<u32, Vec<u32>>,
     strict_title_idx: AHashMap<u64, Vec<u32>>,
+    family_idx: AHashMap<u64, Vec<u32>>,
+    v1_to_doc: AHashMap<[u8; 20], u32>,
+    v2_to_doc: AHashMap<[u8; 32], u32>,
+    next_dynamic_doc_id: u32,
     wal_file: File,
     next_seq: u64,
 }
@@ -53,6 +63,10 @@ impl L0Overlay {
             inv: AHashMap::new(),
             entity_idx: AHashMap::new(),
             strict_title_idx: AHashMap::new(),
+            family_idx: AHashMap::new(),
+            v1_to_doc: AHashMap::new(),
+            v2_to_doc: AHashMap::new(),
+            next_dynamic_doc_id: 0,
             wal_file: OpenOptions::new()
                 .create(true)
                 .append(true)
@@ -119,6 +133,9 @@ impl L0Overlay {
                         format!("corrupt L0 WAL payload at byte {pos}"),
                     )
                 })?;
+                if doc.doc_id >= inner.next_dynamic_doc_id {
+                    inner.next_dynamic_doc_id = doc.doc_id.saturating_add(1);
+                }
                 apply_upsert_mem(&mut inner, doc);
                 inner.next_seq = seq + 1;
                 pos = end;
@@ -136,7 +153,55 @@ impl L0Overlay {
         })
     }
 
-    /// Durable WAL-before-mutate upsert / reclassification for live writes.
+    /// Idempotently resolve or allocate a dynamic `doc_id` in `[base_num_docs, max_doc_id)`
+    /// for a newly discovered torrent hash.
+    pub fn allocate_or_get_doc_id(
+        &self,
+        base_num_docs: u32,
+        max_doc_id: u32,
+        v1: Option<[u8; 20]>,
+        v2: Option<[u8; 32]>,
+    ) -> Result<u32, io::Error> {
+        let mut g = self.inner.write();
+        if let Some(h1) = v1 {
+            if let Some(&existing) = g.v1_to_doc.get(&h1) {
+                return Ok(existing);
+            }
+        }
+        if let Some(h2) = v2 {
+            if let Some(&existing) = g.v2_to_doc.get(&h2) {
+                return Ok(existing);
+            }
+        }
+        if g.next_dynamic_doc_id < base_num_docs {
+            g.next_dynamic_doc_id = base_num_docs;
+        }
+        let assigned = g.next_dynamic_doc_id;
+        if assigned >= max_doc_id {
+            return Err(io::Error::new(
+                io::ErrorKind::OutOfMemory,
+                format!("dynamic L0 capacity exhausted (max_doc_id={max_doc_id})"),
+            ));
+        }
+        g.next_dynamic_doc_id = assigned.saturating_add(1);
+        if let Some(h1) = v1 {
+            g.v1_to_doc.insert(h1, assigned);
+        }
+        if let Some(h2) = v2 {
+            g.v2_to_doc.insert(h2, assigned);
+        }
+        Ok(assigned)
+    }
+
+    pub fn lookup_hash_v1(&self, h: &[u8; 20]) -> Option<u32> {
+        self.inner.read().v1_to_doc.get(h).copied()
+    }
+
+    pub fn lookup_hash_v2(&self, h: &[u8; 32]) -> Option<u32> {
+        self.inner.read().v2_to_doc.get(h).copied()
+    }
+
+    /// Durable WAL-before-mutate upsert / insert / reclassification for live writes.
     pub fn upsert_batch(&self, docs: &[L0Doc], sync_wal: bool) -> io::Result<usize> {
         if docs.is_empty() {
             return Ok(0);
@@ -167,6 +232,9 @@ impl L0Overlay {
             g.wal_file.sync_data()?;
         }
         for doc in docs {
+            if doc.doc_id >= g.next_dynamic_doc_id {
+                g.next_dynamic_doc_id = doc.doc_id.saturating_add(1);
+            }
             apply_upsert_mem(&mut g, doc.clone());
         }
         Ok(docs.len())
@@ -230,8 +298,68 @@ impl L0Overlay {
             .unwrap_or_default()
     }
 
+    pub fn lookup_family(&self, fam_hash: u64) -> Vec<u32> {
+        let g = self.inner.read();
+        g.family_idx.get(&fam_hash).cloned().unwrap_or_default()
+    }
+
+    /// Return `(doc_id, published_epoch)` for L0 docs matching an optional `content_type`,
+    /// sorted newest-first (`published_epoch DESC, doc_id ASC`).
+    pub fn recent_docs(&self, ct_filter: Option<u8>) -> Vec<(u32, u32)> {
+        let g = self.inner.read();
+        if g.docs.is_empty() {
+            return Vec::new();
+        }
+        let mut out: Vec<(u32, u32)> = g
+            .docs
+            .values()
+            .filter(|d| ct_filter.is_none_or(|ct| d.content_type == ct))
+            .map(|d| (d.doc_id, d.published_epoch))
+            .collect();
+        out.sort_unstable_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        out
+    }
+
+    /// Return L0 doc_ids matching `(season, episode)` and allowed content types.
+    pub fn matching_episode_docs(&self, season: u16, episode: Option<u16>) -> Vec<u32> {
+        let g = self.inner.read();
+        if g.docs.is_empty() {
+            return Vec::new();
+        }
+        g.docs
+            .values()
+            .filter(|d| doc_matches_episode(&d.episodes, season, episode))
+            .map(|d| d.doc_id)
+            .collect()
+    }
+
+    /// Return `(doc_id, content_type, entity_id)` for L0 docs with `created_epoch >= cutoff`.
+    pub fn docs_since(&self, cutoff_epoch: u32) -> Vec<(u32, u8, u32)> {
+        let g = self.inner.read();
+        if g.docs.is_empty() {
+            return Vec::new();
+        }
+        g.docs
+            .values()
+            .filter(|d| d.created_epoch >= cutoff_epoch)
+            .map(|d| (d.doc_id, d.content_type, d.entity_id))
+            .collect()
+    }
+
     pub fn wal_path(&self) -> &Path {
         &self.wal_path
+    }
+}
+
+pub fn doc_matches_episode(episodes: &[EpisodeSpec], season: u16, episode: Option<u16>) -> bool {
+    match episode {
+        Some(ep) => episodes.iter().any(|e| match *e {
+            EpisodeSpec::Episode(s, e_num) => s == season && e_num == ep,
+            EpisodeSpec::WholeSeason(s) => s == season,
+        }),
+        None => episodes.iter().any(|e| match *e {
+            EpisodeSpec::Episode(s, _) | EpisodeSpec::WholeSeason(s) => s == season,
+        }),
     }
 }
 
@@ -244,7 +372,7 @@ fn truncate_wal(wal_path: &Path, valid_len: u64) -> io::Result<()> {
 fn apply_upsert_mem(inner: &mut L0Inner, doc: L0Doc) {
     let doc_id = doc.doc_id;
     inner.superseded_base.insert(doc_id);
-    // Remove old postings, entity_idx, and strict_title_idx entries if re-updating in L0.
+    // Remove old postings, entity_idx, strict_title_idx, and family_idx entries if re-updating in L0.
     if let Some(old) = inner.docs.remove(&doc_id) {
         for (th, _) in &old.terms {
             if let Some(list) = inner.inv.get_mut(th) {
@@ -261,7 +389,22 @@ fn apply_upsert_mem(inner: &mut L0Inner, doc: L0Doc) {
                 list.retain(|&d| d != doc_id);
             }
         }
+        for fh in &old.family_hashes {
+            if let Some(list) = inner.family_idx.get_mut(fh) {
+                list.retain(|&d| d != doc_id);
+            }
+        }
     }
+    // Deduplicate terms per doc_id keeping max impact so AND-mode term counts are exact.
+    let mut best_terms: AHashMap<u64, u16> = AHashMap::with_capacity(doc.terms.len());
+    for &(th, imp) in &doc.terms {
+        best_terms
+            .entry(th)
+            .and_modify(|v| *v = (*v).max(imp))
+            .or_insert(imp);
+    }
+    let mut doc = doc;
+    doc.terms = best_terms.into_iter().collect();
     for &(th, imp) in &doc.terms {
         inner.inv.entry(th).or_default().push((doc_id, imp));
     }
@@ -275,6 +418,15 @@ fn apply_upsert_mem(inner: &mut L0Inner, doc: L0Doc) {
     for &sth in &doc.strict_title_hashes {
         inner.strict_title_idx.entry(sth).or_default().push(doc_id);
     }
+    for &fh in &doc.family_hashes {
+        inner.family_idx.entry(fh).or_default().push(doc_id);
+    }
+    if let Some(h1) = doc.info_hash_v1 {
+        inner.v1_to_doc.insert(h1, doc_id);
+    }
+    if let Some(h2) = doc.info_hash_v2 {
+        inner.v2_to_doc.insert(h2, doc_id);
+    }
     inner.docs.insert(doc_id, doc);
 }
 
@@ -283,7 +435,9 @@ fn encode_l0_payload(doc: &L0Doc) -> Vec<u8> {
     let ep_cnt = doc.episodes.len().min(u16::MAX as usize);
     let sth_cnt = doc.strict_title_hashes.len().min(u16::MAX as usize);
     let fam_cnt = doc.family_hashes.len().min(u16::MAX as usize);
-    let mut out = Vec::with_capacity(30 + nb.len() + ep_cnt * 5 + sth_cnt * 8 + fam_cnt * 8);
+    let file_cnt = doc.files.len().min(256);
+    let mut out =
+        Vec::with_capacity(64 + nb.len() + ep_cnt * 5 + sth_cnt * 8 + fam_cnt * 8 + file_cnt * 48);
     out.extend_from_slice(&doc.doc_id.to_le_bytes());
     out.push(doc.content_type);
     out.push(doc.resolution);
@@ -315,6 +469,36 @@ fn encode_l0_payload(doc: &L0Doc) -> Vec<u8> {
     out.extend_from_slice(&(fam_cnt as u16).to_le_bytes());
     for &h in doc.family_hashes.iter().take(fam_cnt) {
         out.extend_from_slice(&h.to_le_bytes());
+    }
+    // Trailing v2 extension: hashes, size_bytes, files_count, and capped file list
+    out.extend_from_slice(&L0_EXT_V2_MAGIC);
+    let mut flags = 0u8;
+    if doc.info_hash_v1.is_some() {
+        flags |= 1;
+    }
+    if doc.info_hash_v2.is_some() {
+        flags |= 2;
+    }
+    out.push(flags);
+    if let Some(h1) = doc.info_hash_v1 {
+        out.extend_from_slice(&h1);
+    }
+    if let Some(h2) = doc.info_hash_v2 {
+        out.extend_from_slice(&h2);
+    }
+    out.extend_from_slice(&doc.size_bytes.to_le_bytes());
+    out.extend_from_slice(&doc.files_count.to_le_bytes());
+    out.extend_from_slice(&(file_cnt as u16).to_le_bytes());
+    for (fp, sz, ext) in doc.files.iter().take(file_cnt) {
+        let fpb = fp.as_bytes();
+        let exb = ext.as_bytes();
+        let fplen = fpb.len().min(u16::MAX as usize);
+        let exlen = exb.len().min(u8::MAX as usize);
+        out.extend_from_slice(&(fplen as u16).to_le_bytes());
+        out.extend_from_slice(&fpb[..fplen]);
+        out.extend_from_slice(&sz.to_le_bytes());
+        out.push(exlen as u8);
+        out.extend_from_slice(&exb[..exlen]);
     }
     out
 }
@@ -396,12 +580,75 @@ fn decode_l0_payload(buf: &[u8], term_seed: u64) -> Option<L0Doc> {
         (episodes, strict_title_hashes, family_hashes)
     };
 
+    let mut info_hash_v1 = None;
+    let mut info_hash_v2 = None;
+    let mut size_bytes = 0u64;
+    let mut files_count = 0u32;
+    let mut files: Vec<(String, u64, String)> = Vec::new();
+
+    if off + 5 <= buf.len() && buf[off..off + 4] == L0_EXT_V2_MAGIC {
+        off += 4;
+        let flags = buf[off];
+        off += 1;
+        if (flags & 1) != 0 {
+            if off + 20 > buf.len() {
+                return None;
+            }
+            info_hash_v1 = Some(buf[off..off + 20].try_into().ok()?);
+            off += 20;
+        }
+        if (flags & 2) != 0 {
+            if off + 32 > buf.len() {
+                return None;
+            }
+            info_hash_v2 = Some(buf[off..off + 32].try_into().ok()?);
+            off += 32;
+        }
+        if off + 14 > buf.len() {
+            return None;
+        }
+        size_bytes = u64::from_le_bytes(buf[off..off + 8].try_into().ok()?);
+        off += 8;
+        files_count = u32::from_le_bytes(buf[off..off + 4].try_into().ok()?);
+        off += 4;
+        let fcnt = u16::from_le_bytes(buf[off..off + 2].try_into().ok()?) as usize;
+        off += 2;
+        files.reserve(fcnt);
+        for _ in 0..fcnt {
+            if off + 2 > buf.len() {
+                return None;
+            }
+            let fplen = u16::from_le_bytes(buf[off..off + 2].try_into().ok()?) as usize;
+            off += 2;
+            if off + fplen + 9 > buf.len() {
+                return None;
+            }
+            let fp = String::from_utf8(buf[off..off + fplen].to_vec()).ok()?;
+            off += fplen;
+            let sz = u64::from_le_bytes(buf[off..off + 8].try_into().ok()?);
+            off += 8;
+            let exlen = buf[off] as usize;
+            off += 1;
+            if off + exlen > buf.len() {
+                return None;
+            }
+            let ext = String::from_utf8(buf[off..off + exlen].to_vec()).ok()?;
+            off += exlen;
+            files.push((fp, sz, ext));
+        }
+    }
+
     let mut terms = Vec::with_capacity(pr.title_tokens.len() + pr.raw_tokens.len());
     for t in &pr.title_tokens {
         terms.push((xxh3_64_with_seed(t.as_bytes(), term_seed), 1500u16));
     }
     for t in &pr.raw_tokens {
         terms.push((xxh3_64_with_seed(t.as_bytes(), term_seed), 600u16));
+    }
+    for (fp, _, _) in files.iter().take(64) {
+        for t in tokenize_alnum(fp) {
+            terms.push((xxh3_64_with_seed(t.as_bytes(), term_seed), 250u16));
+        }
     }
 
     Some(L0Doc {
@@ -417,6 +664,11 @@ fn decode_l0_payload(buf: &[u8], term_seed: u64) -> Option<L0Doc> {
         strict_title_hashes,
         family_hashes,
         terms,
+        info_hash_v1,
+        info_hash_v2,
+        size_bytes,
+        files_count,
+        files,
     })
 }
 
@@ -437,6 +689,7 @@ mod tests {
         let old_sth = pr1.strict_title_hashes[0];
         let new_sth = pr2.strict_title_hashes[0];
         assert_ne!(old_sth, new_sth);
+        let h1 = [0xABu8; 20];
 
         {
             let l0 = L0Overlay::open(&wal, 7, seed).unwrap();
@@ -458,6 +711,11 @@ mod tests {
                         .iter()
                         .map(|t| (xxh3_64_with_seed(t.as_bytes(), seed), 1500))
                         .collect(),
+                    info_hash_v1: None,
+                    info_hash_v2: None,
+                    size_bytes: 0,
+                    files_count: 0,
+                    files: vec![],
                 }],
                 true,
             )
@@ -483,6 +741,11 @@ mod tests {
                         .iter()
                         .map(|t| (xxh3_64_with_seed(t.as_bytes(), seed), 1500))
                         .collect(),
+                    info_hash_v1: None,
+                    info_hash_v2: None,
+                    size_bytes: 0,
+                    files_count: 0,
+                    files: vec![],
                 }],
                 true,
             )
@@ -490,10 +753,19 @@ mod tests {
             assert!(l0.lookup_strict_title(old_sth).is_empty());
             assert_eq!(l0.lookup_strict_title(new_sth), vec![5]);
 
-            // Second doc with episodes to verify WAL replay preserves episodes!
+            // Dynamic new doc above base_num_docs=100 with hash + file metadata!
+            let dyn_id = l0
+                .allocate_or_get_doc_id(100, 1000, Some(h1), None)
+                .unwrap();
+            assert_eq!(dyn_id, 100);
+            assert_eq!(
+                l0.allocate_or_get_doc_id(100, 1000, Some(h1), None)
+                    .unwrap(),
+                100
+            );
             l0.upsert_batch(
                 &[L0Doc {
-                    doc_id: 6,
+                    doc_id: dyn_id,
                     name: "Suits.S01E02-E04.1080p.WEB-DL".into(),
                     content_type: 2,
                     resolution: 3,
@@ -509,26 +781,39 @@ mod tests {
                         .iter()
                         .map(|t| (xxh3_64_with_seed(t.as_bytes(), seed), 1500))
                         .collect(),
+                    info_hash_v1: Some(h1),
+                    info_hash_v2: None,
+                    size_bytes: 4_200_000_000,
+                    files_count: 1,
+                    files: vec![("Suits.S01E02.mkv".into(), 4_200_000_000, "mkv".into())],
                 }],
                 true,
             )
             .unwrap();
         }
 
-        // Reopen and verify structured fields survived replay!
+        // Reopen and verify structured fields + dynamic hash/files survived replay!
         {
             let l0 = L0Overlay::open(&wal, 7, seed).unwrap();
             assert_eq!(l0.len(), 2);
-            let d6 = l0.get_doc(6).unwrap();
+            assert_eq!(l0.lookup_hash_v1(&h1), Some(100));
+            let d100 = l0.get_doc(100).unwrap();
             assert_eq!(
-                d6.episodes.len(),
+                d100.episodes.len(),
                 3,
                 "S01E02-E04 must survive L0 WAL replay"
             );
-            assert_eq!(d6.strict_title_hashes, pr1.strict_title_hashes);
-            assert_eq!(d6.family_hashes, pr1.family_hashes);
+            assert_eq!(d100.size_bytes, 4_200_000_000);
+            assert_eq!(d100.files.len(), 1);
+            assert_eq!(d100.strict_title_hashes, pr1.strict_title_hashes);
+            assert_eq!(d100.family_hashes, pr1.family_hashes);
             assert_eq!(l0.lookup_strict_title(new_sth), vec![5]);
-            assert_eq!(l0.lookup_strict_title(old_sth), vec![6]);
+            assert_eq!(l0.lookup_strict_title(old_sth), vec![100]);
+            // Next allocation skips past replayed dynamic id 100 -> 101!
+            let next_id = l0
+                .allocate_or_get_doc_id(100, 1000, Some([0xCDu8; 20]), None)
+                .unwrap();
+            assert_eq!(next_id, 101);
         }
 
         // Corrupt a byte in frame 1 (mid-file) -> MUST fail closed!

@@ -237,14 +237,43 @@ WHERE info_hash = decode($1, 'hex')`, hashPub)
 	require.NotNil(t, ovRes.Docs[0].Seeders)
 	require.Equal(t, uint32(777), *ovRes.Docs[0].Seeders)
 
-	// 5. Raw SQL insert of brand-new torrent -> SyncOnce rebuilds and serves it automatically!
+	// 5. Raw SQL insert of brand-new torrent -> SyncOnce ingests directly into live L0
+	// (ZERO full-catalogue rebuild triggered!) and serves it immediately via Search + RSS + HashLookup!
 	insertTorrent(hashNew, "Brand.New.Discovery.2026.2160p.WEB-DL", 12_000_000_000, false, "single")
 	require.NoError(t, syncer.SyncOnce(ctx))
+
+	hAfterNewL0, err := cli.Health(ctx)
+	require.NoError(t, err)
+	require.Equal(t, genBeforeSwarm, hAfterNewL0.GenerationID, "brand-new crawled hash must ingest into live L0 without triggering a full rebuild")
+	require.GreaterOrEqual(t, hAfterNewL0.L0Count, 2)
 
 	newRes, err := cli.Search(ctx, SearchRequest{Query: "brand new discovery", Mode: ModeAnd, Tier: TierBase, Limit: 10})
 	require.NoError(t, err)
 	require.Len(t, newRes.Docs, 1)
 	require.Equal(t, hashNew, newRes.Docs[0].InfoHashV1)
+
+	rssRes, err := cli.RSS(ctx, RSSRequest{Tier: TierBase, Limit: 5})
+	require.NoError(t, err)
+	var foundNewInRSS bool
+	for _, d := range rssRes.Docs {
+		if d.InfoHashV1 == hashNew {
+			foundNewInRSS = true
+			break
+		}
+	}
+	require.True(t, foundNewInRSS, "brand-new L0 doc must appear immediately in RSS browse")
+
+	// 5b. Lower CompactDocs threshold and insert one more torrent -> triggers clean compaction rebuild!
+	syncer.cfg.CompactDocs = 2
+	hashCompact := strings.Repeat("c2", 20)
+	insertTorrent(hashCompact, "Compaction.Trigger.2026.1080p.WEB-DL", 4_000_000_000, false, "single")
+	require.NoError(t, syncer.SyncOnce(ctx))
+
+	hCompacted, err := cli.Health(ctx)
+	require.NoError(t, err)
+	require.Greater(t, hCompacted.GenerationID, genBeforeSwarm, "reaching CompactDocs threshold must trigger clean compaction rebuild")
+	require.Equal(t, 0, hCompacted.L0Count)
+	require.Equal(t, 8, hCompacted.NumDocs)
 
 	// 6. Fail-closed lease expiry -> 503 ErrLeaseExpired -> SyncOnce recovers with monotonic LSN!
 	hNow, err := cli.Health(ctx)
