@@ -36,12 +36,17 @@ and privacy checks pass. Keep pending changes in `CHANGELOG.md` under
 ## Published artifacts
 
 - `source.tar.gz` — `git archive` of the checked tag.
-- `IMAGE_DIGEST.txt` — immutable multi-arch OCI index digest (plus
-  `IMAGE_DIGEST_AMD64.txt` and `IMAGE_DIGEST_ARM64.txt`).
+- `IMAGE_DIGEST.txt` — immutable multi-arch OCI index digest for
+  `ghcr.io/spencernorton/dh-waypoint` (plus `IMAGE_DIGEST_AMD64.txt` and
+  `IMAGE_DIGEST_ARM64.txt`).
+- `IMAGE_DIGEST_TMS.txt` — immutable multi-arch OCI index digest for the
+  companion `ghcr.io/spencernorton/dh-waypoint-tms` (`dh-tmsd`) sidecar (plus
+  `IMAGE_DIGEST_TMS_AMD64.txt` and `IMAGE_DIGEST_TMS_ARM64.txt`).
 - `TESTED_IMAGE.json` and `TESTED_IMAGE_ARM64.json` — runtime qualification
   receipts bound to the exact exported image IDs.
-- `SBOM.cdx.json` — CycloneDX JSON software bill of materials generated from
-  the runtime-qualified container image.
+- `SBOM.cdx.json` and `SBOM-tms.cdx.json` — CycloneDX JSON software bills of
+  materials generated from the runtime-qualified `dh-waypoint` and
+  `dh-waypoint-tms` container images.
 - `SHA256SUMS.txt` — SHA-256 manifest covering every published release asset.
 
 Verify the asset checksums, verify provenance with
