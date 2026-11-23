@@ -526,9 +526,9 @@ func scanExportedRow(rows pgx.Rows, entityMap map[catalogKey]uint32) (exportedTo
 		seeders        int32
 		leechers       int32
 		releaseYear    int32
-		filePaths      []string
-		fileSizes      []int64
-		fileExts       []string
+		rawFilePaths   []*string
+		rawFileSizes   []*int64
+		rawFileExts    []*string
 		baseOK         bool
 		pubOK          bool
 		payloadExp     int64
@@ -537,7 +537,7 @@ func scanExportedRow(rows pgx.Rows, entityMap map[catalogKey]uint32) (exportedTo
 		&ih, &ihv2, &name, &sizeBytes, &isPrivate, &createdEpoch,
 		&contentType, &contentSource, &contentID, &videoRes,
 		&publishedEpoch, &seeders, &leechers, &releaseYear,
-		&filePaths, &fileSizes, &fileExts,
+		&rawFilePaths, &rawFileSizes, &rawFileExts,
 		&baseOK, &pubOK, &payloadExp,
 	); err != nil {
 		return exportedTorrentRow{}, err
@@ -563,15 +563,21 @@ func scanExportedRow(rows pgx.Rows, entityMap map[catalogKey]uint32) (exportedTo
 		yr = uint16(releaseYear)
 	}
 
-	files := make([]BuildFileInput, 0, len(filePaths))
-	for i, fp := range filePaths {
+	filePaths := make([]string, 0, len(rawFilePaths))
+	files := make([]BuildFileInput, 0, len(rawFilePaths))
+	for i, fpPtr := range rawFilePaths {
+		var fp string
+		if fpPtr != nil {
+			fp = *fpPtr
+		}
+		filePaths = append(filePaths, fp)
 		var fsz uint64
-		if i < len(fileSizes) && fileSizes[i] > 0 {
-			fsz = uint64(fileSizes[i])
+		if i < len(rawFileSizes) && rawFileSizes[i] != nil && *rawFileSizes[i] > 0 {
+			fsz = uint64(*rawFileSizes[i])
 		}
 		var fext string
-		if i < len(fileExts) {
-			fext = fileExts[i]
+		if i < len(rawFileExts) && rawFileExts[i] != nil {
+			fext = *rawFileExts[i]
 		}
 		files = append(files, BuildFileInput{
 			Path:      fp,

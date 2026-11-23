@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 6.0.4 — 2026-11-23
+
+### Fixed
+
+- **Scan nullable array elements in `torrent_file_bundles` during `dh-tmsd` sync (`internal/database/dhtms/sync.go`).** Torrents containing extensionless files (such as `README` or `LICENSE`) store `NULL` elements inside `torrent_file_bundles.extensions`. `scanExportedRow` now scans `paths`, `sizes`, and `extensions` via nullable pointer slices so snapshots and incremental updates never fail on `NULL` array entries.
+
 ## 6.0.3 — 2026-11-23
 
 High-selectivity serving-gate snapshot exports, correlated publication checks, and zero-noise incremental outbox syncing for `dh-tmsd`.
