@@ -109,15 +109,20 @@ VALUES (decode($1, 'hex'), 'movie', 'tmdb', '629', 'V1080p', 55, 7, now(), 80000
 	idxArr := make([]int32, 25)
 	pathsArr := make([]string, 25)
 	sizesArr := make([]int64, 25)
-	extsArr := make([]string, 25)
+	extsArr := make([]*string, 25)
+	mkvExt := "mkv"
 	for i := range 25 {
 		idxArr[i] = int32(i)
 		pathsArr[i] = fmt.Sprintf("Disc1/Track_%02d.mkv", i+1)
+		extsArr[i] = &mkvExt
+		if i == 1 {
+			pathsArr[i] = "Disc1/README"
+			extsArr[i] = nil // exercise NULL elements in torrent_file_bundles.extensions
+		}
 		if i == 19 {
 			pathsArr[i] = "Disc1/Bonus/UniqueSyncDeepToken20.mkv"
 		}
 		sizesArr[i] = 300_000_000
-		extsArr[i] = "mkv"
 	}
 	_, err = pool.Exec(ctx, `
 INSERT INTO torrent_file_bundles (info_hash, indexes, paths, sizes, extensions)
