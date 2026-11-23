@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-## 6.0.2 — 2026-11-23
+## 6.0.3 — 2026-11-23
 
 High-selectivity serving-gate snapshot exports, correlated publication checks, and zero-noise incremental outbox syncing for `dh-tmsd`.
 
