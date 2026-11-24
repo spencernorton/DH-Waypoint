@@ -249,6 +249,12 @@ fn dispatch(
             let resp = engine.handle_hash_lookup(req)?;
             serde_json::to_vec(&resp).map_err(|e| DaemonError::Internal(e.to_string()))
         }
+        ("POST", "/v1/sync/resolve") => {
+            let req = serde_json::from_slice(body)
+                .map_err(|e| DaemonError::BadRequest(format!("invalid json: {e}")))?;
+            let resp = engine.handle_sync_resolve(req)?;
+            serde_json::to_vec(&resp).map_err(|e| DaemonError::Internal(e.to_string()))
+        }
         ("POST", "/v1/policy/revoke") => {
             let req = serde_json::from_slice(body)
                 .map_err(|e| DaemonError::BadRequest(format!("invalid json: {e}")))?;
@@ -322,6 +328,11 @@ fn dispatch(
             503,
             "Service Unavailable",
             br#"{"error":"trigrams_disabled","code":"trigrams_disabled"}"#.to_vec(),
+        ),
+        Err(DaemonError::TooManyCandidates) => (
+            503,
+            "Service Unavailable",
+            br#"{"error":"too_many_candidates","code":"too_many_candidates"}"#.to_vec(),
         ),
         Err(DaemonError::LeaseExpired {
             now_ms,

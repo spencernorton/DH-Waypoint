@@ -27,6 +27,8 @@ const (
 	defaultLeaseTTL        = 60 * time.Second
 	defaultRebuildDebounce = 15 * time.Second
 	defaultCompactDocs     = 50_000
+	defaultCompactWALBytes = 64 * 1024 * 1024 // 64 MiB
+	defaultCompactMaxAge   = 24 * time.Hour
 	defaultIndexTrigrams   = "auto"
 )
 
@@ -41,6 +43,8 @@ type Config struct {
 	LeaseTTL         time.Duration
 	RebuildDebounce  time.Duration
 	CompactDocs      int
+	CompactWALBytes  int64
+	CompactMaxAge    time.Duration
 	IndexTrigrams    string
 }
 
@@ -54,6 +58,8 @@ func DefaultConfig() Config {
 		LeaseTTL:         defaultLeaseTTL,
 		RebuildDebounce:  defaultRebuildDebounce,
 		CompactDocs:      defaultCompactDocs,
+		CompactWALBytes:  defaultCompactWALBytes,
+		CompactMaxAge:    defaultCompactMaxAge,
 		IndexTrigrams:    defaultIndexTrigrams,
 	}
 }
@@ -122,6 +128,20 @@ func ConfigFromEnv() (Config, error) {
 		}
 		cfg.CompactDocs = n
 	}
+	if raw := strings.TrimSpace(os.Getenv("DH_TMS_COMPACT_WAL_BYTES")); raw != "" {
+		n, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || n < 0 {
+			return Config{}, fmt.Errorf("invalid DH_TMS_COMPACT_WAL_BYTES %q: must be non-negative integer bytes", raw)
+		}
+		cfg.CompactWALBytes = n
+	}
+	if raw := strings.TrimSpace(os.Getenv("DH_TMS_COMPACT_MAX_AGE")); raw != "" {
+		d, err := time.ParseDuration(raw)
+		if err != nil || d < 0 {
+			return Config{}, fmt.Errorf("invalid DH_TMS_COMPACT_MAX_AGE %q: %w", raw, err)
+		}
+		cfg.CompactMaxAge = d
+	}
 	if raw := strings.ToLower(strings.TrimSpace(os.Getenv("DH_TMS_INDEX_TRIGRAMS"))); raw != "" {
 		cfg.IndexTrigrams = raw
 	}
@@ -146,6 +166,12 @@ func (c Config) Validate() error {
 	}
 	if c.CompactDocs < 0 {
 		return fmt.Errorf("invalid DH-TMS compact docs %d: must be >= 0", c.CompactDocs)
+	}
+	if c.CompactWALBytes < 0 {
+		return fmt.Errorf("invalid DH-TMS compact wal bytes %d: must be >= 0", c.CompactWALBytes)
+	}
+	if c.CompactMaxAge < 0 {
+		return fmt.Errorf("invalid DH-TMS compact max age %s: must be >= 0", c.CompactMaxAge)
 	}
 	switch strings.ToLower(strings.TrimSpace(c.IndexTrigrams)) {
 	case "", "auto", "true", "false":

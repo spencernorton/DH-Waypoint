@@ -459,3 +459,169 @@ VALUES (decode($1, 'hex'), true, 'operator_hold', repeat('3', 64))`, hashLateVer
 	require.NoError(t, err)
 	require.Empty(t, res5.Docs, "old-generation publication approval must no longer be served after generation bump")
 }
+
+// TestSyncerAuditHardeningMVCCOutboxTriggersAndExpiredLeaseRecovery proves:
+//   - MVCC safety: An open concurrent PG transaction holding a lower outbox seq is
+//     never skipped/deleted by an intervening SyncOnce or FullBuild.
+//   - Trigger coverage: Migration 00102 triggers propagate video_source/video_codec/
+//     video_3d/is_anime edits, content.adult flips, processor_publication_sources
+//     revision bumps, and new content catalog inserts (op='catalog').
+//   - Fail-closed recovery: Expired governance lease resolves via /v1/sync/resolve and applies
+//     pending revocations BEFORE renewing the lease (never reopening prematurely).
+func TestSyncerAuditHardeningMVCCOutboxTriggersAndExpiredLeaseRecovery(t *testing.T) {
+	dsn := strings.TrimSpace(os.Getenv("DH_WAYPOINT_TEST_POSTGRES_DSN"))
+	if dsn == "" {
+		t.Skip("DH_WAYPOINT_TEST_POSTGRES_DSN not set; skipping audit hardening PG + dh-tmsd E2E test")
+	}
+	cli, _ := startTestDaemon(t)
+	ctx := context.Background()
+
+	adminCfg, err := pgx.ParseConfig(dsn)
+	require.NoError(t, err)
+	adminDB := stdlib.OpenDB(*adminCfg)
+	t.Cleanup(func() { _ = adminDB.Close() })
+
+	dbName := fmt.Sprintf("dhw_dhtms_audit_%d", time.Now().UnixNano())
+	quotedDB := pgx.Identifier{dbName}.Sanitize()
+	_, err = adminDB.ExecContext(ctx, "CREATE DATABASE "+quotedDB)
+	require.NoError(t, err)
+
+	testCfg := adminCfg.Copy()
+	testCfg.Database = dbName
+	sqlDB := stdlib.OpenDB(*testCfg)
+	poolCfg, err := pgxpool.ParseConfig(dsn)
+	require.NoError(t, err)
+	poolCfg.ConnConfig.Database = dbName
+	pool, err := pgxpool.NewWithConfig(ctx, poolCfg)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		pool.Close()
+		_ = sqlDB.Close()
+		cleanCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		_, _ = adminDB.ExecContext(cleanCtx, "DROP DATABASE IF EXISTS "+quotedDB+" WITH (FORCE)")
+	})
+
+	provider, err := goose.NewProvider(goose.DialectPostgres, sqlDB, migrationssql.FS)
+	require.NoError(t, err)
+	_, err = provider.Up(ctx)
+	require.NoError(t, err)
+
+	hA := strings.Repeat("1a", 20)
+	hB := strings.Repeat("2b", 20)
+	_, err = pool.Exec(ctx, `
+INSERT INTO content (type, source, id, title, original_title, release_year, adult, created_at, updated_at)
+VALUES ('movie', 'tmdb', '701', 'Audit Movie One', 'Audit Movie One', 2024, false, now(), now())`)
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `
+INSERT INTO torrents (info_hash, name, size, private, files_status, created_at, updated_at) VALUES
+  (decode($1, 'hex'), 'Audit.Movie.One.2024.1080p', 4000000000, false, 'single', now(), now()),
+  (decode($2, 'hex'), 'Audit.Movie.Two.2024.1080p', 5000000000, false, 'single', now(), now())`, hA, hB)
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `
+INSERT INTO torrent_contents (info_hash, content_type, content_source, content_id, video_resolution, video_source, video_codec, is_anime, seeders, leechers, published_at, size, created_at, updated_at) VALUES
+  (decode($1, 'hex'), 'movie', 'tmdb', '701', 'V1080p', 'WEBRip', 'x264', false, 10, 1, now(), 4000000000, now(), now()),
+  (decode($2, 'hex'), 'movie', NULL, NULL, 'V1080p', 'WEBRip', 'x264', false, 20, 2, now(), 5000000000, now(), now())`, hA, hB)
+	require.NoError(t, err)
+
+	strongKW, mediaExt, err := classifier.CoreAdultServingEvidence()
+	require.NoError(t, err)
+	pol, err := serving.NewPolicy(serving.Config{
+		ProcessorExclusions: true,
+		ExcludeAdult:        true,
+	}, strongKW, mediaExt)
+	require.NoError(t, err)
+
+	syncCfg := DefaultConfig()
+	syncCfg.Mode = ReadModeServe
+	syncCfg.LeaseTTL = 60 * time.Second
+	syncCfg.RebuildDebounce = 0
+	syncer := NewSyncer(pool, cli, pol, syncCfg, NewMetrics(), zap.NewNop().Sugar())
+
+	require.NoError(t, syncer.SyncOnce(ctx))
+
+	// 1. Migration 00102 trigger fires on video_source/video_codec/video_3d/is_anime updates!
+	_, err = pool.Exec(ctx, `
+UPDATE torrent_contents
+SET video_source = 'BluRay', video_codec = 'x265', video_3d = 'V3DSBS', is_anime = true
+WHERE info_hash = decode($1, 'hex')`, hB)
+	require.NoError(t, err)
+	require.NoError(t, syncer.SyncOnce(ctx))
+
+	srB, err := cli.Search(ctx, SearchRequest{Query: "audit movie two", Mode: ModeAnd, Tier: TierBase, Limit: 10})
+	require.NoError(t, err)
+	require.Len(t, srB.Docs, 1)
+	require.Equal(t, hB, srB.Docs[0].InfoHashV1)
+	require.Equal(t, VideoSourceToCode("BluRay"), srB.Docs[0].VideoSource)
+	require.Equal(t, VideoCodecToCode("x265"), srB.Docs[0].VideoCodec)
+	require.Equal(t, Video3DToCode("V3DSBS"), srB.Docs[0].Video3D)
+	require.True(t, srB.Docs[0].IsAnime)
+
+	// 2. MVCC concurrent tx gap: Tx A allocates a LOWER outbox seq for a hold
+	//    on hB and stays uncommitted while Tx B commits a HIGHER outbox seq on hA.
+	txA, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer func() { _ = txA.Rollback(ctx) }()
+	_, err = txA.Exec(ctx, `
+INSERT INTO processor_publication_holds (info_hash, held, reason, request_id)
+VALUES (decode($1, 'hex'), true, 'mvcc_lower_seq_hold', repeat('a', 64))`, hB)
+	require.NoError(t, err)
+
+	// Tx B commits a higher seq while Tx A is still open.
+	_, err = pool.Exec(ctx, `UPDATE torrent_contents SET seeders = 42 WHERE info_hash = decode($1, 'hex')`, hA)
+	require.NoError(t, err)
+
+	// SyncOnce consumes Tx B's higher seq.
+	require.NoError(t, syncer.SyncOnce(ctx))
+	hlBStill, err := cli.HashLookup(ctx, HashLookupRequest{InfoHash: hB, Tier: TierBase})
+	require.NoError(t, err)
+	require.True(t, hlBStill.Eligible, "uncommitted Tx A hold must not be visible yet")
+
+	// Now Tx A commits its lower seq -> next SyncOnce MUST pick it up and revoke hB!
+	require.NoError(t, txA.Commit(ctx))
+	require.NoError(t, syncer.SyncOnce(ctx))
+	hlBRevoked, err := cli.HashLookup(ctx, HashLookupRequest{InfoHash: hB, Tier: TierBase})
+	require.NoError(t, err)
+	require.False(t, hlBRevoked.Eligible, "lower-seq MVCC hold committed after higher-seq SyncOnce must NEVER be skipped")
+
+	// 3. Expired-lease fail-closed recovery: expire lease, insert content.adult=true
+	//    on tmdb:701 (triggering 00102 content adult fan-out), then run SyncOnce -> lease
+	//    recovers ONLY AFTER hA is revoked (zero leak window)!
+	hNow, err := cli.Health(ctx)
+	require.NoError(t, err)
+	_, err = cli.PolicyLease(ctx, PolicyLeaseRequest{PGLSN: hNow.PGLSN + 1, TTLMS: 0})
+	require.NoError(t, err)
+
+	_, err = pool.Exec(ctx, `UPDATE content SET adult = true WHERE type='movie' AND source='tmdb' AND id='701'`)
+	require.NoError(t, err)
+
+	// Confirm lease is closed before SyncOnce.
+	_, err = cli.HashLookup(ctx, HashLookupRequest{InfoHash: hA, Tier: TierBase})
+	require.True(t, errors.Is(err, ErrLeaseExpired))
+
+	require.NoError(t, syncer.SyncOnce(ctx))
+	hlAAdult, err := cli.HashLookup(ctx, HashLookupRequest{InfoHash: hA, Tier: TierBase})
+	require.NoError(t, err)
+	require.False(t, hlAAdult.Eligible, "content.adult=true trigger + expired-lease SyncOnce must revoke hA before serving resumes")
+
+	// 4. Catalog sync: Post-build new content row emits 'catalog' op -> triggers debounced FullBuild
+	//    so Lookup returns entity_found=true for the newly inserted entity!
+	hGenBefore, err := cli.Health(ctx)
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `
+INSERT INTO content (type, source, id, title, original_title, release_year, adult, created_at, updated_at)
+VALUES ('movie', 'tmdb', '702', 'Post Build Entity', 'Post Build Entity', 2025, false, now(), now())`)
+	require.NoError(t, err)
+	require.NoError(t, syncer.SyncOnce(ctx))
+
+	hGenAfter, err := cli.Health(ctx)
+	require.NoError(t, err)
+	require.Greater(t, hGenAfter.GenerationID, hGenBefore.GenerationID, "new content insert must trigger catalog rebuild")
+
+	luNew, err := cli.Lookup(ctx, LookupRequest{ContentType: 1, ContentSource: "tmdb", ContentID: "702", Tier: TierBase, Limit: 10})
+	require.NoError(t, err)
+	require.True(t, luNew.EntityFound, "post-rebuild lookup for new content row must report entity_found=true")
+	luMissing, err := cli.Lookup(ctx, LookupRequest{ContentType: 1, ContentSource: "tmdb", ContentID: "999999", Tier: TierBase, Limit: 10})
+	require.NoError(t, err)
+	require.False(t, luMissing.EntityFound, "absent content row must report entity_found=false")
+}

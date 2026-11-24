@@ -41,10 +41,13 @@ func (s *spyServingSearch) Torrents(_ context.Context, _ ...query.Option) (searc
 func TestRestAPIDirectServeAndFailClosedPGFallback(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	var expired atomic.Bool
+	var lastSearchReq dhtms.SearchRequest
+	var lastSubReq dhtms.SubstringRequest
 	tmsHash := strings.Repeat("c1", 20)
 	pgHash := strings.Repeat("d1", 20)
 	nowEpoch := uint32(time.Now().Unix())
 	totalFacets := uint64(1)
+	zeroSeed := uint32(0)
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -55,15 +58,17 @@ func TestRestAPIDirectServeAndFailClosedPGFallback(t *testing.T) {
 		}
 		switch r.URL.Path {
 		case "/v1/search":
+			_ = json.NewDecoder(r.Body).Decode(&lastSearchReq)
 			_ = json.NewEncoder(w).Encode(dhtms.SearchResponse{
 				Docs: []dhtms.DocHit{{
 					DocID: 1, InfoHashV1: tmsHash, Name: "TMS.Direct.Movie.2026.1080p",
 					SizeBytes: 5_000_000_000, ContentType: 1, Resolution: 6,
-					PublishedEpoch: nowEpoch, CreatedEpoch: nowEpoch,
+					PublishedEpoch: nowEpoch, CreatedEpoch: nowEpoch, Seeders: &zeroSeed,
 				}},
 				TotalFacets: &totalFacets,
 			})
 		case "/v1/substring":
+			_ = json.NewDecoder(r.Body).Decode(&lastSubReq)
 			_ = json.NewEncoder(w).Encode(dhtms.RSSResponse{
 				Docs: []dhtms.DocHit{{
 					DocID: 1, InfoHashV1: tmsHash, Name: "TMS.Direct.Movie.2026.1080p",
@@ -148,4 +153,28 @@ func TestRestAPIDirectServeAndFailClosedPGFallback(t *testing.T) {
 
 	rInvalid := doGet("/api/v1/search?video_source=VHS")
 	require.Equal(t, 400, rInvalid.Code)
+
+	// 6. min_seeders=0 is preserved (non-nil 0, excludes NULL seeders), and uint32 overflow returns 400.
+	rZeroSeed := doGet("/api/v1/search?q=direct&min_seeders=0")
+	require.Equal(t, 200, rZeroSeed.Code)
+	require.Equal(t, int32(2), spy.v1Calls.Load())
+	require.NotNil(t, lastSearchReq.MinSeeders)
+	require.Equal(t, uint32(0), *lastSearchReq.MinSeeders)
+	require.True(t, lastSearchReq.RequireV1)
+
+	rOverflow := doGet("/api/v1/search?q=direct&min_seeders=4294967296")
+	require.Equal(t, 400, rOverflow.Code)
+
+	// 7. Unfiltered published_at browse bypasses DH-TMS to PG so keyset next_cursor has valid torrent_contents.id.
+	rBrowse := doGet("/api/v1/search?limit=1")
+	require.Equal(t, 200, rBrowse.Code)
+	require.Equal(t, int32(3), spy.v1Calls.Load())
+
+	// 8. /api/v2/search?q=...&after=... forwards hash_order=true and after_info_hash directly to DH-TMS.
+	afterHash := strings.Repeat("aa", 20)
+	r2After := doGet("/api/v2/search?q=direct&after=" + afterHash)
+	require.Equal(t, 200, r2After.Code)
+	require.Equal(t, int32(1), spy.v2Calls.Load(), "v2 after= continuation must serve from DH-TMS")
+	require.True(t, lastSubReq.HashOrder)
+	require.Equal(t, afterHash, lastSubReq.AfterInfoHash)
 }

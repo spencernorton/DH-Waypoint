@@ -27,6 +27,8 @@ use xxhash_rust::xxh3::xxh3_64_with_seed;
 
 pub const WAND_BLOCK_SIZE: usize = 128;
 pub const DENSE_TERM_DF_THRESHOLD: usize = 50_000;
+pub const MAX_VIDEO_SOURCE: u8 = 9;
+pub const MAX_VIDEO_CODEC: u8 = 9;
 const POSTING_FLUSH_THRESHOLD: usize = 15_000_000;
 const TERM_FLAG_INLINE_SINGLE: u32 = 1 << 0;
 const FLOAT_BOUND_EPS: f32 = 1e-4;
@@ -191,6 +193,7 @@ pub enum SearchError {
     Format(FormatError),
     Policy(PolicyError),
     TrigramsDisabled,
+    TooManyCandidates,
 }
 
 impl std::fmt::Display for SearchError {
@@ -200,6 +203,12 @@ impl std::fmt::Display for SearchError {
             Self::Policy(e) => write!(f, "search policy error: {e}"),
             Self::TrigramsDisabled => {
                 write!(f, "trigram substring index is disabled for this generation")
+            }
+            Self::TooManyCandidates => {
+                write!(
+                    f,
+                    "substring candidate set exceeds bounded hash-order scan cap"
+                )
             }
         }
     }
@@ -2120,6 +2129,38 @@ impl CustomSearchPlane {
         now_epoch_sec: u32,
         now_ms: u64,
     ) -> Result<(Vec<u32>, Vec<u32>), SearchError> {
+        self.lookup_entity_with_fallback_filtered(
+            entity_id,
+            titles_and_aliases,
+            ct_filter,
+            canonical_year,
+            season_ep,
+            None,
+            policy,
+            tier,
+            core,
+            limit,
+            now_epoch_sec,
+            now_ms,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn lookup_entity_with_fallback_filtered(
+        &self,
+        entity_id: u32,
+        titles_and_aliases: &[String],
+        ct_filter: u8,
+        canonical_year: u16,
+        season_ep: Option<(u16, Option<u16>)>,
+        doc_pred: Option<&dyn Fn(u32) -> bool>,
+        policy: &PolicyPlane,
+        tier: PolicyTier,
+        core: &CorePlane,
+        limit: usize,
+        now_epoch_sec: u32,
+        now_ms: u64,
+    ) -> Result<(Vec<u32>, Vec<u32>), SearchError> {
         policy.lease().check(now_ms)?;
         if limit == 0 {
             return Ok((Vec::new(), Vec::new()));
@@ -2188,12 +2229,16 @@ impl CustomSearchPlane {
                 (!has_l0 || !self.l0.is_superseded(d))
                     && !policy.is_denied_atomic(d)
                     && (tier != PolicyTier::Payload || policy.payload_expires_at(d) > now_epoch_sec)
+                    && doc_pred.is_none_or(|p| p(d))
             })
             .collect();
         if has_l0 && entity_id != 0 {
             let mut seen_linked: HashSet<u32> = linked.iter().copied().collect();
             for d in self.l0.lookup_entity(entity_id) {
                 if !seen_linked.insert(d) {
+                    continue;
+                }
+                if doc_pred.is_some_and(|p| !p(d)) {
                     continue;
                 }
                 if !policy.authorize_egress_one(d, tier, now_epoch_sec, now_ms)? {
@@ -2297,6 +2342,7 @@ impl CustomSearchPlane {
                     || policy.is_denied_atomic(d)
                     || (tier == PolicyTier::Payload
                         && policy.payload_expires_at(d) <= now_epoch_sec)
+                    || doc_pred.is_some_and(|p| !p(d))
                 {
                     return false;
                 }
@@ -2334,6 +2380,9 @@ impl CustomSearchPlane {
                     continue;
                 };
                 if ov.entity_id != 0 {
+                    continue;
+                }
+                if doc_pred.is_some_and(|p| !p(d)) {
                     continue;
                 }
                 if !policy.authorize_egress_one(d, tier, now_epoch_sec, now_ms)? {
@@ -2452,7 +2501,10 @@ impl CustomSearchPlane {
                         if unlinked.len() >= needed {
                             break;
                         }
-                        if seen_unlinked.contains(&sd.doc_id) {
+                        if seen_unlinked.contains(&sd.doc_id)
+                            || (has_l0 && self.l0.is_superseded(sd.doc_id))
+                            || doc_pred.is_some_and(|p| !p(sd.doc_id))
+                        {
                             continue;
                         }
                         let name = core.get_name(sd.doc_id)?;
@@ -2614,33 +2666,156 @@ impl CustomSearchPlane {
         if tris.is_empty() {
             return Ok(Vec::new());
         }
+        let has_l0 = self.l0.has_entries();
         let snap = policy.snapshot();
         let mut cands = snap.bitmap_for(tier).clone();
-        for tri in tris {
-            let Some(tb) = self.trigrams.get_bitmap(trigram_key(tri))? else {
-                return Ok(Vec::new());
-            };
-            cands &= &tb;
-            if cands.is_empty() {
-                return Ok(Vec::new());
-            }
-        }
-        let mut out = Vec::with_capacity(limit);
-        for doc_id in cands.iter() {
-            if policy.is_denied_atomic(doc_id)
-                || (tier == PolicyTier::Payload
-                    && policy.payload_expires_at(doc_id) <= now_epoch_sec)
-            {
-                continue;
-            }
-            let name = core.get_name(doc_id)?;
-            if fold_accents_lowercase(name).contains(&needle) {
-                out.push(doc_id);
-                if out.len() >= limit {
+        let mut base_possible = !cands.is_empty();
+        if base_possible {
+            for tri in tris {
+                if let Some(tb) = self.trigrams.get_bitmap(trigram_key(tri))? {
+                    cands &= &tb;
+                    if cands.is_empty() {
+                        base_possible = false;
+                        break;
+                    }
+                } else {
+                    base_possible = false;
                     break;
                 }
             }
         }
+        let mut out = Vec::with_capacity(limit);
+        if base_possible {
+            for doc_id in cands.iter() {
+                if (has_l0 && self.l0.is_superseded(doc_id))
+                    || policy.is_denied_atomic(doc_id)
+                    || (tier == PolicyTier::Payload
+                        && policy.payload_expires_at(doc_id) <= now_epoch_sec)
+                {
+                    continue;
+                }
+                let name = core.get_name(doc_id)?;
+                if fold_accents_lowercase(name).contains(&needle) {
+                    out.push(doc_id);
+                    if out.len() >= limit {
+                        break;
+                    }
+                }
+            }
+        }
+        if has_l0 && out.len() < limit {
+            let mut l0_hits = self.l0.matching_substring(&needle);
+            l0_hits.sort_unstable();
+            for doc_id in l0_hits {
+                if out.len() >= limit {
+                    break;
+                }
+                if policy.authorize_egress_one(doc_id, tier, now_epoch_sec, now_ms)? {
+                    out.push(doc_id);
+                }
+            }
+        }
+        policy.filter_egress_docs(&mut out, tier, now_epoch_sec, now_ms)?;
+        Ok(out)
+    }
+
+    /// Hash-ordered substring search (PostgreSQL `torrents.info_hash ASC` + `> after_hash` parity)
+    /// merging immutable base trigrams and live L0 overlay names. Returns `TooManyCandidates` when
+    /// the eligible candidate set exceeds `max_scan` so callers transparently fall back to PostgreSQL.
+    #[allow(clippy::too_many_arguments)]
+    pub fn search_substring_hash_ordered<F>(
+        &self,
+        substring: &str,
+        after_hash: Option<&[u8]>,
+        hash_lookup: F,
+        max_scan: usize,
+        policy: &PolicyPlane,
+        tier: PolicyTier,
+        core: &CorePlane,
+        limit: usize,
+        now_epoch_sec: u32,
+        now_ms: u64,
+    ) -> Result<Vec<u32>, SearchError>
+    where
+        F: Fn(u32) -> Option<Vec<u8>>,
+    {
+        policy.lease().check(now_ms)?;
+        if self.trigrams.is_empty() && core.num_docs > 0 {
+            return Err(SearchError::TrigramsDisabled);
+        }
+        let needle = fold_accents_lowercase(substring);
+        if needle.is_empty() || limit == 0 {
+            return Ok(Vec::new());
+        }
+        let tris = extract_substring_query_trigrams(&needle);
+        if tris.is_empty() {
+            return Ok(Vec::new());
+        }
+        let has_l0 = self.l0.has_entries();
+        let snap = policy.snapshot();
+        let mut cands = snap.bitmap_for(tier).clone();
+        let mut base_possible = !cands.is_empty();
+        if base_possible {
+            for tri in tris {
+                if let Some(tb) = self.trigrams.get_bitmap(trigram_key(tri))? {
+                    cands &= &tb;
+                    if cands.is_empty() {
+                        base_possible = false;
+                        break;
+                    }
+                } else {
+                    base_possible = false;
+                    break;
+                }
+            }
+        }
+        if base_possible && (cands.len() as usize) > max_scan {
+            return Err(SearchError::TooManyCandidates);
+        }
+        let mut heap: BinaryHeap<(Vec<u8>, u32)> = BinaryHeap::with_capacity(limit + 1);
+        let mut consider = |doc_id: u32| {
+            let Some(key) = hash_lookup(doc_id) else {
+                return;
+            };
+            if let Some(after) = after_hash {
+                if key.as_slice() <= after {
+                    return;
+                }
+            }
+            if heap.len() < limit {
+                heap.push((key, doc_id));
+            } else if let Some((top_key, top_id)) = heap.peek() {
+                if key < *top_key || (key == *top_key && doc_id < *top_id) {
+                    heap.pop();
+                    heap.push((key, doc_id));
+                }
+            }
+        };
+        if base_possible {
+            for doc_id in cands.iter() {
+                if (has_l0 && self.l0.is_superseded(doc_id))
+                    || policy.is_denied_atomic(doc_id)
+                    || (tier == PolicyTier::Payload
+                        && policy.payload_expires_at(doc_id) <= now_epoch_sec)
+                {
+                    continue;
+                }
+                let name = core.get_name(doc_id)?;
+                if fold_accents_lowercase(name).contains(&needle) {
+                    consider(doc_id);
+                }
+            }
+        }
+        if has_l0 {
+            for doc_id in self.l0.matching_substring(&needle) {
+                if policy.authorize_egress_one(doc_id, tier, now_epoch_sec, now_ms)? {
+                    consider(doc_id);
+                }
+            }
+        }
+        let mut sorted: Vec<(Vec<u8>, u32)> = heap.into_vec();
+        sorted.sort_unstable_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+        let mut out: Vec<u32> = sorted.into_iter().map(|(_, d)| d).collect();
         policy.filter_egress_docs(&mut out, tier, now_epoch_sec, now_ms)?;
         Ok(out)
     }

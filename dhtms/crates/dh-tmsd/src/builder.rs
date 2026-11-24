@@ -8,7 +8,7 @@ use dh_tms_grammar::{
 };
 use dh_tms_hashdir::{build_and_save_hash_dir, parse_info_hash_hex, InfoHash};
 use dh_tms_policy::PolicyState;
-use dh_tms_search::{trigram_key, CustomSearchBuilder};
+use dh_tms_search::{trigram_key, CustomSearchBuilder, MAX_VIDEO_CODEC, MAX_VIDEO_SOURCE};
 use dh_tms_swarm::SwarmPlane;
 use serde::Deserialize;
 use std::cmp::Ordering;
@@ -945,23 +945,37 @@ where
         } else {
             0
         };
+        if doc.video_source > MAX_VIDEO_SOURCE {
+            return Err(FormatError::CorruptPayload(format!(
+                "video_source {} exceeds supported facet range 0..={}",
+                doc.video_source, MAX_VIDEO_SOURCE
+            )));
+        }
+        if doc.video_codec > MAX_VIDEO_CODEC {
+            return Err(FormatError::CorruptPayload(format!(
+                "video_codec {} exceeds supported facet range 0..={}",
+                doc.video_codec, MAX_VIDEO_CODEC
+            )));
+        }
+        if doc.video_3d > 3 {
+            return Err(FormatError::CorruptPayload(format!(
+                "video_3d {} exceeds supported range 0..=3",
+                doc.video_3d
+            )));
+        }
         let (src_code, codec_code, is_anime) = if doc.authoritative_policy {
-            (
-                doc.video_source.min(15),
-                doc.video_codec.min(15),
-                doc.is_anime,
-            )
+            (doc.video_source, doc.video_codec, doc.is_anime)
         } else {
             (
                 if doc.video_source != 0 {
-                    doc.video_source.min(15)
+                    doc.video_source
                 } else {
-                    parsed.source.min(15)
+                    parsed.source.min(MAX_VIDEO_SOURCE)
                 },
                 if doc.video_codec != 0 {
-                    doc.video_codec.min(15)
+                    doc.video_codec
                 } else {
-                    parsed.codec.min(15)
+                    parsed.codec.min(MAX_VIDEO_CODEC)
                 },
                 doc.is_anime || parsed.is_anime_cue,
             )
@@ -1209,6 +1223,7 @@ mod tests {
                 include_files: true,
                 any_clauses: vec![],
                 min_seeders: None,
+                require_v1: false,
                 now_epoch: None,
             })
             .unwrap();
@@ -1220,6 +1235,8 @@ mod tests {
             tier: "base".into(),
             limit: 5,
             include_files: false,
+            hash_order: false,
+            after_info_hash: None,
             now_epoch: None,
         });
         assert!(matches!(
@@ -1292,6 +1309,7 @@ mod tests {
                         ..Default::default()
                     }],
                     min_seeders: None,
+                    require_v1: false,
                     now_epoch: None,
                 })
                 .unwrap();
@@ -1316,6 +1334,7 @@ mod tests {
                         ..Default::default()
                     }],
                     min_seeders: None,
+                    require_v1: false,
                     now_epoch: None,
                 })
                 .unwrap();
@@ -1341,6 +1360,7 @@ mod tests {
                         ..Default::default()
                     }],
                     min_seeders: Some(20),
+                    require_v1: false,
                     now_epoch: None,
                 })
                 .unwrap();
@@ -1402,6 +1422,7 @@ mod tests {
                     ..Default::default()
                 }],
                 min_seeders: None,
+                require_v1: false,
                 now_epoch: None,
             })
             .unwrap();
@@ -1413,6 +1434,321 @@ mod tests {
         );
         assert!(ranime2.docs[0].is_anime);
         assert_eq!(ranime2.docs[0].video_codec, 8);
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn test_audit_hardening_sync_resolve_min_seeders_v1_substring_and_wal() {
+        use crate::engine::{
+            L0UpsertItem, L0UpsertRequest, LookupRequest, PolicyLeaseRequest, RssRequest,
+            SearchRequest, SubstringRequest, SyncResolveRequest,
+        };
+
+        let base =
+            std::env::temp_dir().join(format!("dhtms_audit_hardening_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let db = base.join("db");
+        let wal = base.join("wal");
+
+        let now = 1_800_000_000u32;
+        // Hash ordering intentionally opposes doc/published order (h_hi is newest doc_id=0, h_lo is older).
+        let h_hi = "99".repeat(20);
+        let h_lo = "11".repeat(20);
+        let h_v2 = "22".repeat(32);
+        let h_l0 = "55".repeat(20);
+
+        let ndjson = format!(
+            concat!(
+                r#"{{"kind":"header","pg_lsn":20,"lease_ttl_ms":60000,"pg_lsn_text":"0/14","index_trigrams":true,"unique_hashes":true}}"#,
+                "
+",
+                r#"{{"kind":"catalog","entity_id":1,"content_type":1,"source":"tmdb","id":"629","title":"Alpha Movie","original_title":"Alpha Movie","year":2025,"adult":false}}"#,
+                "
+",
+                r#"{{"kind":"doc","info_hash_v1":"{h_hi}","name":"Alpha.Release.HighHash.1080p","size_bytes":1000,"content_type":1,"resolution":6,"entity_id":1,"published_epoch":{t3},"created_epoch":{t3},"authoritative_policy":true,"pub_approved":true,"seeders":0,"leechers":0}}"#,
+                "
+",
+                r#"{{"kind":"doc","info_hash_v1":"{h_lo}","name":"Alpha.Release.LowHash.1080p","size_bytes":1000,"content_type":1,"resolution":6,"entity_id":1,"published_epoch":{t1},"created_epoch":{t1},"authoritative_policy":true,"pub_approved":true,"seeders":-1,"leechers":-1}}"#,
+                "
+",
+                r#"{{"kind":"doc","info_hash_v2":"{h_v2}","name":"Alpha.Release.PureV2.1080p","size_bytes":1000,"content_type":1,"resolution":6,"entity_id":1,"published_epoch":{t2},"created_epoch":{t2},"authoritative_policy":true,"pub_approved":true,"seeders":5,"leechers":1}}"#,
+                "
+"
+            ),
+            h_hi = h_hi,
+            h_lo = h_lo,
+            h_v2 = h_v2,
+            t1 = now - 30,
+            t2 = now - 20,
+            t3 = now - 10,
+        );
+
+        build_generation_from_ndjson_with_limits(Cursor::new(&ndjson), &db, 1, 100, 10_000_000)
+            .unwrap();
+        let eng = DaemonEngine::open(&db, &wal, 20, 60_000).unwrap();
+
+        // 1. min_seeders=Some(0) excludes NULL (-1) seeders, while None includes them.
+        let r_min0 = eng
+            .handle_rss(RssRequest {
+                content_type: None,
+                tier: "base".into(),
+                limit: 10,
+                offset: 0,
+                include_files: false,
+                include_total: true,
+                any_clauses: vec![],
+                min_seeders: Some(0),
+                require_v1: false,
+                now_epoch: None,
+            })
+            .unwrap();
+        assert_eq!(r_min0.total_count, Some(2));
+        assert!(r_min0
+            .docs
+            .iter()
+            .all(|d| d.info_hash_v1.as_deref() != Some(h_lo.as_str())));
+
+        // 2. require_v1 excludes pure-v2 BEFORE limit and total_count/total_facets!
+        let r_v1 = eng
+            .handle_rss(RssRequest {
+                content_type: None,
+                tier: "base".into(),
+                limit: 2,
+                offset: 0,
+                include_files: false,
+                include_total: true,
+                any_clauses: vec![],
+                min_seeders: None,
+                require_v1: true,
+                now_epoch: None,
+            })
+            .unwrap();
+        assert_eq!(r_v1.docs.len(), 2);
+        assert_eq!(r_v1.total_count, Some(2));
+        assert!(r_v1.docs.iter().all(|d| d.info_hash_v1.is_some()));
+
+        let s_v1 = eng
+            .handle_search(SearchRequest {
+                query: "Alpha Release".into(),
+                mode: "and".into(),
+                tier: "base".into(),
+                limit: 10,
+                tv_season: None,
+                tv_episode: None,
+                include_facets: true,
+                include_files: false,
+                any_clauses: vec![],
+                min_seeders: None,
+                require_v1: true,
+                now_epoch: None,
+            })
+            .unwrap();
+        assert_eq!(s_v1.docs.len(), 2);
+        assert_eq!(s_v1.total_facets, Some(2));
+
+        // 3. Lookup reports entity_found=true for known catalog ID and false for unknown.
+        let lu_known = eng
+            .handle_lookup(LookupRequest {
+                entity_id: 0,
+                content_type: 1,
+                content_source: "tmdb".into(),
+                content_id: "629".into(),
+                titles: vec![],
+                year: 0,
+                season: None,
+                episode: None,
+                tier: "base".into(),
+                limit: 10,
+                include_files: false,
+                require_v1: true,
+                now_epoch: None,
+            })
+            .unwrap();
+        assert!(lu_known.entity_found);
+        assert_eq!(lu_known.linked.len(), 2);
+
+        let lu_unknown = eng
+            .handle_lookup(LookupRequest {
+                entity_id: 0,
+                content_type: 1,
+                content_source: "tmdb".into(),
+                content_id: "999999".into(),
+                titles: vec![],
+                year: 0,
+                season: None,
+                episode: None,
+                tier: "base".into(),
+                limit: 10,
+                include_files: false,
+                require_v1: true,
+                now_epoch: None,
+            })
+            .unwrap();
+        assert!(!lu_unknown.entity_found);
+        assert!(lu_unknown.linked.is_empty());
+
+        // 4. L0 upsert rejects out-of-range video_source=10 and tracks l0_wal_bytes.
+        let bad_enum = eng.handle_l0_upsert(L0UpsertRequest {
+            docs: vec![L0UpsertItem {
+                doc_id: None,
+                info_hash_v1: Some(h_l0.clone()),
+                info_hash_v2: None,
+                name: "Bad.Enum.1080p".into(),
+                size_bytes: 1000,
+                content_type: 1,
+                resolution: 6,
+                is_anime: false,
+                is_3d: false,
+                video_3d: 0,
+                video_source: 10,
+                video_codec: 0,
+                entity_id: 0,
+                year: 2026,
+                published_epoch: now,
+                created_epoch: now,
+                files_count: 1,
+                file_paths: vec![],
+                files: vec![],
+            }],
+            sync: true,
+        });
+        assert!(matches!(
+            bad_enum,
+            Err(crate::engine::DaemonError::BadRequest(_))
+        ));
+
+        // Insert L0 doc + rename h_hi away from "alpha" so substring must include h_l0 and exclude renamed h_hi!
+        let up = eng
+            .handle_l0_upsert(L0UpsertRequest {
+                docs: vec![
+                    L0UpsertItem {
+                        doc_id: None,
+                        info_hash_v1: Some(h_l0.clone()),
+                        info_hash_v2: None,
+                        name: "Alpha.Release.L0MidHash.1080p".into(),
+                        size_bytes: 1000,
+                        content_type: 1,
+                        resolution: 6,
+                        is_anime: false,
+                        is_3d: false,
+                        video_3d: 0,
+                        video_source: 7,
+                        video_codec: 3,
+                        entity_id: 0,
+                        year: 2026,
+                        published_epoch: now,
+                        created_epoch: now,
+                        files_count: 1,
+                        file_paths: vec![],
+                        files: vec![],
+                    },
+                    L0UpsertItem {
+                        doc_id: Some(0),
+                        info_hash_v1: Some(h_hi.clone()),
+                        info_hash_v2: None,
+                        name: "Renamed.Beta.Only.1080p".into(),
+                        size_bytes: 1000,
+                        content_type: 1,
+                        resolution: 6,
+                        is_anime: false,
+                        is_3d: false,
+                        video_3d: 0,
+                        video_source: 7,
+                        video_codec: 3,
+                        entity_id: 1,
+                        year: 2026,
+                        published_epoch: now,
+                        created_epoch: now,
+                        files_count: 1,
+                        file_paths: vec![],
+                        files: vec![],
+                    },
+                ],
+                sync: true,
+            })
+            .unwrap();
+        assert!(up.l0_wal_bytes > 0);
+        assert_eq!(eng.health().l0_wal_bytes, up.l0_wal_bytes);
+        let dyn_id = up.doc_ids[0];
+        let grant = serde_json::json!({
+            "ops": [{"op": "grant_base", "doc_id": dyn_id}],
+            "pg_lsn": 21,
+            "sync": true,
+            "rebuild_snapshot": true
+        });
+        eng.handle_policy_batch(&serde_json::to_vec(&grant).unwrap())
+            .unwrap();
+
+        // 5. Hash-ordered substring returns h_lo (0x11) < h_v2 (0x22) < h_l0 (0x55), excludes renamed h_hi, and paginates via after_info_hash!
+        let page1 = eng
+            .handle_substring(SubstringRequest {
+                substring: "alpha.release".into(),
+                tier: "base".into(),
+                limit: 2,
+                include_files: false,
+                hash_order: true,
+                after_info_hash: None,
+                now_epoch: None,
+            })
+            .unwrap();
+        assert_eq!(page1.docs.len(), 2);
+        assert_eq!(page1.docs[0].info_hash_v1.as_deref(), Some(h_lo.as_str()));
+        assert_eq!(page1.docs[1].info_hash_v2.as_deref(), Some(h_v2.as_str()));
+
+        let page2 = eng
+            .handle_substring(SubstringRequest {
+                substring: "alpha.release".into(),
+                tier: "base".into(),
+                limit: 2,
+                include_files: false,
+                hash_order: true,
+                after_info_hash: Some(h_v2.clone()),
+                now_epoch: None,
+            })
+            .unwrap();
+        assert_eq!(page2.docs.len(), 1);
+        assert_eq!(page2.docs[0].info_hash_v1.as_deref(), Some(h_l0.as_str()));
+
+        // 6. Expire lease -> public reads return LeaseExpired, while internal /v1/sync/resolve still resolves doc_ids!
+        eng.handle_policy_lease(PolicyLeaseRequest {
+            pg_lsn: 22,
+            ttl_ms: 0,
+        })
+        .unwrap();
+        assert!(!eng.health().lease_active);
+        assert!(matches!(
+            eng.handle_rss(RssRequest {
+                content_type: None,
+                tier: "base".into(),
+                limit: 5,
+                offset: 0,
+                include_files: false,
+                include_total: false,
+                any_clauses: vec![],
+                min_seeders: None,
+                require_v1: false,
+                now_epoch: None,
+            }),
+            Err(crate::engine::DaemonError::LeaseExpired { .. })
+        ));
+        let resolved = eng
+            .handle_sync_resolve(SyncResolveRequest {
+                info_hashes: vec![h_lo.clone(), h_l0.clone(), format!("{:040x}", 0xdead)],
+            })
+            .unwrap();
+        assert!(resolved.docs.get(&h_lo).copied().flatten().is_some());
+        assert_eq!(resolved.docs.get(&h_l0).copied().flatten(), Some(dyn_id));
+        assert_eq!(
+            resolved
+                .docs
+                .get(&format!("{:040x}", 0xdead))
+                .copied()
+                .flatten(),
+            None
+        );
+        // Verify sync_resolve did NOT reopen the public lease!
+        assert!(!eng.health().lease_active);
 
         let _ = std::fs::remove_dir_all(&base);
     }

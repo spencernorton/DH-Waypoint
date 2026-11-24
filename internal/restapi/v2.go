@@ -68,8 +68,17 @@ func (a *API) handleV2Search(c *gin.Context) {
 		c.JSON(400, gin.H{"error": "q must contain 3-4096 valid UTF-8 characters/bytes"})
 		return
 	}
-	if text != "" && c.Query("after") == "" && c.Query("hash") == "" {
-		if a.tryHandleV2SearchDHTMS(c, text, limit) {
+	var afterHex string
+	if after := c.Query("after"); after != "" {
+		h, err := protocol.ParseInfoHash(after)
+		if err != nil {
+			c.JSON(400, gin.H{"error": "invalid_after"})
+			return
+		}
+		afterHex = h.String()
+	}
+	if text != "" && c.Query("hash") == "" {
+		if a.tryHandleV2SearchDHTMS(c, text, afterHex, limit) {
 			return
 		}
 	}
@@ -88,13 +97,8 @@ func (a *API) handleV2Search(c *gin.Context) {
 		escaped := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(text)
 		opts = append(opts, query.Where(query.DBCriteria{SQL: "torrents.name ILIKE ?", Args: []any{"%" + escaped + "%"}}))
 	}
-	if after := c.Query("after"); after != "" {
-		h, err := protocol.ParseInfoHash(after)
-		if err != nil {
-			c.JSON(400, gin.H{"error": "invalid_after"})
-			return
-		}
-		opts = append(opts, query.Where(query.DBCriteria{SQL: "torrents.info_hash > DECODE('" + h.String() + "','hex')"}))
+	if afterHex != "" {
+		opts = append(opts, query.Where(query.DBCriteria{SQL: "torrents.info_hash > DECODE('" + afterHex + "','hex')"}))
 	}
 	if hash := c.Query("hash"); hash != "" {
 		h, err := protocol.ParseInfoHash(hash)

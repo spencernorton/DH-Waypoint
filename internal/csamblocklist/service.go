@@ -16,6 +16,10 @@ import (
 	"go.uber.org/zap"
 )
 
+// ErrLocalObservationsLoad indicates that csam_local_observations could not be
+// synchronized from PostgreSQL during a refresh.
+var ErrLocalObservationsLoad = errors.New("csamblocklist: load local observations")
+
 // service is the live Manager implementation. Exposed via the Manager
 // interface; constructed by the factory in csamblocklistfx.
 //
@@ -371,8 +375,11 @@ func (s *service) Refresh(ctx context.Context) error {
 	localOnly := len(feeds) == 0 && len(s.lastGoodEntries) == 0
 	if localErr != nil {
 		s.logger.Warnw("csam local observations not loaded; keeping the previous ones", "err", localErr)
+		wrappedLocal := fmt.Errorf("%w: %w", ErrLocalObservationsLoad, localErr)
 		if firstErr == nil {
-			firstErr = fmt.Errorf("local observations: %w", localErr)
+			firstErr = wrappedLocal
+		} else {
+			firstErr = errors.Join(firstErr, wrappedLocal)
 		}
 		if localOnly && len(s.lastGoodLocal) == 0 && s.hasLocalInActive {
 			// Active bloom already holds all previously loaded local observations.
@@ -433,6 +440,10 @@ func (s *service) Refresh(ctx context.Context) error {
 }
 
 func (s *service) Enabled() bool { return true }
+
+// HasLocalStore reports whether this manager is backed by PostgreSQL's
+// csam_local_observations table and must load it before crawler traffic starts.
+func (s *service) HasLocalStore() bool { return s.pool != nil }
 
 func (s *service) Snapshot() Snapshot {
 	s.mu.Lock()
