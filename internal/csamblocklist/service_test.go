@@ -87,6 +87,11 @@ func TestRefresh_KeepsObservationsWhenTheTableCannotBeRead(t *testing.T) {
 			t.Fatal("a failed read must keep every remembered hash blocked, and only those")
 		}
 	}
+	// After moving local observations into the active bloom in local-only mode,
+	// the raw slice cache is released while active bloom retains full protection.
+	if s.lastGoodLocal != nil {
+		t.Fatal("local-only refresh should release raw lastGoodLocal slice once active bloom holds entries")
+	}
 }
 
 // CSAM_BLOCKLIST_ENABLED=false switches the outside feeds off: none is fetched.

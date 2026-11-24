@@ -26,7 +26,7 @@ pub struct MetaRow {
     pub created_epoch: u32,
     pub files_count: u32,
     pub year: u16,
-    /// bits 0..4: source, 4..8: codec, 8: is_anime, 9: eng_audio, 10: has_exec, 11: hdr, 12: has_tree
+    /// bits 0..4: source, 4..8: codec, 8: is_anime, 9: eng_audio, 10: has_exec, 11: hdr, 12: has_tree, 13..15: video_3d
     pub flags_src: u16,
     pub single_ext_id: u16,
     pub content_type: u8,
@@ -46,6 +46,23 @@ impl MetaRow {
         has_hdr: bool,
         has_tree: bool,
     ) -> u16 {
+        Self::pack_flags_v2(
+            source, codec, is_anime, 0, eng_audio, has_exec, has_hdr, has_tree,
+        )
+    }
+
+    #[inline]
+    #[allow(clippy::too_many_arguments)]
+    pub fn pack_flags_v2(
+        source: u8,
+        codec: u8,
+        is_anime: bool,
+        video_3d: u8,
+        eng_audio: bool,
+        has_exec: bool,
+        has_hdr: bool,
+        has_tree: bool,
+    ) -> u16 {
         ((source as u16) & 0x0F)
             | (((codec as u16) & 0x0F) << 4)
             | (if is_anime { 1 << 8 } else { 0 })
@@ -53,6 +70,7 @@ impl MetaRow {
             | (if has_exec { 1 << 10 } else { 0 })
             | (if has_hdr { 1 << 11 } else { 0 })
             | (if has_tree { 1 << 12 } else { 0 })
+            | (((video_3d as u16) & 0x03) << 13)
     }
 
     #[inline]
@@ -88,6 +106,16 @@ impl MetaRow {
     #[inline]
     pub fn has_tree(&self) -> bool {
         (self.flags_src & (1 << 12)) != 0
+    }
+
+    #[inline]
+    pub fn video_3d(&self) -> u8 {
+        ((self.flags_src >> 13) & 0x03) as u8
+    }
+
+    #[inline]
+    pub fn is_3d(&self) -> bool {
+        self.video_3d() != 0
     }
 
     #[inline]

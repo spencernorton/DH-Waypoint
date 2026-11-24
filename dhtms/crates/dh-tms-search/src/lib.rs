@@ -38,6 +38,54 @@ pub enum QueryMode {
     Phrase,
 }
 
+/// Structured conjunctive filter clause evaluated as a disjunction (`any_clauses`)
+/// across base static facet RoaringBitmaps and live L0 overlay documents.
+#[derive(Debug, Clone, Default)]
+pub struct SearchFilterClause {
+    pub content_type: Option<u8>,
+    pub resolutions: Vec<u8>,
+    pub exclude_resolutions: Vec<u8>,
+    pub require_anime: bool,
+    pub require_3d: bool,
+    pub video_source: Option<u8>,
+    pub video_codec: Option<u8>,
+}
+
+impl SearchFilterClause {
+    pub fn matches_l0(&self, doc: &l0::L0Doc) -> bool {
+        if let Some(ct) = self.content_type {
+            if doc.content_type != ct {
+                return false;
+            }
+        }
+        if !self.resolutions.is_empty() && !self.resolutions.contains(&doc.resolution) {
+            return false;
+        }
+        if !self.exclude_resolutions.is_empty()
+            && self.exclude_resolutions.contains(&doc.resolution)
+        {
+            return false;
+        }
+        if self.require_anime && !doc.is_anime {
+            return false;
+        }
+        if self.require_3d && doc.video_3d == 0 {
+            return false;
+        }
+        if let Some(src) = self.video_source {
+            if doc.video_source != src {
+                return false;
+            }
+        }
+        if let Some(codec) = self.video_codec {
+            if doc.video_codec != codec {
+                return false;
+            }
+        }
+        true
+    }
+}
+
 /// Deterministic top-K score comparator: higher score wins; ties break by SMALLER `doc_id`
 /// (which corresponds to NEWER `published_epoch` under `(ct, published_epoch DESC)` physical ordering!).
 #[derive(Debug, Clone, Copy)]
@@ -256,9 +304,10 @@ pub struct CustomSearchBuilder {
     pub trigram_to_docs: AHashMap<u64, RoaringBitmap>,
     pub facet_ct: [RoaringBitmap; NUM_CONTENT_TYPES],
     pub facet_res: [RoaringBitmap; 10],
-    pub facet_codec: [RoaringBitmap; 8],
-    pub facet_src: [RoaringBitmap; 8],
+    pub facet_codec: [RoaringBitmap; 10],
+    pub facet_src: [RoaringBitmap; 10],
     pub facet_anime: RoaringBitmap,
+    pub facet_3d: RoaringBitmap,
     pub facet_eng_audio: RoaringBitmap,
     pub facet_linked: RoaringBitmap,
     pub index_trigrams: bool,
@@ -292,6 +341,7 @@ impl CustomSearchBuilder {
             facet_codec: std::array::from_fn(|_| RoaringBitmap::new()),
             facet_src: std::array::from_fn(|_| RoaringBitmap::new()),
             facet_anime: RoaringBitmap::new(),
+            facet_3d: RoaringBitmap::new(),
             facet_eng_audio: RoaringBitmap::new(),
             facet_linked: RoaringBitmap::new(),
             index_trigrams,
@@ -560,28 +610,36 @@ impl CustomSearchBuilder {
             fbuf.extend_from_slice(&e.to_le_bytes());
         }
         let mut tmp_bm = Vec::new();
-        let mut push_bm = |bm: &RoaringBitmap| -> Result<(), FormatError> {
-            tmp_bm.clear();
-            bm.serialize_into(&mut tmp_bm)?;
-            write_varint_u32(&mut fbuf, tmp_bm.len() as u32);
-            fbuf.extend_from_slice(&tmp_bm);
-            Ok(())
-        };
+        let push_bm =
+            |out: &mut Vec<u8>, tmp: &mut Vec<u8>, bm: &RoaringBitmap| -> Result<(), FormatError> {
+                tmp.clear();
+                bm.serialize_into(&mut *tmp)?;
+                write_varint_u32(out, tmp.len() as u32);
+                out.extend_from_slice(tmp);
+                Ok(())
+            };
         for bm in &self.facet_ct {
-            push_bm(bm)?;
+            push_bm(&mut fbuf, &mut tmp_bm, bm)?;
         }
         for bm in &self.facet_res {
-            push_bm(bm)?;
+            push_bm(&mut fbuf, &mut tmp_bm, bm)?;
         }
-        for bm in &self.facet_codec {
-            push_bm(bm)?;
+        for bm in &self.facet_codec[..8] {
+            push_bm(&mut fbuf, &mut tmp_bm, bm)?;
         }
-        for bm in &self.facet_src {
-            push_bm(bm)?;
+        for bm in &self.facet_src[..8] {
+            push_bm(&mut fbuf, &mut tmp_bm, bm)?;
         }
-        push_bm(&self.facet_anime)?;
-        push_bm(&self.facet_eng_audio)?;
-        push_bm(&self.facet_linked)?;
+        push_bm(&mut fbuf, &mut tmp_bm, &self.facet_anime)?;
+        push_bm(&mut fbuf, &mut tmp_bm, &self.facet_eng_audio)?;
+        push_bm(&mut fbuf, &mut tmp_bm, &self.facet_linked)?;
+        // Backward-compatible trailing extension for facet_3d + extended codec/source codes (8..10).
+        fbuf.extend_from_slice(b"FEX2");
+        push_bm(&mut fbuf, &mut tmp_bm, &self.facet_3d)?;
+        push_bm(&mut fbuf, &mut tmp_bm, &self.facet_codec[8])?;
+        push_bm(&mut fbuf, &mut tmp_bm, &self.facet_codec[9])?;
+        push_bm(&mut fbuf, &mut tmp_bm, &self.facet_src[8])?;
+        push_bm(&mut fbuf, &mut tmp_bm, &self.facet_src[9])?;
         let mut struct_bms_bytes = write_checked_bytes(
             &dir.join("facets_static.bin"),
             FileKind::FacetsStatic,
@@ -813,9 +871,10 @@ pub struct CustomSearchPlane {
     pub trigrams: MmapBlobMap,
     pub facet_ct: [RoaringBitmap; NUM_CONTENT_TYPES],
     pub facet_res: [RoaringBitmap; 10],
-    pub facet_codec: [RoaringBitmap; 8],
-    pub facet_src: [RoaringBitmap; 8],
+    pub facet_codec: [RoaringBitmap; 10],
+    pub facet_src: [RoaringBitmap; 10],
     pub facet_anime: RoaringBitmap,
+    pub facet_3d: RoaringBitmap,
     pub facet_eng_audio: RoaringBitmap,
     pub facet_linked: RoaringBitmap,
     pub l0: L0Overlay,
@@ -895,39 +954,48 @@ impl CustomSearchPlane {
             *r = (s, e);
             pos += 8;
         }
-        let mut read_bm = || -> Result<RoaringBitmap, FormatError> {
-            let len = read_varint_u32(fp, &mut pos)? as usize;
-            let end = pos
+        let read_bm = |cursor: &mut usize| -> Result<RoaringBitmap, FormatError> {
+            let len = read_varint_u32(fp, cursor)? as usize;
+            let end = cursor
                 .checked_add(len)
                 .ok_or_else(|| FormatError::CorruptPayload("facet bm overflow".into()))?;
             if end > fp.len() {
                 return Err(FormatError::CorruptPayload("facet bm truncated".into()));
             }
-            let bm = RoaringBitmap::deserialize_from(&fp[pos..end])
+            let bm = RoaringBitmap::deserialize_from(&fp[*cursor..end])
                 .map_err(|e| FormatError::CorruptPayload(format!("corrupt facet bm: {e}")))?;
-            pos = end;
+            *cursor = end;
             Ok(bm)
         };
         let mut facet_ct: [RoaringBitmap; NUM_CONTENT_TYPES] =
             std::array::from_fn(|_| RoaringBitmap::new());
         for b in &mut facet_ct {
-            *b = read_bm()?;
+            *b = read_bm(&mut pos)?;
         }
         let mut facet_res: [RoaringBitmap; 10] = std::array::from_fn(|_| RoaringBitmap::new());
         for b in &mut facet_res {
-            *b = read_bm()?;
+            *b = read_bm(&mut pos)?;
         }
-        let mut facet_codec: [RoaringBitmap; 8] = std::array::from_fn(|_| RoaringBitmap::new());
-        for b in &mut facet_codec {
-            *b = read_bm()?;
+        let mut facet_codec: [RoaringBitmap; 10] = std::array::from_fn(|_| RoaringBitmap::new());
+        for b in &mut facet_codec[..8] {
+            *b = read_bm(&mut pos)?;
         }
-        let mut facet_src: [RoaringBitmap; 8] = std::array::from_fn(|_| RoaringBitmap::new());
-        for b in &mut facet_src {
-            *b = read_bm()?;
+        let mut facet_src: [RoaringBitmap; 10] = std::array::from_fn(|_| RoaringBitmap::new());
+        for b in &mut facet_src[..8] {
+            *b = read_bm(&mut pos)?;
         }
-        let facet_anime = read_bm()?;
-        let facet_eng_audio = read_bm()?;
-        let facet_linked = read_bm()?;
+        let facet_anime = read_bm(&mut pos)?;
+        let facet_eng_audio = read_bm(&mut pos)?;
+        let facet_linked = read_bm(&mut pos)?;
+        let mut facet_3d = RoaringBitmap::new();
+        if pos + 4 <= fp.len() && &fp[pos..pos + 4] == b"FEX2" {
+            pos += 4;
+            facet_3d = read_bm(&mut pos)?;
+            facet_codec[8] = read_bm(&mut pos)?;
+            facet_codec[9] = read_bm(&mut pos)?;
+            facet_src[8] = read_bm(&mut pos)?;
+            facet_src[9] = read_bm(&mut pos)?;
+        }
 
         let l0 = L0Overlay::open(l0_wal_path, generation_id, term_seed)?;
 
@@ -952,6 +1020,7 @@ impl CustomSearchPlane {
             facet_codec,
             facet_src,
             facet_anime,
+            facet_3d,
             facet_eng_audio,
             facet_linked,
             l0,
@@ -1050,6 +1119,83 @@ impl CustomSearchPlane {
         Ok(lo)
     }
 
+    /// Evaluate a disjunction of structured `SearchFilterClause` filters against base static facet bitmaps.
+    pub fn build_filter_bitmap(
+        &self,
+        clauses: &[SearchFilterClause],
+        base_mask: &RoaringBitmap,
+    ) -> RoaringBitmap {
+        let mut union = RoaringBitmap::new();
+        for c in clauses {
+            let mut bm = if let Some(ct) = c.content_type {
+                if (ct as usize) < NUM_CONTENT_TYPES {
+                    base_mask & &self.facet_ct[ct as usize]
+                } else {
+                    continue;
+                }
+            } else {
+                base_mask.clone()
+            };
+            if bm.is_empty() {
+                continue;
+            }
+            if !c.resolutions.is_empty() {
+                let mut r_union = RoaringBitmap::new();
+                for &r in &c.resolutions {
+                    if (r as usize) < self.facet_res.len() {
+                        r_union |= &self.facet_res[r as usize];
+                    }
+                }
+                bm &= &r_union;
+                if bm.is_empty() {
+                    continue;
+                }
+            }
+            if !c.exclude_resolutions.is_empty() {
+                for &r in &c.exclude_resolutions {
+                    if (r as usize) < self.facet_res.len() {
+                        bm -= &self.facet_res[r as usize];
+                    }
+                }
+                if bm.is_empty() {
+                    continue;
+                }
+            }
+            if c.require_anime {
+                bm &= &self.facet_anime;
+                if bm.is_empty() {
+                    continue;
+                }
+            }
+            if c.require_3d {
+                bm &= &self.facet_3d;
+                if bm.is_empty() {
+                    continue;
+                }
+            }
+            if let Some(src) = c.video_source {
+                if src == 0 || (src as usize) >= self.facet_src.len() {
+                    continue;
+                }
+                bm &= &self.facet_src[src as usize];
+                if bm.is_empty() {
+                    continue;
+                }
+            }
+            if let Some(codec) = c.video_codec {
+                if codec == 0 || (codec as usize) >= self.facet_codec.len() {
+                    continue;
+                }
+                bm &= &self.facet_codec[codec as usize];
+                if bm.is_empty() {
+                    continue;
+                }
+            }
+            union |= bm;
+        }
+        union
+    }
+
     /// Unified search supporting `QueryMode::And`, `QueryMode::Or` (true Block-Max WAND pivot advancement!),
     /// and `QueryMode::Phrase`, with mandatory `PolicyPlane` egress enforcement on every returned row!
     #[allow(clippy::too_many_arguments)]
@@ -1058,6 +1204,36 @@ impl CustomSearchPlane {
         query_str: &str,
         mode: QueryMode,
         extra_filter: Option<&RoaringBitmap>,
+        policy: &PolicyPlane,
+        tier: PolicyTier,
+        core: &CorePlane,
+        top_k: usize,
+        now_epoch_sec: u32,
+        now_ms: u64,
+    ) -> Result<Vec<ScoredDoc>, SearchError> {
+        self.search_text_filtered(
+            query_str,
+            mode,
+            extra_filter,
+            None,
+            None,
+            policy,
+            tier,
+            core,
+            top_k,
+            now_epoch_sec,
+            now_ms,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn search_text_filtered(
+        &self,
+        query_str: &str,
+        mode: QueryMode,
+        extra_filter: Option<&RoaringBitmap>,
+        l0_pred: Option<&dyn Fn(&l0::L0Doc) -> bool>,
+        doc_pred: Option<&dyn Fn(u32) -> bool>,
         policy: &PolicyPlane,
         tier: PolicyTier,
         core: &CorePlane,
@@ -1119,6 +1295,7 @@ impl CustomSearchPlane {
                     self.execute_and_bmw(
                         &term_entries,
                         mask,
+                        doc_pred,
                         policy,
                         tier,
                         now_epoch_sec,
@@ -1133,6 +1310,7 @@ impl CustomSearchPlane {
                     self.execute_or_bmw(
                         &term_entries,
                         mask,
+                        doc_pred,
                         policy,
                         tier,
                         now_epoch_sec,
@@ -1151,9 +1329,15 @@ impl CustomSearchPlane {
             if !l0_hits.is_empty() {
                 let mut seen: HashSet<u32> = res.iter().map(|s| s.doc_id).collect();
                 for (doc_id, score) in l0_hits {
+                    let l0_ok = if let Some(pred) = l0_pred {
+                        self.l0.get_doc(doc_id).is_some_and(|ov| pred(&ov))
+                    } else {
+                        extra_filter.is_none_or(|f| f.contains(doc_id))
+                    };
                     if seen.insert(doc_id)
                         && policy.authorize_egress_one(doc_id, tier, now_epoch_sec, now_ms)?
-                        && extra_filter.is_none_or(|f| f.contains(doc_id))
+                        && l0_ok
+                        && doc_pred.is_none_or(|p| p(doc_id))
                     {
                         res.push(ScoredDoc { doc_id, score });
                     }
@@ -1199,10 +1383,12 @@ impl CustomSearchPlane {
     }
 
     /// Conjunctive AND block-max pruned scan with exact tie-breaking (`score DESC, doc_id ASC`).
+    #[allow(clippy::too_many_arguments)]
     fn execute_and_bmw(
         &self,
         entries: &[TermDirEntry],
         mask: &RoaringBitmap,
+        doc_pred: Option<&dyn Fn(u32) -> bool>,
         policy: &PolicyPlane,
         tier: PolicyTier,
         now_epoch_sec: u32,
@@ -1220,6 +1406,7 @@ impl CustomSearchPlane {
                 || policy.is_denied_atomic(doc_id)
                 || (tier == PolicyTier::Payload
                     && policy.payload_expires_at(doc_id) <= now_epoch_sec)
+                || doc_pred.is_some_and(|p| !p(doc_id))
             {
                 return Ok(Vec::new());
             }
@@ -1310,6 +1497,7 @@ impl CustomSearchPlane {
                     || policy.is_denied_atomic(doc_id)
                     || (tier == PolicyTier::Payload
                         && policy.payload_expires_at(doc_id) <= now_epoch_sec)
+                    || doc_pred.is_some_and(|p| !p(doc_id))
                 {
                     continue;
                 }
@@ -1376,10 +1564,12 @@ impl CustomSearchPlane {
 
     /// True Disjunctive OR Block-Max WAND with genuine pivot selection & conservative upper bounds!
     /// Property-tested 100% identical to an exhaustive brute-force reference scorer!
+    #[allow(clippy::too_many_arguments)]
     fn execute_or_bmw(
         &self,
         entries: &[TermDirEntry],
         mask: &RoaringBitmap,
+        doc_pred: Option<&dyn Fn(u32) -> bool>,
         policy: &PolicyPlane,
         tier: PolicyTier,
         now_epoch_sec: u32,
@@ -1613,6 +1803,7 @@ impl CustomSearchPlane {
                     && !policy.is_denied_atomic(pivot_doc)
                     && (tier != PolicyTier::Payload
                         || policy.payload_expires_at(pivot_doc) > now_epoch_sec)
+                    && doc_pred.is_none_or(|p| p(pivot_doc))
                 {
                     let mut score_f64 = 0.0f64;
                     for c in &cursors[0..=p_end] {
@@ -1688,19 +1879,59 @@ impl CustomSearchPlane {
         now_epoch_sec: u32,
         now_ms: u64,
     ) -> Result<Vec<u32>, SearchError> {
+        self.browse_newest_filtered(
+            ct_filter,
+            None,
+            None,
+            None,
+            policy,
+            tier,
+            metas,
+            limit,
+            offset,
+            now_epoch_sec,
+            now_ms,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn browse_newest_filtered(
+        &self,
+        ct_filter: Option<u8>,
+        extra_filter: Option<&RoaringBitmap>,
+        l0_pred: Option<&dyn Fn(&l0::L0Doc) -> bool>,
+        doc_pred: Option<&dyn Fn(u32) -> bool>,
+        policy: &PolicyPlane,
+        tier: PolicyTier,
+        metas: &[MetaRow],
+        limit: usize,
+        offset: usize,
+        now_epoch_sec: u32,
+        now_ms: u64,
+    ) -> Result<Vec<u32>, SearchError> {
         policy.lease().check(now_ms)?;
         if limit == 0 {
             return Ok(Vec::new());
         }
         let snap = policy.snapshot();
-        let mask = snap.bitmap_for(tier);
+        let base_mask = snap.bitmap_for(tier);
+        let effective_mask_owned;
+        let mask: &RoaringBitmap = match extra_filter {
+            Some(f) => {
+                effective_mask_owned = base_mask & f;
+                &effective_mask_owned
+            }
+            None => base_mask,
+        };
         let mut out = Vec::with_capacity(limit);
 
         let has_l0 = self.l0.has_entries();
         let l0_recent: Vec<(u32, u32)> = if has_l0 {
             let mut v = Vec::new();
-            for (d, ep) in self.l0.recent_docs(ct_filter) {
-                if policy.authorize_egress_one(d, tier, now_epoch_sec, now_ms)? {
+            for (d, ep) in self.l0.recent_docs_filtered(ct_filter, l0_pred) {
+                if policy.authorize_egress_one(d, tier, now_epoch_sec, now_ms)?
+                    && doc_pred.is_none_or(|p| p(d))
+                {
                     v.push((d, ep));
                 }
             }
@@ -1727,6 +1958,7 @@ impl CustomSearchPlane {
                             || policy.is_denied_atomic(doc_id)
                             || (tier == PolicyTier::Payload
                                 && policy.payload_expires_at(doc_id) <= now_epoch_sec)
+                            || doc_pred.is_some_and(|p| !p(doc_id))
                         {
                             continue;
                         }
@@ -1774,6 +2006,7 @@ impl CustomSearchPlane {
                 if (!has_l0 || !self.l0.is_superseded(d))
                     && !policy.is_denied_atomic(d)
                     && (tier != PolicyTier::Payload || policy.payload_expires_at(d) > now_epoch_sec)
+                    && doc_pred.is_none_or(|p| p(d))
                 {
                     heap.push((metas[d as usize].published_epoch, std::cmp::Reverse(d), ci));
                     break;
@@ -1807,6 +2040,7 @@ impl CustomSearchPlane {
                         && !policy.is_denied_atomic(d)
                         && (tier != PolicyTier::Payload
                             || policy.payload_expires_at(d) > now_epoch_sec)
+                        && doc_pred.is_none_or(|p| p(d))
                     {
                         heap.push((metas[d as usize].published_epoch, std::cmp::Reverse(d), ci));
                         break;
@@ -1816,6 +2050,54 @@ impl CustomSearchPlane {
         }
         policy.filter_egress_docs(&mut out, tier, now_epoch_sec, now_ms)?;
         Ok(out)
+    }
+
+    /// Exact policy-gated document count for a filtered browse/RSS query across base + L0.
+    #[allow(clippy::too_many_arguments)]
+    pub fn count_browse_filtered(
+        &self,
+        ct_filter: Option<u8>,
+        extra_filter: Option<&RoaringBitmap>,
+        l0_pred: Option<&dyn Fn(&l0::L0Doc) -> bool>,
+        doc_pred: Option<&dyn Fn(u32) -> bool>,
+        policy: &PolicyPlane,
+        tier: PolicyTier,
+        now_epoch_sec: u32,
+        now_ms: u64,
+    ) -> Result<u64, SearchError> {
+        policy.lease().check(now_ms)?;
+        let snap = policy.snapshot();
+        let mut mask = snap.bitmap_for(tier).clone();
+        if let Some(f) = extra_filter {
+            mask &= f;
+        }
+        if let Some(ct) = ct_filter {
+            if (ct as usize) >= NUM_CONTENT_TYPES {
+                return Ok(0);
+            }
+            mask &= &self.facet_ct[ct as usize];
+        }
+        let has_l0 = self.l0.has_entries();
+        let mut total = 0u64;
+        for d in mask.iter() {
+            if (!has_l0 || !self.l0.is_superseded(d))
+                && !policy.is_denied_atomic(d)
+                && (tier != PolicyTier::Payload || policy.payload_expires_at(d) > now_epoch_sec)
+                && doc_pred.is_none_or(|p| p(d))
+            {
+                total += 1;
+            }
+        }
+        if has_l0 {
+            for (d, _) in self.l0.recent_docs_filtered(ct_filter, l0_pred) {
+                if policy.authorize_egress_one(d, tier, now_epoch_sec, now_ms)?
+                    && doc_pred.is_none_or(|p| p(d))
+                {
+                    total += 1;
+                }
+            }
+        }
+        Ok(total)
     }
 
     /// Hardened Torznab ID + Fixed Two-Tier Unlinked Fallback:
@@ -2160,6 +2442,7 @@ impl CustomSearchPlane {
                     let cands = self.execute_and_bmw(
                         &t_entries,
                         &pass_mask,
+                        None,
                         policy,
                         tier,
                         now_epoch_sec,
@@ -2220,6 +2503,38 @@ impl CustomSearchPlane {
         now_epoch_sec: u32,
         now_ms: u64,
     ) -> Result<Vec<ScoredDoc>, SearchError> {
+        self.tvsearch_text_filtered(
+            title,
+            season,
+            episode,
+            None,
+            None,
+            None,
+            policy,
+            tier,
+            core,
+            top_k,
+            now_epoch_sec,
+            now_ms,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn tvsearch_text_filtered(
+        &self,
+        title: &str,
+        season: u16,
+        episode: Option<u16>,
+        extra_filter: Option<&RoaringBitmap>,
+        l0_pred: Option<&dyn Fn(&l0::L0Doc) -> bool>,
+        doc_pred: Option<&dyn Fn(u32) -> bool>,
+        policy: &PolicyPlane,
+        tier: PolicyTier,
+        core: &CorePlane,
+        top_k: usize,
+        now_epoch_sec: u32,
+        now_ms: u64,
+    ) -> Result<Vec<ScoredDoc>, SearchError> {
         let mut ep_bm = match episode {
             Some(ep) => {
                 let mut bm = self
@@ -2240,11 +2555,18 @@ impl CustomSearchPlane {
         let mut ct_ok = self.facet_ct[CT_TV_SHOW as usize].clone();
         ct_ok |= &self.facet_ct[CT_UNKNOWN as usize];
         ep_bm &= &ct_ok;
+        if let Some(f) = extra_filter {
+            ep_bm &= f;
+        }
+        let mut l0_ep_docs: HashSet<u32> = HashSet::new();
         if self.l0.has_entries() {
             for d in self.l0.matching_episode_docs(season, episode) {
                 if let Some(ov) = self.l0.get_doc(d) {
-                    if ov.content_type == CT_TV_SHOW || ov.content_type == CT_UNKNOWN {
+                    if (ov.content_type == CT_TV_SHOW || ov.content_type == CT_UNKNOWN)
+                        && l0_pred.is_none_or(|p| p(&ov))
+                    {
                         ep_bm.insert(d);
+                        l0_ep_docs.insert(d);
                     }
                 }
             }
@@ -2252,10 +2574,13 @@ impl CustomSearchPlane {
         if ep_bm.is_empty() {
             return Ok(Vec::new());
         }
-        self.search_text(
+        let combined_l0 = |ov: &l0::L0Doc| l0_ep_docs.contains(&ov.doc_id);
+        self.search_text_filtered(
             title,
             QueryMode::And,
             Some(&ep_bm),
+            Some(&combined_l0),
+            doc_pred,
             policy,
             tier,
             core,
@@ -2415,6 +2740,32 @@ impl CustomSearchPlane {
         now_epoch_sec: u32,
         now_ms: u64,
     ) -> Result<([u64; NUM_CONTENT_TYPES], [u64; 10], u64), SearchError> {
+        self.text_facet_counts_filtered(
+            query,
+            None,
+            None,
+            None,
+            policy,
+            tier,
+            facet_bytes,
+            now_epoch_sec,
+            now_ms,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn text_facet_counts_filtered(
+        &self,
+        query: &str,
+        extra_filter: Option<&RoaringBitmap>,
+        l0_pred: Option<&dyn Fn(&l0::L0Doc) -> bool>,
+        doc_pred: Option<&dyn Fn(u32) -> bool>,
+        policy: &PolicyPlane,
+        tier: PolicyTier,
+        facet_bytes: &[u8],
+        now_epoch_sec: u32,
+        now_ms: u64,
+    ) -> Result<([u64; NUM_CONTENT_TYPES], [u64; 10], u64), SearchError> {
         policy.lease().check(now_ms)?;
         let mut ct_counts = [0u64; NUM_CONTENT_TYPES];
         let mut res_counts = [0u64; 10];
@@ -2428,16 +2779,27 @@ impl CustomSearchPlane {
         }
 
         let snap = policy.snapshot();
-        let mask = snap.bitmap_for(tier);
-        if mask.is_empty() {
+        let base_mask = snap.bitmap_for(tier);
+        let effective_mask_owned;
+        let mask: &RoaringBitmap = match extra_filter {
+            Some(f) => {
+                effective_mask_owned = base_mask & f;
+                &effective_mask_owned
+            }
+            None => base_mask,
+        };
+        let has_l0 = self.l0.has_entries();
+        if mask.is_empty() && !has_l0 {
             return Ok((ct_counts, res_counts, 0));
         }
 
         let mut term_entries = Vec::with_capacity(toks.len());
+        let mut term_hashes = Vec::with_capacity(toks.len());
         let mut all_dense = true;
         let mut dense_bms: Vec<RoaringBitmap> = Vec::with_capacity(toks.len());
         for t in &toks {
             let th = term_hash(t, self.term_seed);
+            term_hashes.push(th);
             match self.find_term(th) {
                 Some(e) => {
                     term_entries.push(e);
@@ -2449,12 +2811,22 @@ impl CustomSearchPlane {
                         }
                     }
                 }
-                None => return Ok((ct_counts, res_counts, 0)),
+                None => {
+                    if !has_l0 {
+                        return Ok((ct_counts, res_counts, 0));
+                    }
+                }
             }
         }
 
         // Fast Path A: Pure SIMD Roaring bitmap intersection for dense terms (zero posting decode, zero page faults!)
-        if all_dense && !dense_bms.is_empty() && tier != PolicyTier::Payload {
+        if all_dense
+            && term_entries.len() == toks.len()
+            && !dense_bms.is_empty()
+            && tier != PolicyTier::Payload
+            && !has_l0
+            && doc_pred.is_none()
+        {
             dense_bms.sort_by_key(|b| b.len());
             let mut matched = &dense_bms[0] & mask;
             for b in &dense_bms[1..] {
@@ -2471,133 +2843,165 @@ impl CustomSearchPlane {
         }
 
         // Fast Path B: Postings intersection + 1-byte `facet_col.bin` lookup!
-        term_entries.sort_unstable_by_key(|e| e.df);
-        let n_terms = term_entries.len();
-        let drive = term_entries[0];
+        if term_entries.len() == toks.len() && !mask.is_empty() {
+            term_entries.sort_unstable_by_key(|e| e.df);
+            let n_terms = term_entries.len();
+            let drive = term_entries[0];
 
-        if drive.is_inline_single() {
-            let (doc_id, _) = drive.inline_doc_imp();
-            if mask.contains(doc_id)
-                && !policy.is_denied_atomic(doc_id)
-                && (tier != PolicyTier::Payload
-                    || policy.payload_expires_at(doc_id) > now_epoch_sec)
-            {
-                let mut buf = Vec::with_capacity(WAND_BLOCK_SIZE);
-                let mut ok = true;
-                for oe in &term_entries[1..] {
-                    if self.lookup_term_doc_impact(oe, doc_id, &mut buf)?.is_none() {
-                        ok = false;
-                        break;
-                    }
-                }
-                if ok {
-                    let fb = facet_bytes[doc_id as usize];
-                    let ct = (fb & 0x0F) as usize;
-                    let res = ((fb >> 4) & 0x0F) as usize;
-                    if ct < NUM_CONTENT_TYPES {
-                        ct_counts[ct] += 1;
-                    }
-                    if res < 10 {
-                        res_counts[res] += 1;
-                    }
-                    total = 1;
-                }
-            }
-            return Ok((ct_counts, res_counts, total));
-        }
-
-        let mut drive_buf = Vec::with_capacity(WAND_BLOCK_SIZE);
-        let mut other_bufs: Vec<Vec<(u32, u16)>> = (1..n_terms)
-            .map(|_| Vec::with_capacity(WAND_BLOCK_SIZE))
-            .collect();
-        let mut other_blk_idx: Vec<u32> = vec![0; n_terms - 1];
-        let mut other_loaded_blk: Vec<u32> = vec![u32::MAX; n_terms - 1];
-
-        for blk_i in 0..drive.num_blocks {
-            let dbm = self.read_block_meta(&drive, blk_i)?;
-            if mask.range_cardinality(dbm.first_doc..=dbm.last_doc) == 0 {
-                continue;
-            }
-            let mut possible = true;
-            for oi in 0..n_terms - 1 {
-                let oe = &term_entries[oi + 1];
-                if oe.is_inline_single() {
-                    let (od, _) = oe.inline_doc_imp();
-                    if od < dbm.first_doc || od > dbm.last_doc {
-                        possible = false;
-                        break;
-                    }
-                    continue;
-                }
-                let nb = self.find_block_ge(oe, other_blk_idx[oi], dbm.first_doc)?;
-                if nb >= oe.num_blocks {
-                    possible = false;
-                    break;
-                }
-                other_blk_idx[oi] = nb;
-                let obm = self.read_block_meta(oe, nb)?;
-                if obm.first_doc > dbm.last_doc {
-                    possible = false;
-                    break;
-                }
-            }
-            if !possible {
-                continue;
-            }
-            self.decode_block(&dbm, &mut drive_buf)?;
-            for &(doc_id, _) in &drive_buf {
-                if !mask.contains(doc_id)
-                    || policy.is_denied_atomic(doc_id)
-                    || (tier == PolicyTier::Payload
-                        && policy.payload_expires_at(doc_id) <= now_epoch_sec)
+            if drive.is_inline_single() {
+                let (doc_id, _) = drive.inline_doc_imp();
+                if mask.contains(doc_id)
+                    && (!has_l0 || !self.l0.is_superseded(doc_id))
+                    && !policy.is_denied_atomic(doc_id)
+                    && (tier != PolicyTier::Payload
+                        || policy.payload_expires_at(doc_id) > now_epoch_sec)
+                    && doc_pred.is_none_or(|p| p(doc_id))
                 {
-                    continue;
-                }
-                let mut matched = true;
-                for oi in 0..n_terms - 1 {
-                    let oe = &term_entries[oi + 1];
-                    if oe.is_inline_single() {
-                        if oe.inline_doc_imp().0 != doc_id {
-                            matched = false;
+                    let mut buf = Vec::with_capacity(WAND_BLOCK_SIZE);
+                    let mut ok = true;
+                    for oe in &term_entries[1..] {
+                        if self.lookup_term_doc_impact(oe, doc_id, &mut buf)?.is_none() {
+                            ok = false;
                             break;
                         }
+                    }
+                    if ok {
+                        let fb = facet_bytes[doc_id as usize];
+                        let ct = (fb & 0x0F) as usize;
+                        let res = ((fb >> 4) & 0x0F) as usize;
+                        if ct < NUM_CONTENT_TYPES {
+                            ct_counts[ct] += 1;
+                        }
+                        if res < 10 {
+                            res_counts[res] += 1;
+                        }
+                        total = 1;
+                    }
+                }
+            } else {
+                let mut drive_buf = Vec::with_capacity(WAND_BLOCK_SIZE);
+                let mut other_bufs: Vec<Vec<(u32, u16)>> = (1..n_terms)
+                    .map(|_| Vec::with_capacity(WAND_BLOCK_SIZE))
+                    .collect();
+                let mut other_blk_idx: Vec<u32> = vec![0; n_terms - 1];
+                let mut other_loaded_blk: Vec<u32> = vec![u32::MAX; n_terms - 1];
+
+                for blk_i in 0..drive.num_blocks {
+                    let dbm = self.read_block_meta(&drive, blk_i)?;
+                    if mask.range_cardinality(dbm.first_doc..=dbm.last_doc) == 0 {
                         continue;
                     }
-                    let nb = self.find_block_ge(oe, other_blk_idx[oi], doc_id)?;
-                    if nb >= oe.num_blocks {
-                        matched = false;
-                        break;
-                    }
-                    other_blk_idx[oi] = nb;
-                    if other_loaded_blk[oi] != nb {
-                        let obm = self.read_block_meta(oe, nb)?;
-                        if obm.first_doc > doc_id {
-                            matched = false;
+                    let mut possible = true;
+                    for oi in 0..n_terms - 1 {
+                        let oe = &term_entries[oi + 1];
+                        if oe.is_inline_single() {
+                            let (od, _) = oe.inline_doc_imp();
+                            if od < dbm.first_doc || od > dbm.last_doc {
+                                possible = false;
+                                break;
+                            }
+                            continue;
+                        }
+                        let nb = self.find_block_ge(oe, other_blk_idx[oi], dbm.first_doc)?;
+                        if nb >= oe.num_blocks {
+                            possible = false;
                             break;
                         }
-                        self.decode_block(&obm, &mut other_bufs[oi])?;
-                        other_loaded_blk[oi] = nb;
+                        other_blk_idx[oi] = nb;
+                        let obm = self.read_block_meta(oe, nb)?;
+                        if obm.first_doc > dbm.last_doc {
+                            possible = false;
+                            break;
+                        }
                     }
-                    if other_bufs[oi]
-                        .binary_search_by_key(&doc_id, |&(d, _)| d)
-                        .is_err()
-                    {
-                        matched = false;
-                        break;
+                    if !possible {
+                        continue;
+                    }
+                    self.decode_block(&dbm, &mut drive_buf)?;
+                    for &(doc_id, _) in &drive_buf {
+                        if !mask.contains(doc_id)
+                            || (has_l0 && self.l0.is_superseded(doc_id))
+                            || policy.is_denied_atomic(doc_id)
+                            || (tier == PolicyTier::Payload
+                                && policy.payload_expires_at(doc_id) <= now_epoch_sec)
+                            || doc_pred.is_some_and(|p| !p(doc_id))
+                        {
+                            continue;
+                        }
+                        let mut matched = true;
+                        for oi in 0..n_terms - 1 {
+                            let oe = &term_entries[oi + 1];
+                            if oe.is_inline_single() {
+                                if oe.inline_doc_imp().0 != doc_id {
+                                    matched = false;
+                                    break;
+                                }
+                                continue;
+                            }
+                            let nb = self.find_block_ge(oe, other_blk_idx[oi], doc_id)?;
+                            if nb >= oe.num_blocks {
+                                matched = false;
+                                break;
+                            }
+                            other_blk_idx[oi] = nb;
+                            if other_loaded_blk[oi] != nb {
+                                let obm = self.read_block_meta(oe, nb)?;
+                                if obm.first_doc > doc_id {
+                                    matched = false;
+                                    break;
+                                }
+                                self.decode_block(&obm, &mut other_bufs[oi])?;
+                                other_loaded_blk[oi] = nb;
+                            }
+                            if other_bufs[oi]
+                                .binary_search_by_key(&doc_id, |&(d, _)| d)
+                                .is_err()
+                            {
+                                matched = false;
+                                break;
+                            }
+                        }
+                        if matched {
+                            let fb = facet_bytes[doc_id as usize];
+                            let ct = (fb & 0x0F) as usize;
+                            let res = ((fb >> 4) & 0x0F) as usize;
+                            if ct < NUM_CONTENT_TYPES {
+                                ct_counts[ct] += 1;
+                            }
+                            if res < 10 {
+                                res_counts[res] += 1;
+                            }
+                            total += 1;
+                        }
                     }
                 }
-                if matched {
-                    let fb = facet_bytes[doc_id as usize];
-                    let ct = (fb & 0x0F) as usize;
-                    let res = ((fb >> 4) & 0x0F) as usize;
-                    if ct < NUM_CONTENT_TYPES {
-                        ct_counts[ct] += 1;
-                    }
-                    if res < 10 {
-                        res_counts[res] += 1;
-                    }
-                    total += 1;
+            }
+        }
+        if has_l0 {
+            for (doc_id, _) in self.l0.search_terms(&term_hashes, true) {
+                if !policy.authorize_egress_one(doc_id, tier, now_epoch_sec, now_ms)? {
+                    continue;
                 }
+                if doc_pred.is_some_and(|p| !p(doc_id)) {
+                    continue;
+                }
+                let Some(ov) = self.l0.get_doc(doc_id) else {
+                    continue;
+                };
+                if let Some(pred) = l0_pred {
+                    if !pred(&ov) {
+                        continue;
+                    }
+                } else if extra_filter.is_some_and(|f| !f.contains(doc_id)) {
+                    continue;
+                }
+                if (ov.content_type as usize) < NUM_CONTENT_TYPES {
+                    ct_counts[ov.content_type as usize] += 1;
+                }
+                if (ov.resolution as usize) < 10 {
+                    res_counts[ov.resolution as usize] += 1;
+                }
+                total += 1;
             }
         }
         Ok((ct_counts, res_counts, total))

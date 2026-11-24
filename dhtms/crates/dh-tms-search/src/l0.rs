@@ -1,5 +1,6 @@
 use ahash::{AHashMap, AHashSet};
 use crc32fast::Hasher as Crc32;
+use dh_tms_core::MetaRow;
 use dh_tms_grammar::{parse_release_name, tokenize_alnum, EpisodeSpec};
 use parking_lot::RwLock;
 use std::fs::{File, OpenOptions};
@@ -16,6 +17,10 @@ pub struct L0Doc {
     pub name: String,
     pub content_type: u8,
     pub resolution: u8,
+    pub is_anime: bool,
+    pub video_3d: u8,
+    pub video_source: u8,
+    pub video_codec: u8,
     pub entity_id: u32,
     pub year: u16,
     pub published_epoch: u32,
@@ -306,6 +311,16 @@ impl L0Overlay {
     /// Return `(doc_id, published_epoch)` for L0 docs matching an optional `content_type`,
     /// sorted newest-first (`published_epoch DESC, doc_id ASC`).
     pub fn recent_docs(&self, ct_filter: Option<u8>) -> Vec<(u32, u32)> {
+        self.recent_docs_filtered(ct_filter, None)
+    }
+
+    /// Return `(doc_id, published_epoch)` for L0 docs matching optional `content_type`
+    /// and an optional structured predicate, sorted newest-first.
+    pub fn recent_docs_filtered(
+        &self,
+        ct_filter: Option<u8>,
+        pred: Option<&dyn Fn(&L0Doc) -> bool>,
+    ) -> Vec<(u32, u32)> {
         let g = self.inner.read();
         if g.docs.is_empty() {
             return Vec::new();
@@ -313,7 +328,9 @@ impl L0Overlay {
         let mut out: Vec<(u32, u32)> = g
             .docs
             .values()
-            .filter(|d| ct_filter.is_none_or(|ct| d.content_type == ct))
+            .filter(|d| {
+                ct_filter.is_none_or(|ct| d.content_type == ct) && pred.is_none_or(|p| p(d))
+            })
             .map(|d| (d.doc_id, d.published_epoch))
             .collect();
         out.sort_unstable_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
@@ -470,9 +487,9 @@ fn encode_l0_payload(doc: &L0Doc) -> Vec<u8> {
     for &h in doc.family_hashes.iter().take(fam_cnt) {
         out.extend_from_slice(&h.to_le_bytes());
     }
-    // Trailing v2 extension: hashes, size_bytes, files_count, and capped file list
+    // Trailing v2 extension: hashes, size_bytes, files_count, capped file list, and packed meta flags
     out.extend_from_slice(&L0_EXT_V2_MAGIC);
-    let mut flags = 0u8;
+    let mut flags = 4u8; // bit 2: trailing 2-byte packed MetaRow flags (source, codec, is_anime, video_3d)
     if doc.info_hash_v1.is_some() {
         flags |= 1;
     }
@@ -500,6 +517,17 @@ fn encode_l0_payload(doc: &L0Doc) -> Vec<u8> {
         out.push(exlen as u8);
         out.extend_from_slice(&exb[..exlen]);
     }
+    let meta_bits = MetaRow::pack_flags_v2(
+        doc.video_source,
+        doc.video_codec,
+        doc.is_anime,
+        doc.video_3d,
+        false,
+        false,
+        false,
+        false,
+    );
+    out.extend_from_slice(&meta_bits.to_le_bytes());
     out
 }
 
@@ -585,6 +613,10 @@ fn decode_l0_payload(buf: &[u8], term_seed: u64) -> Option<L0Doc> {
     let mut size_bytes = 0u64;
     let mut files_count = 0u32;
     let mut files: Vec<(String, u64, String)> = Vec::new();
+    let mut is_anime = false;
+    let mut video_3d = 0u8;
+    let mut video_source = 0u8;
+    let mut video_codec = 0u8;
 
     if off + 5 <= buf.len() && buf[off..off + 4] == L0_EXT_V2_MAGIC {
         off += 4;
@@ -636,6 +668,20 @@ fn decode_l0_payload(buf: &[u8], term_seed: u64) -> Option<L0Doc> {
             off += exlen;
             files.push((fp, sz, ext));
         }
+        if (flags & 4) != 0 {
+            if off + 2 > buf.len() {
+                return None;
+            }
+            let meta_bits = u16::from_le_bytes(buf[off..off + 2].try_into().ok()?);
+            let tmp = MetaRow {
+                flags_src: meta_bits,
+                ..Default::default()
+            };
+            video_source = tmp.source();
+            video_codec = tmp.codec();
+            is_anime = tmp.is_anime();
+            video_3d = tmp.video_3d();
+        }
     }
 
     let mut terms = Vec::with_capacity(pr.title_tokens.len() + pr.raw_tokens.len());
@@ -656,6 +702,10 @@ fn decode_l0_payload(buf: &[u8], term_seed: u64) -> Option<L0Doc> {
         name,
         content_type,
         resolution,
+        is_anime,
+        video_3d,
+        video_source,
+        video_codec,
         entity_id,
         year,
         published_epoch,
@@ -699,6 +749,10 @@ mod tests {
                     name: "Suits.S01E02-E04.1080p.WEB-DL".into(),
                     content_type: 2,
                     resolution: 3,
+                    is_anime: false,
+                    video_3d: 0,
+                    video_source: 0,
+                    video_codec: 0,
                     entity_id: 201,
                     year: 2011,
                     published_epoch: 100,
@@ -729,6 +783,10 @@ mod tests {
                     name: "Amelie.2001.1080p.BluRay".into(),
                     content_type: 1,
                     resolution: 3,
+                    is_anime: false,
+                    video_3d: 0,
+                    video_source: 0,
+                    video_codec: 0,
                     entity_id: 102,
                     year: 2001,
                     published_epoch: 101,
@@ -769,6 +827,10 @@ mod tests {
                     name: "Suits.S01E02-E04.1080p.WEB-DL".into(),
                     content_type: 2,
                     resolution: 3,
+                    is_anime: false,
+                    video_3d: 0,
+                    video_source: 0,
+                    video_codec: 0,
                     entity_id: 201,
                     year: 2011,
                     published_epoch: 102,

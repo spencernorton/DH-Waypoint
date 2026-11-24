@@ -52,10 +52,15 @@ type service struct {
 	// has no cache entry and contributes nothing.
 	lastGoodEntries map[string][][DoubleHashLen]byte
 	// lastGoodLocal is the same cache for this instance's own
-	// observations, used when the table cannot be read.
-	lastGoodLocal [][DoubleHashLen]byte
-	lastRefreshAt time.Time
-	entryCount    atomic.Int64
+	// observations, used when the table cannot be read while external
+	// feeds are active. In local-only mode (no feeds), the active bloom
+	// filter itself preserves all loaded local observations so this
+	// ~32B/entry slice is released after building the bloom.
+	lastGoodLocal    [][DoubleHashLen]byte
+	hasLocalInActive bool
+	lastLocalCount   int
+	lastRefreshAt    time.Time
+	entryCount       atomic.Int64
 	// refreshMu keeps two refreshes from interleaving: the later swap
 	// must not install a filter older than the pending entries the
 	// earlier one already released.
@@ -363,14 +368,24 @@ func (s *service) Refresh(ctx context.Context) error {
 		s.perFeed[r.url] = st
 	}
 	s.lastRefreshAt = time.Now()
+	localOnly := len(feeds) == 0 && len(s.lastGoodEntries) == 0
 	if localErr != nil {
 		s.logger.Warnw("csam local observations not loaded; keeping the previous ones", "err", localErr)
 		if firstErr == nil {
 			firstErr = fmt.Errorf("local observations: %w", localErr)
 		}
+		if localOnly && len(s.lastGoodLocal) == 0 && s.hasLocalInActive {
+			// Active bloom already holds all previously loaded local observations.
+			s.mu.Unlock()
+			return firstErr
+		}
 		flushed, local = nil, s.lastGoodLocal
 	}
-	s.lastGoodLocal = local
+	if localOnly {
+		s.lastGoodLocal = nil
+	} else {
+		s.lastGoodLocal = local
+	}
 
 	// Build the union bloom from EVERY feed's last-good cache (whether
 	// the most recent attempt succeeded or failed). This is the core of
@@ -388,6 +403,11 @@ func (s *service) Refresh(ctx context.Context) error {
 			newBloom.Add(e[:])
 		}
 	}
+	localCount := len(local)
+	if localCount > 0 {
+		s.hasLocalInActive = true
+		s.lastLocalCount = localCount
+	}
 	s.mu.Unlock()
 	for _, e := range local {
 		newBloom.Add(e[:])
@@ -397,7 +417,7 @@ func (s *service) Refresh(ctx context.Context) error {
 	s.entryCount.Store(int64(totalEntries))
 	if s.metrics != nil {
 		s.metrics.EntriesGauge.Set(float64(totalEntries))
-		s.metrics.FeedEntriesGauge.WithLabelValues("local").Set(float64(len(local)))
+		s.metrics.FeedEntriesGauge.WithLabelValues("local").Set(float64(localCount))
 	}
 
 	// The new filter holds these now. Entries Observe added during this

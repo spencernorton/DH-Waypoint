@@ -19,7 +19,9 @@ import (
 	"github.com/pressly/goose/v3"
 	"github.com/spencernorton/DH-Waypoint/internal/lazy"
 	"github.com/spencernorton/DH-Waypoint/internal/model"
+	"github.com/spencernorton/DH-Waypoint/internal/namepolicy"
 	"github.com/spencernorton/DH-Waypoint/internal/protocol"
+	"github.com/spencernorton/DH-Waypoint/internal/serving"
 	migrationssql "github.com/spencernorton/DH-Waypoint/migrations"
 	v1 "github.com/spencernorton/DH-Waypoint/processorapi/v1"
 	"github.com/stretchr/testify/require"
@@ -170,6 +172,49 @@ func TestPostgresZeroPluginsAndDeterministicApplication(t *testing.T) {
 	var apps int
 	require.NoError(t, p.QueryRow(testContext, `SELECT count(*) FROM processor_applications`).Scan(&apps))
 	require.Equal(t, 1, apps)
+}
+
+func TestPostgresPayloadBackedPriorityAheadOfLinearCatchUp(t *testing.T) {
+	s, p, _ := fixture(t)
+	verifier := strings.Repeat("b", 64)
+	artifact := strings.Repeat("a", 64)
+	svc := newService(t, "synthetic-reviewer", []v1.Stage{v1.Policy}, policyResult)
+	svc.identity.ArtifactDigest = artifact
+	s.cfg.PayloadVerifierToken = namepolicy.SecretToken(strings.Repeat("verifier", 8))
+	register(t, s, svc)
+	require.NoError(t, s.SetPublicationConfig(serving.Config{
+		RequiredProcessor:                     svc.identity.ID,
+		RequiredProcessorArtifactDigest:       artifact,
+		RequiredPayloadVerifierArtifactDigest: verifier,
+	}))
+
+	// Seed 40 torrents (0x01..0x28); place valid unexpired PayloadProof ONLY on 0x28 (far behind linear cursor).
+	var lastHash []byte
+	for i := byte(1); i <= 40; i++ {
+		lastHash = seedTorrent(t, p, i, "movie")
+	}
+	// Clear pending outbox so only linear catch-up and payload-priority compete.
+	_, err := p.Exec(testContext, `DELETE FROM processor_publication_pending`)
+	require.NoError(t, err)
+	_, err = p.Exec(testContext, `INSERT INTO processor_payload_reviews(info_hash,source_revision,verifier_artifact,policy,approved,reason,receipt,expires_at)
+ SELECT info_hash,COALESCE(revision,1),$2,$3,true,'decoded_media','{}',now()+interval '1 day'
+ FROM torrents LEFT JOIN processor_publication_sources USING(info_hash) WHERE info_hash=$1`, lastHash, verifier, serving.PayloadEvidenceContract)
+	require.NoError(t, err)
+
+	s.cfg.ScanBatch = 4
+	s.cfg.QueueCapacity = 4
+	n, err := s.Scan(testContext)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, n, 2)
+
+	var prioritized bool
+	require.NoError(t, p.QueryRow(testContext, `SELECT EXISTS(SELECT 1 FROM processor_jobs WHERE info_hash=$1)`, lastHash).Scan(&prioritized))
+	require.True(t, prioritized, "unexpired PayloadProof torrent behind scan_after must be prioritized immediately")
+
+	// Verify scan_after did NOT jump to 0x28 (linear catch-up must not skip 0x04..0x27).
+	var after []byte
+	require.NoError(t, p.QueryRow(testContext, `SELECT scan_after FROM processor_control WHERE singleton`).Scan(&after))
+	require.Less(t, after[0], byte(10), "priority admission must not skip linear scan_after cursor")
 }
 func TestPostgresOrderDuplicateStaleAndRestart(t *testing.T) {
 	s, p, _ := fixture(t)

@@ -45,10 +45,7 @@ func (a *API) tryHandleV1SearchDHTMS(c *gin.Context) bool {
 	}
 	// Bypass to PostgreSQL when PG-only filters or explicit cursor/sort options are requested.
 	if strings.TrimSpace(c.Query("cursor")) != "" ||
-		strings.TrimSpace(c.Query("video_source")) != "" ||
-		strings.TrimSpace(c.Query("video_codec")) != "" ||
 		strings.TrimSpace(c.Query("hdr")) != "" ||
-		strings.TrimSpace(c.Query("min_seeders")) != "" ||
 		strings.TrimSpace(c.Query("lean_profile")) != "" {
 		a.dhtmsMetrics.RecordRead("rest_v1", "bypass")
 		return false
@@ -92,6 +89,33 @@ func (a *API) tryHandleV1SearchDHTMS(c *gin.Context) bool {
 			return false
 		}
 		resFilter = &res
+	}
+	var srcFilter *model.VideoSource
+	if srcParam := strings.TrimSpace(c.Query("video_source")); srcParam != "" {
+		vs, err := model.ParseVideoSource(srcParam)
+		if err != nil {
+			return false // Let runSearch emit standard 400 response
+		}
+		srcFilter = &vs
+	}
+	var codecFilter *model.VideoCodec
+	if codecParam := strings.TrimSpace(c.Query("video_codec")); codecParam != "" {
+		vc, err := model.ParseVideoCodec(codecParam)
+		if err != nil {
+			return false // Let runSearch emit standard 400 response
+		}
+		codecFilter = &vc
+	}
+	var minSeeders *uint32
+	if minParam := strings.TrimSpace(c.Query("min_seeders")); minParam != "" {
+		n, err := strconv.Atoi(minParam)
+		if err != nil || n < 0 {
+			return false // Let runSearch emit standard 400 response
+		}
+		if n > 0 {
+			v := uint32(n)
+			minSeeders = &v
+		}
 	}
 
 	qStr := strings.TrimSpace(c.Query("q"))
@@ -143,14 +167,36 @@ func (a *API) tryHandleV1SearchDHTMS(c *gin.Context) bool {
 	if fetchLimit < 25 {
 		fetchLimit = 25
 	}
-	if typeFilter != nil || resFilter != nil {
-		if fetchLimit < 200 {
-			fetchLimit = 200
-		}
-	}
 	if fetchLimit > 500 {
 		fetchLimit = 500
 	}
+	var clauses []dhtms.FilterClause
+	var singleCT *uint8
+	if typeFilter != nil || resFilter != nil || srcFilter != nil || codecFilter != nil {
+		cl := dhtms.FilterClause{}
+		if typeFilter != nil {
+			c := dhtms.ContentTypeToCode(string(*typeFilter))
+			cl.ContentType = &c
+		}
+		if resFilter != nil {
+			if rc := dhtms.ResolutionToCode(resFilter.String()); rc != 0 {
+				cl.Resolutions = []uint8{rc}
+			}
+		}
+		if srcFilter != nil {
+			sc := dhtms.VideoSourceToCode(srcFilter.String())
+			cl.VideoSource = &sc
+		}
+		if codecFilter != nil {
+			cc := dhtms.VideoCodecToCode(codecFilter.String())
+			cl.VideoCodec = &cc
+		}
+		if typeFilter != nil && resFilter == nil && srcFilter == nil && codecFilter == nil {
+			singleCT = cl.ContentType
+		}
+		clauses = []dhtms.FilterClause{cl}
+	}
+	delegatedOffset := false
 
 	recordErr := func(err error) {
 		if errors.Is(err, dhtms.ErrLeaseExpired) {
@@ -206,7 +252,9 @@ func (a *API) tryHandleV1SearchDHTMS(c *gin.Context) bool {
 			Limit:         fetchLimit,
 			TVSeason:      seasonPtr,
 			TVEpisode:     episodePtr,
-			IncludeFacets: includeTotal && typeFilter == nil && resFilter == nil && seasonPtr == nil,
+			IncludeFacets: includeTotal && seasonPtr == nil,
+			AnyClauses:    clauses,
+			MinSeeders:    minSeeders,
 		})
 		if err != nil {
 			recordErr(err)
@@ -218,21 +266,32 @@ func (a *API) tryHandleV1SearchDHTMS(c *gin.Context) bool {
 		}
 
 	default:
-		var ctPtr *uint8
-		if typeFilter != nil {
-			code := dhtms.ContentTypeToCode(string(*typeFilter))
-			ctPtr = &code
+		rssClauses := clauses
+		if singleCT != nil {
+			rssClauses = nil
 		}
+		rssLimit := int(limit + 1)
+		if rssLimit < 1 {
+			rssLimit = 1
+		}
+		if rssLimit > 500 {
+			rssLimit = 500
+		}
+		delegatedOffset = true
 		rss, err := a.dhtms.RSS(ctx, dhtms.RSSRequest{
-			ContentType: ctPtr,
-			Tier:        tier,
-			Limit:       fetchLimit,
-			Offset:      0,
+			ContentType:  singleCT,
+			AnyClauses:   rssClauses,
+			MinSeeders:   minSeeders,
+			IncludeTotal: includeTotal,
+			Tier:         tier,
+			Limit:        rssLimit,
+			Offset:       int(offset),
 		})
 		if err != nil {
 			recordErr(err)
 			return false
 		}
+		totalFacetCount = rss.TotalCount
 		for _, h := range rss.Docs {
 			rawHits = append(rawHits, hitWithID{hit: h})
 		}
@@ -250,6 +309,15 @@ func (a *API) tryHandleV1SearchDHTMS(c *gin.Context) bool {
 		if resFilter != nil && (!tc.VideoResolution.Valid || tc.VideoResolution.VideoResolution != *resFilter) {
 			continue
 		}
+		if srcFilter != nil && (!tc.VideoSource.Valid || tc.VideoSource.VideoSource != *srcFilter) {
+			continue
+		}
+		if codecFilter != nil && (!tc.VideoCodec.Valid || tc.VideoCodec.VideoCodec != *codecFilter) {
+			continue
+		}
+		if minSeeders != nil && (!tc.Seeders.Valid || uint32(tc.Seeders.Uint) < *minSeeders) {
+			continue
+		}
 		filtered = append(filtered, tc)
 	}
 
@@ -263,6 +331,9 @@ func (a *API) tryHandleV1SearchDHTMS(c *gin.Context) bool {
 
 	hasNext := false
 	start := int(offset)
+	if delegatedOffset {
+		start = 0
+	}
 	var page []model.TorrentContent
 	if start < len(filtered) {
 		rem := filtered[start:]

@@ -46,6 +46,22 @@ func TestMappingAndGormPlaceholderConversion(t *testing.T) {
 	if ResolutionToCode("1080p") != 6 || ResolutionToCode("2160p") != 8 {
 		t.Fatalf("alias resolution mapping failed")
 	}
+	for code := uint8(1); code <= 9; code++ {
+		src := CodeToVideoSource(code)
+		if !src.Valid || VideoSourceToCode(src.VideoSource.String()) != code {
+			t.Fatalf("video_source roundtrip failed for code %d", code)
+		}
+		codec := CodeToVideoCodec(code)
+		if !codec.Valid || VideoCodecToCode(codec.VideoCodec.String()) != code {
+			t.Fatalf("video_codec roundtrip failed for code %d", code)
+		}
+	}
+	for code := uint8(1); code <= 3; code++ {
+		v3d := CodeToVideo3D(code)
+		if !v3d.Valid || Video3DToCode(v3d.Video3D.String()) != code {
+			t.Fatalf("video_3d roundtrip failed for code %d", code)
+		}
+	}
 
 	lsn, err := ParsePGLSN("1/2A")
 	if err != nil || lsn != ((1<<32)|0x2A) {

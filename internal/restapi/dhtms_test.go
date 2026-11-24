@@ -139,4 +139,13 @@ func TestRestAPIDirectServeAndFailClosedPGFallback(t *testing.T) {
 	rBypass := doGet("/api/v1/search?q=direct&hdr=HDR10")
 	require.Equal(t, 200, rBypass.Code)
 	require.Equal(t, int32(2), spy.v1Calls.Load())
+
+	// 5. video_source, video_codec, min_seeders serve directly from DH-TMS (0 additional PG calls),
+	// while invalid enum values still fall through and return HTTP 400.
+	rFiltered := doGet("/api/v1/search?q=direct&video_source=WEBDL&video_codec=x265&min_seeders=10")
+	require.Equal(t, 200, rFiltered.Code)
+	require.Equal(t, int32(2), spy.v1Calls.Load())
+
+	rInvalid := doGet("/api/v1/search?video_source=VHS")
+	require.Equal(t, 400, rInvalid.Code)
 }

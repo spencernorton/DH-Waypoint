@@ -66,6 +66,10 @@ type DocHit struct {
 	SizeBytes       uint64      `json:"size_bytes"`
 	ContentType     uint8       `json:"content_type"`
 	Resolution      uint8       `json:"resolution"`
+	IsAnime         bool        `json:"is_anime,omitempty"`
+	Video3D         uint8       `json:"video_3d,omitempty"`
+	VideoSource     uint8       `json:"video_source,omitempty"`
+	VideoCodec      uint8       `json:"video_codec,omitempty"`
 	EntityID        uint32      `json:"entity_id"`
 	Year            uint16      `json:"year"`
 	PublishedEpoch  uint32      `json:"published_epoch"`
@@ -78,17 +82,31 @@ type DocHit struct {
 	Files           []FileEntry `json:"files,omitempty"`
 }
 
+// FilterClause defines one conjunctive filter branch evaluated as an OR
+// disjunction (`any_clauses`) across DH-TMS static facet bitmaps and live L0 docs.
+type FilterClause struct {
+	ContentType        *uint8  `json:"content_type,omitempty"`
+	Resolutions        []uint8 `json:"resolutions,omitempty"`
+	ExcludeResolutions []uint8 `json:"exclude_resolutions,omitempty"`
+	RequireAnime       bool    `json:"require_anime,omitempty"`
+	Require3D          bool    `json:"require_3d,omitempty"`
+	VideoSource        *uint8  `json:"video_source,omitempty"`
+	VideoCodec         *uint8  `json:"video_codec,omitempty"`
+}
+
 // SearchRequest mirrors POST /v1/search.
 type SearchRequest struct {
-	Query         string     `json:"query"`
-	Mode          QueryMode  `json:"mode,omitempty"`
-	Tier          PolicyTier `json:"tier,omitempty"`
-	Limit         int        `json:"limit,omitempty"`
-	TVSeason      *uint16    `json:"tv_season,omitempty"`
-	TVEpisode     *uint16    `json:"tv_episode,omitempty"`
-	IncludeFacets bool       `json:"include_facets,omitempty"`
-	IncludeFiles  bool       `json:"include_files,omitempty"`
-	NowEpoch      *uint32    `json:"now_epoch,omitempty"`
+	Query         string         `json:"query"`
+	Mode          QueryMode      `json:"mode,omitempty"`
+	Tier          PolicyTier     `json:"tier,omitempty"`
+	Limit         int            `json:"limit,omitempty"`
+	TVSeason      *uint16        `json:"tv_season,omitempty"`
+	TVEpisode     *uint16        `json:"tv_episode,omitempty"`
+	IncludeFacets bool           `json:"include_facets,omitempty"`
+	IncludeFiles  bool           `json:"include_files,omitempty"`
+	AnyClauses    []FilterClause `json:"any_clauses,omitempty"`
+	MinSeeders    *uint32        `json:"min_seeders,omitempty"`
+	NowEpoch      *uint32        `json:"now_epoch,omitempty"`
 }
 
 // SearchResponse mirrors the JSON response of POST /v1/search.
@@ -123,17 +141,21 @@ type LookupResponse struct {
 
 // RSSRequest mirrors POST /v1/rss.
 type RSSRequest struct {
-	ContentType  *uint8     `json:"content_type,omitempty"`
-	Tier         PolicyTier `json:"tier,omitempty"`
-	Limit        int        `json:"limit,omitempty"`
-	Offset       int        `json:"offset,omitempty"`
-	IncludeFiles bool       `json:"include_files,omitempty"`
-	NowEpoch     *uint32    `json:"now_epoch,omitempty"`
+	ContentType  *uint8         `json:"content_type,omitempty"`
+	Tier         PolicyTier     `json:"tier,omitempty"`
+	Limit        int            `json:"limit,omitempty"`
+	Offset       int            `json:"offset,omitempty"`
+	IncludeFiles bool           `json:"include_files,omitempty"`
+	IncludeTotal bool           `json:"include_total,omitempty"`
+	AnyClauses   []FilterClause `json:"any_clauses,omitempty"`
+	MinSeeders   *uint32        `json:"min_seeders,omitempty"`
+	NowEpoch     *uint32        `json:"now_epoch,omitempty"`
 }
 
 // RSSResponse mirrors POST /v1/rss, POST /v1/substring, and POST /v1/hydrate.
 type RSSResponse struct {
-	Docs []DocHit `json:"docs"`
+	Docs       []DocHit `json:"docs"`
+	TotalCount *uint64  `json:"total_count,omitempty"`
 }
 
 // DashstatsRequest mirrors POST /v1/dashstats.
@@ -295,6 +317,11 @@ type L0UpsertItem struct {
 	SizeBytes      uint64           `json:"size_bytes,omitempty"`
 	ContentType    uint8            `json:"content_type"`
 	Resolution     uint8            `json:"resolution,omitempty"`
+	IsAnime        bool             `json:"is_anime,omitempty"`
+	Is3D           bool             `json:"is_3d,omitempty"`
+	Video3D        uint8            `json:"video_3d,omitempty"`
+	VideoSource    uint8            `json:"video_source,omitempty"`
+	VideoCodec     uint8            `json:"video_codec,omitempty"`
 	EntityID       uint32           `json:"entity_id,omitempty"`
 	Year           uint16           `json:"year,omitempty"`
 	PublishedEpoch uint32           `json:"published_epoch"`
@@ -380,6 +407,11 @@ type BuildDocLine struct {
 	PublishedEpoch      uint32           `json:"published_epoch"`
 	CreatedEpoch        uint32           `json:"created_epoch"`
 	Resolution          uint8            `json:"resolution,omitempty"`
+	IsAnime             bool             `json:"is_anime,omitempty"`
+	Is3D                bool             `json:"is_3d,omitempty"`
+	Video3D             uint8            `json:"video_3d,omitempty"`
+	VideoSource         uint8            `json:"video_source,omitempty"`
+	VideoCodec          uint8            `json:"video_codec,omitempty"`
 	Files               []BuildFileInput `json:"files,omitempty"`
 	IsPrivate           bool             `json:"is_private,omitempty"`
 	Quarantined         bool             `json:"quarantined,omitempty"`

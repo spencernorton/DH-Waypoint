@@ -68,11 +68,22 @@ func DocHitToTorrentContent(hit DocHit, contentSource, contentID string) (model.
 
 	ct := CodeToContentType(hit.ContentType)
 	res := CodeToResolution(hit.Resolution)
+	vsrc := CodeToVideoSource(hit.VideoSource)
+	vcodec := CodeToVideoCodec(hit.VideoCodec)
+	v3d := CodeToVideo3D(hit.Video3D)
+	filesStatus := model.FilesStatusSingle
+	if hit.FilesCount > 1 {
+		filesStatus = model.FilesStatusMulti
+	}
 
 	tc := model.TorrentContent{
 		InfoHash:        ih,
 		ContentType:     ct,
 		VideoResolution: res,
+		VideoSource:     vsrc,
+		VideoCodec:      vcodec,
+		Video3D:         v3d,
+		IsAnime:         hit.IsAnime,
 		PublishedAt:     publishedAt,
 		CreatedAt:       createdAt,
 		UpdatedAt:       updatedAt,
@@ -81,15 +92,16 @@ func DocHitToTorrentContent(hit DocHit, contentSource, contentID string) (model.
 		Seeders:         seeders,
 		Leechers:        leechers,
 		Torrent: model.Torrent{
-			InfoHash:   ih,
-			InfoHashV2: ihv2,
-			Name:       hit.Name,
-			Size:       uint(hit.SizeBytes),
-			Private:    false,
-			CreatedAt:  createdAt,
-			UpdatedAt:  updatedAt,
-			FilesCount: filesCount,
-			Sources:    sources,
+			InfoHash:    ih,
+			InfoHashV2:  ihv2,
+			Name:        hit.Name,
+			Size:        uint(hit.SizeBytes),
+			Private:     false,
+			FilesStatus: filesStatus,
+			CreatedAt:   createdAt,
+			UpdatedAt:   updatedAt,
+			FilesCount:  filesCount,
+			Sources:     sources,
 		},
 	}
 	if contentSource != "" && contentID != "" {

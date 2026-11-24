@@ -9,7 +9,7 @@ use dh_tms_grammar::{
 use dh_tms_hashdir::{encode_hex, parse_info_hash_hex, HashDir, InfoHash};
 use dh_tms_policy::{PolicyError, PolicyOp, PolicyPlane, PolicyTier, RevokeReason};
 use dh_tms_search::l0::L0Doc;
-use dh_tms_search::{term_hash, CustomSearchPlane, QueryMode, SearchError};
+use dh_tms_search::{term_hash, CustomSearchPlane, QueryMode, SearchError, SearchFilterClause};
 use dh_tms_swarm::{SwarmError, SwarmPlane, SwarmUpdate};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
@@ -158,6 +158,10 @@ pub struct DocHit {
     pub size_bytes: u64,
     pub content_type: u8,
     pub resolution: u8,
+    pub is_anime: bool,
+    pub video_3d: u8,
+    pub video_source: u8,
+    pub video_codec: u8,
     pub entity_id: u32,
     pub year: u16,
     pub published_epoch: u32,
@@ -171,6 +175,38 @@ pub struct DocHit {
     pub checked_epoch_min: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub files: Option<Vec<FileEntryResp>>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct FilterClause {
+    #[serde(default)]
+    pub content_type: Option<u8>,
+    #[serde(default)]
+    pub resolutions: Vec<u8>,
+    #[serde(default)]
+    pub exclude_resolutions: Vec<u8>,
+    #[serde(default)]
+    pub require_anime: bool,
+    #[serde(default)]
+    pub require_3d: bool,
+    #[serde(default)]
+    pub video_source: Option<u8>,
+    #[serde(default)]
+    pub video_codec: Option<u8>,
+}
+
+impl FilterClause {
+    fn to_search_clause(&self) -> SearchFilterClause {
+        SearchFilterClause {
+            content_type: self.content_type,
+            resolutions: self.resolutions.clone(),
+            exclude_resolutions: self.exclude_resolutions.clone(),
+            require_anime: self.require_anime,
+            require_3d: self.require_3d,
+            video_source: self.video_source,
+            video_codec: self.video_codec,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -190,6 +226,10 @@ pub struct SearchRequest {
     pub include_facets: bool,
     #[serde(default)]
     pub include_files: bool,
+    #[serde(default)]
+    pub any_clauses: Vec<FilterClause>,
+    #[serde(default)]
+    pub min_seeders: Option<u32>,
     #[serde(default)]
     pub now_epoch: Option<u32>,
 }
@@ -256,12 +296,20 @@ pub struct RssRequest {
     #[serde(default)]
     pub include_files: bool,
     #[serde(default)]
+    pub include_total: bool,
+    #[serde(default)]
+    pub any_clauses: Vec<FilterClause>,
+    #[serde(default)]
+    pub min_seeders: Option<u32>,
+    #[serde(default)]
     pub now_epoch: Option<u32>,
 }
 
 #[derive(Debug, Serialize)]
 pub struct RssResponse {
     pub docs: Vec<DocHit>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total_count: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -433,6 +481,16 @@ pub struct L0UpsertItem {
     pub content_type: u8,
     #[serde(default)]
     pub resolution: u8,
+    #[serde(default)]
+    pub is_anime: bool,
+    #[serde(default)]
+    pub is_3d: bool,
+    #[serde(default)]
+    pub video_3d: u8,
+    #[serde(default)]
+    pub video_source: u8,
+    #[serde(default)]
+    pub video_codec: u8,
     #[serde(default)]
     pub entity_id: u32,
     #[serde(default)]
@@ -644,6 +702,10 @@ impl DaemonEngine {
                 size_bytes: ov.size_bytes,
                 content_type: ov.content_type,
                 resolution: ov.resolution,
+                is_anime: ov.is_anime,
+                video_3d: ov.video_3d,
+                video_source: ov.video_source,
+                video_codec: ov.video_codec,
                 entity_id: ov.entity_id,
                 year: ov.year,
                 published_epoch: ov.published_epoch,
@@ -657,6 +719,10 @@ impl DaemonEngine {
             });
         }
         let mut meta = self.core.metas()[doc_id as usize];
+        let mut is_anime = meta.is_anime();
+        let mut video_3d = meta.video_3d();
+        let mut video_source = meta.source();
+        let mut video_codec = meta.codec();
         if let Some(ref ov) = l0_ov {
             meta.content_type = ov.content_type;
             meta.resolution = ov.resolution;
@@ -664,6 +730,10 @@ impl DaemonEngine {
             meta.year = ov.year;
             meta.published_epoch = ov.published_epoch;
             meta.created_epoch = ov.created_epoch;
+            is_anime = ov.is_anime;
+            video_3d = ov.video_3d;
+            video_source = ov.video_source;
+            video_codec = ov.video_codec;
             if ov.size_bytes > 0 {
                 meta.size_bytes = ov.size_bytes;
             }
@@ -708,6 +778,10 @@ impl DaemonEngine {
             size_bytes: meta.size_bytes,
             content_type: meta.content_type,
             resolution: meta.resolution,
+            is_anime,
+            video_3d,
+            video_source,
+            video_codec,
             entity_id: meta.entity_id,
             year: meta.year,
             published_epoch: meta.published_epoch,
@@ -729,11 +803,48 @@ impl DaemonEngine {
         let now_m = now_epoch_ms();
         self.policy.lease().check(now_m)?;
 
+        let search_clauses: Vec<SearchFilterClause> = req
+            .any_clauses
+            .iter()
+            .map(FilterClause::to_search_clause)
+            .collect();
+        let clause_bm = if !search_clauses.is_empty() {
+            let snap = self.policy.snapshot();
+            Some(
+                self.search
+                    .build_filter_bitmap(&search_clauses, snap.bitmap_for(tier)),
+            )
+        } else {
+            None
+        };
+        let l0_closure = |ov: &L0Doc| search_clauses.iter().any(|c| c.matches_l0(ov));
+        let l0_pred: Option<&dyn Fn(&L0Doc) -> bool> = if !search_clauses.is_empty() {
+            Some(&l0_closure)
+        } else {
+            None
+        };
+        let min_s = req.min_seeders.unwrap_or(0);
+        let seeder_closure = |doc_id: u32| {
+            self.swarm
+                .read(doc_id)
+                .ok()
+                .and_then(|sw| sw.seeders)
+                .is_some_and(|s| s >= min_s)
+        };
+        let doc_pred: Option<&dyn Fn(u32) -> bool> = if min_s > 0 {
+            Some(&seeder_closure)
+        } else {
+            None
+        };
+
         let scored = if let Some(season) = req.tv_season {
-            self.search.tvsearch_text(
+            self.search.tvsearch_text_filtered(
                 &req.query,
                 season,
                 req.tv_episode,
+                clause_bm.as_ref(),
+                l0_pred,
+                doc_pred,
                 &self.policy,
                 tier,
                 &self.core,
@@ -742,10 +853,12 @@ impl DaemonEngine {
                 now_m,
             )?
         } else {
-            self.search.search_text(
+            self.search.search_text_filtered(
                 &req.query,
                 mode,
-                None,
+                clause_bm.as_ref(),
+                l0_pred,
+                doc_pred,
                 &self.policy,
                 tier,
                 &self.core,
@@ -767,8 +880,11 @@ impl DaemonEngine {
         }
 
         let (total_facets, ct_facets, res_facets) = if req.include_facets {
-            let (ct, res, tot) = self.search.text_facet_counts(
+            let (ct, res, tot) = self.search.text_facet_counts_filtered(
                 &req.query,
+                clause_bm.as_ref(),
+                l0_pred,
+                doc_pred,
                 &self.policy,
                 tier,
                 self.core.facet_bytes(),
@@ -884,8 +1000,46 @@ impl DaemonEngine {
         let now_m = now_epoch_ms();
         self.policy.lease().check(now_m)?;
         let ct_opt = req.content_type.filter(|&c| c != CT_UNKNOWN);
-        let doc_ids = self.search.browse_newest(
+
+        let search_clauses: Vec<SearchFilterClause> = req
+            .any_clauses
+            .iter()
+            .map(FilterClause::to_search_clause)
+            .collect();
+        let clause_bm = if !search_clauses.is_empty() {
+            let snap = self.policy.snapshot();
+            Some(
+                self.search
+                    .build_filter_bitmap(&search_clauses, snap.bitmap_for(tier)),
+            )
+        } else {
+            None
+        };
+        let l0_closure = |ov: &L0Doc| search_clauses.iter().any(|c| c.matches_l0(ov));
+        let l0_pred: Option<&dyn Fn(&L0Doc) -> bool> = if !search_clauses.is_empty() {
+            Some(&l0_closure)
+        } else {
+            None
+        };
+        let min_s = req.min_seeders.unwrap_or(0);
+        let seeder_closure = |doc_id: u32| {
+            self.swarm
+                .read(doc_id)
+                .ok()
+                .and_then(|sw| sw.seeders)
+                .is_some_and(|s| s >= min_s)
+        };
+        let doc_pred: Option<&dyn Fn(u32) -> bool> = if min_s > 0 {
+            Some(&seeder_closure)
+        } else {
+            None
+        };
+
+        let doc_ids = self.search.browse_newest_filtered(
             ct_opt,
+            clause_bm.as_ref(),
+            l0_pred,
+            doc_pred,
             &self.policy,
             tier,
             self.core.metas(),
@@ -900,7 +1054,21 @@ impl DaemonEngine {
                 docs.push(self.hydrate_hit(d, 0.0, req.include_files)?);
             }
         }
-        Ok(RssResponse { docs })
+        let total_count = if req.include_total {
+            Some(self.search.count_browse_filtered(
+                ct_opt,
+                clause_bm.as_ref(),
+                l0_pred,
+                doc_pred,
+                &self.policy,
+                tier,
+                now_s,
+                now_m,
+            )?)
+        } else {
+            None
+        };
+        Ok(RssResponse { docs, total_count })
     }
 
     pub fn handle_dashstats(
@@ -943,7 +1111,10 @@ impl DaemonEngine {
                 docs.push(self.hydrate_hit(d, 0.0, req.include_files)?);
             }
         }
-        Ok(RssResponse { docs })
+        Ok(RssResponse {
+            docs,
+            total_count: None,
+        })
     }
 
     pub fn handle_hydrate(&self, req: HydrateRequest) -> Result<RssResponse, DaemonError> {
@@ -973,7 +1144,10 @@ impl DaemonEngine {
                 docs.push(self.hydrate_hit(d, 0.0, true)?);
             }
         }
-        Ok(RssResponse { docs })
+        Ok(RssResponse {
+            docs,
+            total_count: None,
+        })
     }
 
     pub fn handle_hash_lookup(
@@ -1214,6 +1388,13 @@ impl DaemonEngine {
                 files.len() as u32
             };
             let eps: Vec<EpisodeSpec> = pr.episodes;
+            let v3d = if item.video_3d != 0 {
+                item.video_3d.min(3)
+            } else if item.is_3d {
+                1
+            } else {
+                0
+            };
             assigned_ids.push(doc_id);
             batch.push(L0Doc {
                 doc_id,
@@ -1224,6 +1405,10 @@ impl DaemonEngine {
                 } else {
                     pr.resolution
                 },
+                is_anime: item.is_anime,
+                video_3d: v3d,
+                video_source: item.video_source.min(15),
+                video_codec: item.video_codec.min(15),
                 entity_id: item.entity_id,
                 year: if item.year != 0 { item.year } else { pr.year },
                 published_epoch: item.published_epoch,

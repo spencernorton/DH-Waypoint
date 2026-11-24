@@ -102,6 +102,10 @@ func (r *queryResolver) Torrent(ctx context.Context) (gqlmodel.TorrentQuery, err
 func (r *queryResolver) TorrentContent(ctx context.Context) (gqlmodel.TorrentContentQuery, error) {
 	return gqlmodel.TorrentContentQuery{
 		TorrentContentSearch: r.Search,
+		DHTMS:                r.DHTMSClient,
+		ServingPolicy:        r.ServingPolicy,
+		DHTMSMetrics:         r.DHTMSMetrics,
+		LeanStore:            r.LeanStore,
 	}, nil
 }
 
