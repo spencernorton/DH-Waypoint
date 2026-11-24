@@ -56,8 +56,8 @@ func (a *API) tryHandleV1SearchDHTMS(c *gin.Context) bool {
 		a.dhtmsMetrics.RecordRead("rest_v1", "bypass")
 		return false
 	}
-	if orderDirRaw != "" && orderDirRaw != "desc" && orderDirRaw != "descending" {
-		a.dhtmsMetrics.RecordRead("rest_v1", "bypass")
+	if orderDirRaw != "" && orderDirRaw != "desc" {
+		// Let invalid order_dir (e.g. "descending") or "asc" flow through runSearch.
 		return false
 	}
 
@@ -108,14 +108,12 @@ func (a *API) tryHandleV1SearchDHTMS(c *gin.Context) bool {
 	}
 	var minSeeders *uint32
 	if minParam := strings.TrimSpace(c.Query("min_seeders")); minParam != "" {
-		n, err := strconv.Atoi(minParam)
-		if err != nil || n < 0 {
+		n, err := strconv.ParseUint(minParam, 10, 32)
+		if err != nil {
 			return false // Let runSearch emit standard 400 response
 		}
-		if n > 0 {
-			v := uint32(n)
-			minSeeders = &v
-		}
+		v := uint32(n)
+		minSeeders = &v
 	}
 
 	qStr := strings.TrimSpace(c.Query("q"))
@@ -155,8 +153,22 @@ func (a *API) tryHandleV1SearchDHTMS(c *gin.Context) bool {
 		}
 	}
 
+	if qStr == "" && orderByRaw == "relevance" {
+		return false // Let runSearch emit standard 400 ("order_by=relevance requires q")
+	}
 	// If explicit published_at order is requested alongside a text query, delegate to PG.
 	if qStr != "" && orderByRaw == "published_at" {
+		a.dhtmsMetrics.RecordRead("rest_v1", "bypass")
+		return false
+	}
+	// Unfiltered/faceted published_at browse emits keyset next_cursor values that
+	// require torrent_contents.id and nanosecond published_at from PostgreSQL.
+	if qStr == "" && imdbParam == "" && tmdbParam == "" {
+		a.dhtmsMetrics.RecordRead("rest_v1", "bypass")
+		return false
+	}
+	// Bypass deep offsets that exceed dh-tmsd's 500-row cap instead of truncating.
+	if limit+offset+1 > 500 {
 		a.dhtmsMetrics.RecordRead("rest_v1", "bypass")
 		return false
 	}
@@ -166,9 +178,6 @@ func (a *API) tryHandleV1SearchDHTMS(c *gin.Context) bool {
 	fetchLimit := int(limit + offset + 1)
 	if fetchLimit < 25 {
 		fetchLimit = 25
-	}
-	if fetchLimit > 500 {
-		fetchLimit = 500
 	}
 	var clauses []dhtms.FilterClause
 	var singleCT *uint8
@@ -232,9 +241,14 @@ func (a *API) tryHandleV1SearchDHTMS(c *gin.Context) bool {
 			Episode:       episodePtr,
 			Tier:          tier,
 			Limit:         fetchLimit,
+			RequireV1:     true,
 		})
 		if err != nil {
 			recordErr(err)
+			return false
+		}
+		if !lu.EntityFound && len(lu.Linked) == 0 && len(lu.Unlinked) == 0 {
+			a.dhtmsMetrics.RecordRead("rest_v1", "bypass")
 			return false
 		}
 		for _, h := range lu.Linked {
@@ -242,6 +256,11 @@ func (a *API) tryHandleV1SearchDHTMS(c *gin.Context) bool {
 		}
 		for _, h := range lu.Unlinked {
 			rawHits = append(rawHits, hitWithID{hit: h})
+		}
+		if includeTotal && (len(lu.Linked) >= fetchLimit || len(lu.Unlinked) >= fetchLimit) {
+			// Avoid reporting a capped total_count when lookup hit fetchLimit.
+			a.dhtmsMetrics.RecordRead("rest_v1", "bypass")
+			return false
 		}
 
 	case qStr != "":
@@ -255,6 +274,7 @@ func (a *API) tryHandleV1SearchDHTMS(c *gin.Context) bool {
 			IncludeFacets: includeTotal && seasonPtr == nil,
 			AnyClauses:    clauses,
 			MinSeeders:    minSeeders,
+			RequireV1:     true,
 		})
 		if err != nil {
 			recordErr(err)
@@ -286,6 +306,7 @@ func (a *API) tryHandleV1SearchDHTMS(c *gin.Context) bool {
 			Tier:         tier,
 			Limit:        rssLimit,
 			Offset:       int(offset),
+			RequireV1:    true,
 		})
 		if err != nil {
 			recordErr(err)
@@ -354,10 +375,12 @@ func (a *API) tryHandleV1SearchDHTMS(c *gin.Context) bool {
 	if qStr != "" {
 		orderName = "relevance"
 	}
-	var nextCursor string
 	if hasNext && len(page) > 0 && orderName != "relevance" {
-		nextCursor = encodeV1Cursor(orderName, "desc", page[len(page)-1])
+		// Keyset cursors require torrent_contents.id and nanosecond published_at.
+		a.dhtmsMetrics.RecordRead("rest_v1", "bypass")
+		return false
 	}
+	var nextCursor string
 
 	a.dhtmsMetrics.RecordRead("rest_v1", "hit")
 	c.JSON(200, searchResponse{
@@ -371,15 +394,17 @@ func (a *API) tryHandleV1SearchDHTMS(c *gin.Context) bool {
 	return true
 }
 
-func (a *API) tryHandleV2SearchDHTMS(c *gin.Context, text string, limit uint) bool {
+func (a *API) tryHandleV2SearchDHTMS(c *gin.Context, text, afterHex string, limit uint) bool {
 	if !a.dhtmsEligibleBase() {
 		return false
 	}
 	tier := dhtms.TierForPolicy(a.servingPolicy)
 	resp, err := a.dhtms.Substring(c.Request.Context(), dhtms.SubstringRequest{
-		Substring: text,
-		Tier:      tier,
-		Limit:     int(limit) + 1,
+		Substring:     text,
+		Tier:          tier,
+		Limit:         int(limit) + 1,
+		HashOrder:     true,
+		AfterInfoHash: afterHex,
 	})
 	if err != nil {
 		if errors.Is(err, dhtms.ErrLeaseExpired) {

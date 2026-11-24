@@ -455,5 +455,95 @@ func TestLockedSourceAllowsUnrelatedEvidenceInsert(t *testing.T) {
 	require.Equal(t, 1, n)
 }
 
+func TestPostgresPayloadPriorityBoundedWindowCursorBackoffAndRoundRobin(t *testing.T) {
+	s, p, _ := fixture(t)
+	verifier := strings.Repeat("d", 64)
+	prevVerifier := strings.Repeat("e", 64)
+	artifact := strings.Repeat("f", 64)
+	svc := newService(t, "synthetic-reviewer", []v1.Stage{v1.Policy}, policyResult)
+	svc.identity.ArtifactDigest = artifact
+	s.cfg.PayloadVerifierToken = namepolicy.SecretToken(strings.Repeat("verifier", 8))
+	register(t, s, svc)
+	require.NoError(t, s.SetPublicationConfig(serving.Config{
+		RequiredProcessor:                     svc.identity.ID,
+		RequiredProcessorArtifactDigest:       artifact,
+		RequiredPayloadVerifierArtifactDigest: verifier,
+		PreviousPayloadVerifierArtifactDigest: prevVerifier,
+	}))
+
+	// 1. Seed 72 torrents where the first 70 (0x01..0x46) already hold current
+	//    publication reviews (rejected prefix exceeding payloadPriorityWindow=64),
+	//    followed by eligible #71 (0xfe) and #72 (0xff, testing 0xff leading byte
+	//    and equal-expires_at tie breaking!).
+	baseExp := time.Now().UTC().Add(24 * time.Hour).Truncate(time.Second)
+	var rejectedHashes [][]byte
+	for i := byte(1); i <= 70; i++ {
+		h := seedTorrent(t, p, i, "movie")
+		rejectedHashes = append(rejectedHashes, h)
+		_, err := p.Exec(testContext, `INSERT INTO processor_payload_reviews(info_hash,source_revision,verifier_artifact,policy,approved,reason,receipt,expires_at)
+ SELECT info_hash,COALESCE(revision,1),$2,$3,true,'decoded_media','{}',$4
+ FROM torrents LEFT JOIN processor_publication_sources USING(info_hash) WHERE info_hash=$1`,
+			h, verifier, serving.PayloadEvidenceContractV2, baseExp.Add(time.Duration(i)*time.Second))
+		require.NoError(t, err)
+		_, err = p.Exec(testContext, `INSERT INTO processor_publication_reviews(info_hash,processor_id,source_revision,execution_generation,processor_identity,approved,policy_contract,reason,job_id)
+ SELECT info_hash,$2,COALESCE(revision,1),(SELECT execution_generation FROM processor_registry WHERE id=$2),'{"name":"synthetic-reviewer"}'::jsonb,true,$3,'ok',$4
+ FROM torrents LEFT JOIN processor_publication_sources USING(info_hash) WHERE info_hash=$1`,
+			h, svc.identity.ID, serving.PublicationReviewPolicy, fmt.Sprintf("pre-reviewed-%02x", i))
+		require.NoError(t, err)
+	}
+	elig71 := seedTorrent(t, p, 0xfe, "movie")
+	elig72 := seedTorrent(t, p, 0xff, "movie")
+	tieExp := baseExp.Add(90 * time.Second)
+	for _, h := range [][]byte{elig71, elig72} {
+		_, err := p.Exec(testContext, `INSERT INTO processor_payload_reviews(info_hash,source_revision,verifier_artifact,policy,approved,reason,receipt,expires_at)
+ SELECT info_hash,COALESCE(revision,1),$2,$3,true,'decoded_media','{}',$4
+ FROM torrents LEFT JOIN processor_publication_sources USING(info_hash) WHERE info_hash=$1`,
+			h, verifier, serving.PayloadEvidenceContractV2, tieExp)
+		require.NoError(t, err)
+	}
+	// Also put one eligible torrent in the rollover previous-verifier v1 partition
+	// to verify round-robin across partitions!
+	rolloverElig := seedTorrent(t, p, 0xdd, "movie")
+	_, err := p.Exec(testContext, `INSERT INTO processor_payload_reviews(info_hash,source_revision,verifier_artifact,policy,approved,reason,receipt,expires_at)
+ SELECT info_hash,COALESCE(revision,1),$2,$3,true,'decoded_media','{}',$4
+ FROM torrents LEFT JOIN processor_publication_sources USING(info_hash) WHERE info_hash=$1`,
+		rolloverElig, prevVerifier, serving.PayloadEvidenceContract, baseExp.Add(10*time.Second))
+	require.NoError(t, err)
+
+	// Clear pending outbox so only payload priority + linear catch-up run.
+	_, err = p.Exec(testContext, `DELETE FROM processor_publication_pending`)
+	require.NoError(t, err)
+
+	// Scan 1: partition 0 visits rows 1..64 (all rejected -> advances cursor past 64),
+	// and partition 3 (rollover v1) finds rolloverElig immediately!
+	s.cfg.ScanBatch = 6
+	s.cfg.QueueCapacity = 20
+	_, err = s.Scan(testContext)
+	require.NoError(t, err)
+
+	var rollQueued int
+	require.NoError(t, p.QueryRow(testContext, `SELECT count(*) FROM processor_jobs WHERE info_hash=$1`, rolloverElig).Scan(&rollQueued))
+	require.Equal(t, 1, rollQueued, "rollover partition must be admitted even when partition 0 hits a 64-row rejected prefix")
+
+	// Scan 2: partition 0 resumes at row 65..72 -> admits BOTH equal-expires_at eligible
+	// rows (0xff and 0xfe) without starvation!
+	_, err = s.Scan(testContext)
+	require.NoError(t, err)
+
+	var tailQueued int
+	require.NoError(t, p.QueryRow(testContext, `SELECT count(*) FROM processor_jobs WHERE info_hash IN ($1,$2)`, elig71, elig72).Scan(&tailQueued))
+	require.Equal(t, 2, tailQueued, "eligible rows behind a >64 rejected prefix (including 0xff tie) must be admitted on the next bounded window")
+
+	// Partition 0 reached EOF on Scan 2 -> drainedUntil backoff must be armed!
+	require.Nil(t, s.discoverPayloadPriority(testContext), "all drained partitions must skip DB window queries during drainedUntil backoff")
+
+	// Generation rollover (bumped execution_generation) must invalidate stale drainedUntil immediately!
+	_, err = p.Exec(testContext, `UPDATE processor_registry SET execution_generation = execution_generation + 1 WHERE id = $1`, svc.identity.ID)
+	require.NoError(t, err)
+	discAfterRollover := s.discoverPayloadPriority(testContext)
+	require.NotNil(t, discAfterRollover, "generation rollover must bypass previous-generation drainedUntil backoff")
+	require.NotEmpty(t, discAfterRollover.candidates)
+}
+
 // Keep generated model codecs exercised in the source snapshot path.
 var _ = model.Torrent{}

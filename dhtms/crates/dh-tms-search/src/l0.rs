@@ -1,10 +1,10 @@
 use ahash::{AHashMap, AHashSet};
 use crc32fast::Hasher as Crc32;
 use dh_tms_core::MetaRow;
-use dh_tms_grammar::{parse_release_name, tokenize_alnum, EpisodeSpec};
+use dh_tms_grammar::{fold_accents_lowercase, parse_release_name, tokenize_alnum, EpisodeSpec};
 use parking_lot::RwLock;
 use std::fs::{File, OpenOptions};
-use std::io::{self, Read, Write};
+use std::io::{self, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use xxhash_rust::xxh3::xxh3_64_with_seed;
 
@@ -49,6 +49,7 @@ struct L0Inner {
     next_dynamic_doc_id: u32,
     wal_file: File,
     next_seq: u64,
+    wal_bytes: u64,
 }
 
 /// Append-only mutable L0 delta segment for live inserts, reclassifications, relinks, and deletes,
@@ -77,62 +78,90 @@ impl L0Overlay {
                 .append(true)
                 .open(wal_path)?,
             next_seq: 1,
+            wal_bytes: 0,
         };
         if wal_path.exists() {
-            let mut raw = Vec::new();
-            File::open(wal_path)?.read_to_end(&mut raw)?;
-            let mut pos = 0usize;
-            while pos < raw.len() {
-                if pos + 28 > raw.len() {
-                    // Genuine torn trailing header at EOF from crash -> truncate tail.
-                    truncate_wal(wal_path, pos as u64)?;
+            const MAX_WAL_FRAME_BYTES: usize = 64 * 1024 * 1024;
+            let f = File::open(wal_path)?;
+            let file_len = f.metadata()?.len();
+            let mut rdr = BufReader::with_capacity(64 * 1024, f);
+            let mut pos: u64 = 0;
+            let mut hdr = [0u8; 28];
+            let mut payload_buf: Vec<u8> = Vec::new();
+            while pos < file_len {
+                let rem = file_len - pos;
+                if rem < 28 {
+                    drop(rdr);
+                    truncate_wal(wal_path, pos)?;
                     break;
                 }
-                if raw[pos..pos + 4] != L0_WAL_MAGIC {
+                if let Err(e) = rdr.read_exact(&mut hdr) {
+                    if e.kind() == io::ErrorKind::UnexpectedEof {
+                        drop(rdr);
+                        truncate_wal(wal_path, pos)?;
+                        break;
+                    }
+                    return Err(e);
+                }
+                if hdr[0..4] != L0_WAL_MAGIC {
                     return Err(io::Error::new(
                         io::ErrorKind::InvalidData,
                         format!("bad L0 WAL magic at byte {pos}"),
                     ));
                 }
-                let gid = u64::from_le_bytes(raw[pos + 4..pos + 12].try_into().unwrap());
+                let gid = u64::from_le_bytes(hdr[4..12].try_into().unwrap());
                 if gid != generation_id {
                     return Err(io::Error::new(
                         io::ErrorKind::InvalidData,
                         format!("L0 WAL generation mismatch: expected {generation_id}, got {gid}"),
                     ));
                 }
-                let seq = u64::from_le_bytes(raw[pos + 12..pos + 20].try_into().unwrap());
-                let plen = u32::from_le_bytes(raw[pos + 20..pos + 24].try_into().unwrap()) as usize;
-                let stored_crc = u32::from_le_bytes(raw[pos + 24..pos + 28].try_into().unwrap());
-                let Some(end) = pos.checked_add(28).and_then(|x| x.checked_add(plen)) else {
+                let seq = u64::from_le_bytes(hdr[12..20].try_into().unwrap());
+                let plen = u32::from_le_bytes(hdr[20..24].try_into().unwrap()) as usize;
+                let stored_crc = u32::from_le_bytes(hdr[24..28].try_into().unwrap());
+                let Some(end) = pos.checked_add(28).and_then(|x| x.checked_add(plen as u64)) else {
                     return Err(io::Error::new(
                         io::ErrorKind::InvalidData,
                         format!("L0 WAL frame offset overflow at byte {pos}"),
                     ));
                 };
-                if end > raw.len() {
-                    // Genuine torn trailing payload at EOF from crash -> truncate tail.
-                    truncate_wal(wal_path, pos as u64)?;
+                if end > file_len {
+                    drop(rdr);
+                    truncate_wal(wal_path, pos)?;
                     break;
                 }
-                let payload = &raw[pos + 28..end];
+                if plen > MAX_WAL_FRAME_BYTES {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!("L0 WAL frame length {plen} exceeds maximum at byte {pos}"),
+                    ));
+                }
+                payload_buf.resize(plen, 0);
+                if let Err(e) = rdr.read_exact(&mut payload_buf) {
+                    if e.kind() == io::ErrorKind::UnexpectedEof {
+                        drop(rdr);
+                        truncate_wal(wal_path, pos)?;
+                        break;
+                    }
+                    return Err(e);
+                }
                 let mut crc = Crc32::new();
-                crc.update(&raw[pos + 4..pos + 24]);
-                crc.update(payload);
+                crc.update(&hdr[4..24]);
+                crc.update(&payload_buf);
                 if crc.finalize() != stored_crc {
-                    if end == raw.len() {
-                        truncate_wal(wal_path, pos as u64)?;
+                    if end == file_len {
+                        drop(rdr);
+                        truncate_wal(wal_path, pos)?;
                         break;
                     }
                     return Err(io::Error::new(
                         io::ErrorKind::InvalidData,
                         format!(
-                            "mid-file L0 WAL CRC mismatch at byte {pos} (end={end} < len={})",
-                            raw.len()
+                            "mid-file L0 WAL CRC mismatch at byte {pos} (end={end} < len={file_len})"
                         ),
                     ));
                 }
-                let doc = decode_l0_payload(payload, term_seed).ok_or_else(|| {
+                let doc = decode_l0_payload(&payload_buf, term_seed).ok_or_else(|| {
                     io::Error::new(
                         io::ErrorKind::InvalidData,
                         format!("corrupt L0 WAL payload at byte {pos}"),
@@ -145,6 +174,7 @@ impl L0Overlay {
                 inner.next_seq = seq + 1;
                 pos = end;
             }
+            inner.wal_bytes = pos;
             inner.wal_file = OpenOptions::new()
                 .create(true)
                 .append(true)
@@ -230,6 +260,7 @@ impl L0Overlay {
             frame.extend_from_slice(&checksum.to_le_bytes());
             frame.extend_from_slice(&payload);
             g.wal_file.write_all(&frame)?;
+            g.wal_bytes = g.wal_bytes.saturating_add(frame.len() as u64);
             g.next_seq += 1;
         }
         g.wal_file.flush()?;
@@ -256,6 +287,25 @@ impl L0Overlay {
 
     pub fn len(&self) -> usize {
         self.inner.read().docs.len()
+    }
+
+    pub fn wal_bytes(&self) -> u64 {
+        self.inner.read().wal_bytes
+    }
+
+    /// Return all L0 `doc_id`s whose folded name contains `needle` (case/accent folded).
+    pub fn matching_substring(&self, needle: &str) -> Vec<u32> {
+        let g = self.inner.read();
+        if g.docs.is_empty() || needle.is_empty() {
+            return Vec::new();
+        }
+        let mut out = Vec::new();
+        for (&doc_id, doc) in &g.docs {
+            if fold_accents_lowercase(&doc.name).contains(needle) {
+                out.push(doc_id);
+            }
+        }
+        out
     }
 
     pub fn is_empty(&self) -> bool {

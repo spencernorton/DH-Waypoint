@@ -42,6 +42,7 @@ type Lease struct {
 // it performs no catalogue scan and makes no network request.
 func (s *Store) Scan(ctx context.Context) (int, error) {
 	s.pruneOutbox(ctx)
+	payloadDisc := s.discoverPayloadPriority(ctx)
 	ctx, c := context.WithTimeout(ctx, 2*time.Second)
 	defer c()
 	tx, e := s.begin(ctx)
@@ -150,14 +151,9 @@ func (s *Store) Scan(ctx context.Context) (int, error) {
 	changed := len(hashes)
 	// Torrents that already hold a valid, unexpired approved PayloadProof but
 	// lack a current-generation required publication review get bounded priority
-	// ahead of linear catalogue catch-up so active payload-verified torrents
-	// re-enter serving in minutes instead of waiting weeks behind full-hash
-	// backfill. An in-memory PK keyset cursor ensures non-admissible rows can
-	// never wedge the head of the queue.
-	var payloadAfterAt time.Time
-	var payloadAfterHash []byte
-	payloadExp := map[string]time.Time{}
-	payloadLimit, payloadFetched := 0, 0
+	// ahead of linear catalogue catch-up. Discovery ran outside the control-row
+	// lock over bounded raw index windows with per-partition keyset cursors;
+	// here we validate execution generation parity and admit up to payloadLimit.
 	var reqGen int64
 	hasReqPayloadPriority := false
 	if s.publication.RequiredProcessor != "" && s.publication.RequiredPayloadVerifierArtifactDigest != "" {
@@ -169,73 +165,25 @@ func (s *Store) Scan(ctx context.Context) (int, error) {
 			}
 		}
 	}
-	if hasReqPayloadPriority {
-		payloadLimit = min(16, max(0, (capacity-len(hashes)+1)/2))
-		if payloadLimit > 0 {
-			type payloadPair struct{ artifact, policy string }
-			pairs := []payloadPair{
-				{s.publication.RequiredPayloadVerifierArtifactDigest, serving.PayloadEvidenceContractV2},
-				{s.publication.RequiredPayloadVerifierArtifactDigest, serving.PayloadEvidenceContract},
+	var activePayloadDisc *payloadDiscovery
+	payloadByHash := map[string][]payloadCandRef{}
+	if hasReqPayloadPriority && payloadDisc != nil && payloadDisc.reqGen == reqGen {
+		payloadLimit := min(16, max(0, (capacity-len(hashes)+1)/2))
+		activePayloadDisc = payloadDisc
+		payloadAdded := 0
+		for _, cand := range payloadDisc.candidates {
+			if payloadAdded >= payloadLimit && !priority[string(cand.hash)] {
+				continue
 			}
-			if prev := s.publication.PreviousPayloadVerifierArtifactDigest; prev != "" && prev != s.publication.RequiredPayloadVerifierArtifactDigest {
-				pairs = append(pairs,
-					payloadPair{prev, serving.PayloadEvidenceContractV2},
-					payloadPair{prev, serving.PayloadEvidenceContract},
-				)
-			}
-			cursorAt, cursorHash := s.payloadReviewCursor.get()
-			for _, pair := range pairs {
-				rem := payloadLimit - payloadFetched
-				if rem <= 0 {
-					break
-				}
-				qAt := cursorAt
-				qHash := cursorHash
-				if qAt.IsZero() {
-					qAt = time.Unix(0, 0).UTC()
-					qHash = []byte{0xff}
-				} else if len(qHash) == 0 {
-					qHash = []byte{0xff}
-				}
-				candLimit := max(32, rem*2)
-				rows, e = tx.Query(ctx, payloadReviewPrioritySQL,
-					pair.artifact,
-					pair.policy,
-					s.publication.RequiredProcessor,
-					reqGen,
-					serving.PublicationReviewPolicy,
-					qAt,
-					qHash,
-					candLimit,
-					rem,
-				)
-				if e != nil {
-					return 0, e
-				}
-				pairCount := 0
-				for rows.Next() {
-					var h []byte
-					var exp time.Time
-					if e = rows.Scan(&h, &exp); e != nil {
-						rows.Close()
-						return 0, e
-					}
-					pairCount++
-					payloadFetched++
-					payloadExp[string(h)] = exp
-					if !priority[string(h)] {
-						hashes = append(hashes, h)
-						priority[string(h)] = true
-					}
-				}
-				rows.Close()
-				if e = rows.Err(); e != nil {
-					return 0, e
-				}
-				if pairCount < rem {
-					cursorAt = time.Time{}
-					cursorHash = nil
-				}
+			key := string(cand.hash)
+			payloadByHash[key] = append(payloadByHash[key], payloadCandRef{
+				partIdx: cand.partIdx,
+				candIdx: cand.candIdx,
+			})
+			if !priority[key] {
+				hashes = append(hashes, cand.hash)
+				priority[key] = true
+				payloadAdded++
 			}
 		}
 	}
@@ -271,7 +219,6 @@ func (s *Store) Scan(ctx context.Context) (int, error) {
 		return 0, e
 	}
 	admitted, bounded := 0, false
-	payloadProcessedAll := true
 	for i := 0; i < len(hashes); i++ {
 		// Bound the hold, but process at least the first hash of each class
 		// (requests, source changes, payload-backed priority, catch-up) so every
@@ -287,17 +234,20 @@ func (s *Store) Scan(ctx context.Context) (int, error) {
 				continue
 			}
 			if i < payloadEnd {
-				payloadProcessedAll = false
 				i = payloadEnd - 1
 				continue
 			}
 			break
 		}
 		h := hashes[i]
-		if i >= changed && i < payloadEnd {
-			payloadAfterAt = payloadExp[string(h)]
-			payloadAfterHash = h
-		} else if !priority[string(h)] {
+		if activePayloadDisc != nil {
+			if refs, ok := payloadByHash[string(h)]; ok {
+				for _, ref := range refs {
+					activePayloadDisc.parts[ref.partIdx].processed[ref.candIdx] = true
+				}
+			}
+		}
+		if !priority[string(h)] {
 			after = h
 		}
 		if !admittedByPolicy(h, plan.Admission) {
@@ -435,9 +385,6 @@ func (s *Store) Scan(ctx context.Context) (int, error) {
 			return 0, err
 		}
 		if admitted >= capacity {
-			if i+1 < payloadEnd {
-				payloadProcessedAll = false
-			}
 			break
 		}
 	}
@@ -450,12 +397,8 @@ func (s *Store) Scan(ctx context.Context) (int, error) {
 	}
 	e = tx.Commit(ctx)
 	if e == nil {
-		if hasReqPayloadPriority && payloadLimit > 0 {
-			if payloadProcessedAll && payloadFetched < payloadLimit {
-				s.payloadReviewCursor.set(time.Time{}, nil)
-			} else if !payloadAfterAt.IsZero() {
-				s.payloadReviewCursor.set(payloadAfterAt, payloadAfterHash)
-			}
+		if activePayloadDisc != nil {
+			s.payloadCursors.apply(activePayloadDisc, s.payloadDrainBackoff, time.Now())
 		}
 		s.metrics.admission.WithLabelValues("queued").Add(float64(admitted))
 		if bounded {
@@ -551,7 +494,14 @@ const (
 	requeueStaleSQL = `INSERT INTO processor_publication_pending(info_hash,source_revision)
  SELECT t.info_hash,COALESCE(s.revision,1) FROM torrents t LEFT JOIN processor_publication_sources s ON s.info_hash=t.info_hash
  WHERE t.info_hash=$1 ON CONFLICT DO NOTHING`
-	payloadReviewPrioritySQL = `WITH cand AS MATERIALIZED (
+	payloadPriorityWindow      = 64
+	defaultPayloadDrainBackoff = 30 * time.Second
+	// payloadReviewWindowSQL bounds work to at most $8 raw index entries from
+	// processor_payload_reviews_serving_idx BEFORE evaluating eligibility
+	// anti-joins, and returns every visited row with its eligibility boolean so
+	// per-partition keyset cursors always advance cleanly even across rejected
+	// prefixes and drained partitions.
+	payloadReviewWindowSQL = `WITH win AS MATERIALIZED (
   SELECT r.info_hash, r.source_revision, r.expires_at
   FROM processor_payload_reviews r
   WHERE r.verifier_artifact=$1
@@ -560,28 +510,27 @@ const (
     AND r.expires_at>clock_timestamp()
     AND r.expires_at>=$6
     AND (r.expires_at>$6 OR r.info_hash<$7)
-    AND NOT EXISTS(SELECT 1 FROM processor_publication_reviews pr
-      WHERE pr.info_hash=r.info_hash AND pr.processor_id=$3
-        AND pr.execution_generation=$4 AND pr.policy_contract=$5
-        AND pr.source_revision=r.source_revision)
-    AND NOT EXISTS(SELECT 1 FROM processor_jobs j
-      WHERE j.info_hash=r.info_hash AND j.state IN('queued','deferred','leased'))
   ORDER BY r.expires_at ASC, r.info_hash DESC
   LIMIT $8
 )
-SELECT c.info_hash, c.expires_at
-FROM cand c
-JOIN torrents t ON t.info_hash=c.info_hash
-WHERE NOT t.private
-  AND ` + fileEvidenceSQL + `
-  AND COALESCE((SELECT ps.revision FROM processor_publication_sources ps WHERE ps.info_hash=c.info_hash),1)=c.source_revision
-  AND EXISTS(SELECT 1 FROM torrent_contents tc WHERE tc.info_hash=c.info_hash)
-  AND NOT EXISTS(SELECT 1 FROM processor_reprocess_requests req
-    WHERE req.info_hash=c.info_hash AND req.state='waiting_core')
-  AND NOT EXISTS(SELECT 1 FROM processor_exclusions ex WHERE ex.info_hash=c.info_hash)
-  AND NOT EXISTS(SELECT 1 FROM processor_publication_holds ph WHERE ph.info_hash=c.info_hash AND ph.held)
-ORDER BY c.expires_at ASC, c.info_hash DESC
-LIMIT $9`
+SELECT w.info_hash, w.expires_at,
+  (NOT EXISTS(SELECT 1 FROM processor_publication_reviews pr
+     WHERE pr.info_hash=w.info_hash AND pr.processor_id=$3
+       AND pr.execution_generation=$4 AND pr.policy_contract=$5
+       AND pr.source_revision=w.source_revision)
+   AND NOT EXISTS(SELECT 1 FROM processor_jobs j
+     WHERE j.info_hash=w.info_hash AND j.state IN('queued','deferred','leased'))
+   AND EXISTS(SELECT 1 FROM torrents t
+     WHERE t.info_hash=w.info_hash AND NOT t.private AND ` + fileEvidenceSQL + `)
+   AND COALESCE((SELECT ps.revision FROM processor_publication_sources ps WHERE ps.info_hash=w.info_hash),1)=w.source_revision
+   AND EXISTS(SELECT 1 FROM torrent_contents tc WHERE tc.info_hash=w.info_hash)
+   AND NOT EXISTS(SELECT 1 FROM processor_reprocess_requests req
+     WHERE req.info_hash=w.info_hash AND req.state='waiting_core')
+   AND NOT EXISTS(SELECT 1 FROM processor_exclusions ex WHERE ex.info_hash=w.info_hash)
+   AND NOT EXISTS(SELECT 1 FROM processor_publication_holds ph WHERE ph.info_hash=w.info_hash AND ph.held)
+  ) AS eligible
+FROM win w
+ORDER BY w.expires_at ASC, w.info_hash DESC`
 )
 
 func queryHashes(ctx context.Context, tx pgx.Tx, out *[][]byte, sql string, args ...any) error {
@@ -611,6 +560,265 @@ func (k *keyset) set(at time.Time, hash []byte) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	k.at, k.hash = at, hash
+}
+
+type payloadPartitionKey struct {
+	artifact string
+	policy   string
+	gen      int64
+}
+
+type payloadPartitionState struct {
+	at           time.Time
+	hash         []byte
+	drainedUntil time.Time
+}
+
+type payloadCursorMap struct {
+	mu      sync.Mutex
+	states  map[payloadPartitionKey]payloadPartitionState
+	nextIdx int
+}
+
+type payloadPriorityCand struct {
+	hash    []byte
+	at      time.Time
+	partIdx int
+	candIdx int
+}
+
+type payloadCandRef struct {
+	partIdx int
+	candIdx int
+}
+
+type payloadPartPlan struct {
+	key           payloadPartitionKey
+	prefixAt      time.Time
+	prefixHash    []byte
+	windowEndAt   time.Time
+	windowEndHash []byte
+	eof           bool
+	allTaken      bool
+	cands         []payloadPriorityCand
+	processed     []bool
+}
+
+type payloadDiscovery struct {
+	reqGen     int64
+	pairCount  int
+	startIdx   int
+	parts      []payloadPartPlan
+	candidates []payloadPriorityCand
+}
+
+func (m *payloadCursorMap) snapshot(keys []payloadPartitionKey) (map[payloadPartitionKey]payloadPartitionState, int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make(map[payloadPartitionKey]payloadPartitionState, len(keys))
+	for _, k := range keys {
+		if st, ok := m.states[k]; ok {
+			st.hash = append([]byte(nil), st.hash...)
+			out[k] = st
+		}
+	}
+	return out, m.nextIdx
+}
+
+func (m *payloadCursorMap) apply(disc *payloadDiscovery, drainBackoff time.Duration, now time.Time) {
+	if disc == nil || len(disc.parts) == 0 {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.states == nil {
+		m.states = make(map[payloadPartitionKey]payloadPartitionState, len(disc.parts))
+	}
+	// Drop stale generation entries so rollovers always start clean and bounded.
+	for k := range m.states {
+		if k.gen != disc.reqGen {
+			delete(m.states, k)
+		}
+	}
+	for _, pp := range disc.parts {
+		var next payloadPartitionState
+		prev, hasPrev := m.states[pp.key]
+		if len(pp.cands) == 0 {
+			if pp.eof {
+				if drainBackoff > 0 {
+					next.drainedUntil = now.Add(drainBackoff)
+				}
+			} else if !pp.windowEndAt.IsZero() {
+				next.at = pp.windowEndAt
+				next.hash = append([]byte(nil), pp.windowEndHash...)
+			}
+		} else {
+			contProcessed := 0
+			for contProcessed < len(pp.processed) && pp.processed[contProcessed] {
+				contProcessed++
+			}
+			switch {
+			case contProcessed == len(pp.cands):
+				if pp.eof && pp.allTaken {
+					if drainBackoff > 0 {
+						next.drainedUntil = now.Add(drainBackoff)
+					}
+				} else if pp.allTaken && !pp.windowEndAt.IsZero() {
+					next.at = pp.windowEndAt
+					next.hash = append([]byte(nil), pp.windowEndHash...)
+				} else {
+					last := pp.cands[contProcessed-1]
+					next.at = last.at
+					next.hash = append([]byte(nil), last.hash...)
+				}
+			case contProcessed > 0:
+				last := pp.cands[contProcessed-1]
+				next.at = last.at
+				next.hash = append([]byte(nil), last.hash...)
+			default:
+				if !pp.prefixAt.IsZero() {
+					next.at = pp.prefixAt
+					next.hash = append([]byte(nil), pp.prefixHash...)
+				} else if hasPrev {
+					next = prev
+				}
+			}
+		}
+		m.states[pp.key] = next
+	}
+	if disc.pairCount > 0 {
+		m.nextIdx = (disc.startIdx + 1) % disc.pairCount
+	}
+}
+
+// discoverPayloadPriority inspects bounded 64-row raw windows of
+// processor_payload_reviews outside the processor_control FOR UPDATE lock so
+// drained or rejected prefixes never inflate lock hold time or full-scan the table.
+func (s *Store) discoverPayloadPriority(ctx context.Context) *payloadDiscovery {
+	if s.publication.RequiredProcessor == "" || s.publication.RequiredPayloadVerifierArtifactDigest == "" {
+		return nil
+	}
+	p, err := s.pool.Get()
+	if err != nil {
+		return nil
+	}
+	discCtx, cancel := context.WithTimeout(ctx, 400*time.Millisecond)
+	defer cancel()
+	var reqGen int64
+	if err := p.QueryRow(discCtx, `SELECT execution_generation FROM processor_registry WHERE id=$1 AND state='active'`, s.publication.RequiredProcessor).Scan(&reqGen); err != nil {
+		return nil
+	}
+	type payloadPair struct{ artifact, policy string }
+	pairs := []payloadPair{
+		{s.publication.RequiredPayloadVerifierArtifactDigest, serving.PayloadEvidenceContractV2},
+		{s.publication.RequiredPayloadVerifierArtifactDigest, serving.PayloadEvidenceContract},
+	}
+	if prev := s.publication.PreviousPayloadVerifierArtifactDigest; prev != "" && prev != s.publication.RequiredPayloadVerifierArtifactDigest {
+		pairs = append(pairs,
+			payloadPair{prev, serving.PayloadEvidenceContractV2},
+			payloadPair{prev, serving.PayloadEvidenceContract},
+		)
+	}
+	keys := make([]payloadPartitionKey, len(pairs))
+	for i, pair := range pairs {
+		keys[i] = payloadPartitionKey{artifact: pair.artifact, policy: pair.policy, gen: reqGen}
+	}
+	states, nextIdx := s.payloadCursors.snapshot(keys)
+	startIdx := 0
+	if len(pairs) > 0 {
+		startIdx = nextIdx % len(pairs)
+	}
+	targetEligible := min(16, max(1, (s.cfg.ScanBatch+1)/2))
+	now := time.Now()
+	disc := &payloadDiscovery{
+		reqGen:    reqGen,
+		pairCount: len(pairs),
+		startIdx:  startIdx,
+	}
+	for offset := 0; offset < len(pairs); offset++ {
+		rem := targetEligible - len(disc.candidates)
+		if rem <= 0 {
+			break
+		}
+		idx := (startIdx + offset) % len(pairs)
+		pair := pairs[idx]
+		k := keys[idx]
+		st := states[k]
+		if !st.drainedUntil.IsZero() && now.Before(st.drainedUntil) {
+			continue
+		}
+		qAt := st.at
+		qHash := st.hash
+		if qAt.IsZero() {
+			qAt = time.Unix(0, 0).UTC()
+			qHash = []byte{0xff}
+		} else if len(qHash) == 0 {
+			qHash = []byte{0xff}
+		}
+		rows, err := p.Query(discCtx, payloadReviewWindowSQL,
+			pair.artifact,
+			pair.policy,
+			s.publication.RequiredProcessor,
+			reqGen,
+			serving.PublicationReviewPolicy,
+			qAt,
+			qHash,
+			payloadPriorityWindow,
+		)
+		if err != nil {
+			return nil
+		}
+		pp := payloadPartPlan{
+			key:      k,
+			allTaken: true,
+		}
+		partIdx := len(disc.parts)
+		rowCount := 0
+		seenEligible := false
+		for rows.Next() {
+			var h []byte
+			var exp time.Time
+			var eligible bool
+			if err := rows.Scan(&h, &exp, &eligible); err != nil {
+				rows.Close()
+				return nil
+			}
+			rowCount++
+			pp.windowEndAt = exp
+			pp.windowEndHash = append([]byte(nil), h...)
+			if !eligible {
+				if !seenEligible {
+					pp.prefixAt = exp
+					pp.prefixHash = append([]byte(nil), h...)
+				}
+				continue
+			}
+			seenEligible = true
+			if len(pp.cands) < rem {
+				cand := payloadPriorityCand{
+					hash:    append([]byte(nil), h...),
+					at:      exp,
+					partIdx: partIdx,
+					candIdx: len(pp.cands),
+				}
+				pp.cands = append(pp.cands, cand)
+				disc.candidates = append(disc.candidates, cand)
+			} else {
+				pp.allTaken = false
+			}
+		}
+		rows.Close()
+		if rows.Err() != nil {
+			return nil
+		}
+		pp.eof = rowCount < payloadPriorityWindow
+		pp.processed = make([]bool, len(pp.cands))
+		disc.parts = append(disc.parts, pp)
+	}
+	if len(disc.parts) == 0 {
+		return nil
+	}
+	return disc
 }
 
 func (s *Store) Claim(ctx context.Context) (*Lease, error) {

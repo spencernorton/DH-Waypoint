@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+## 6.0.7 — 2026-11-24
+
+Comprehensive reliability, consistency, and steady-state efficiency hardening across `dh-tmsd`, PostgreSQL outbox CDC, processor payload-priority scheduling, CSAM cold-start safety, and Torznab/REST/GraphQL read routing.
+
+### Fixed
+
+- **Exact-ID MVCC-safe `dhtms_outbox` acknowledgement & migration `00102_dhtms_outbox_facets_and_deps.sql` (`internal/database/dhtms/sync.go`, `migrations/`).** Replaces monotonic `seq <= maxSeq` outbox pruning with exact processed-`seq` deletion (`WHERE seq = ANY($1::bigint[])`) in both `FullBuild` (`REPEATABLE READ` snapshot `seq` capture) and incremental `SyncOnce`, preventing concurrent lower-sequence transactions from ever being skipped. Migration `00102` expands `dhtms_outbox` triggers to cover `torrent_contents` facet columns (`is_anime`, `video_3d`, `video_source`, `video_codec`), `processor_publication_sources`, `torrent_hints`, `content` adult fan-out and catalog changes (`op = 'catalog'`), and `content_attributes`.
+- **Fail-closed expired-lease recovery & fresh egress wall-clock checks (`dhtms/crates/dh-tmsd/`, `internal/database/dhtms/`).** Adds authenticated, lease-independent `POST /v1/sync/resolve` so `Syncer` resolves changed hashes and drains every queued revocation BEFORE renewing an expired governance lease; checks fresh system time at egress on every read endpoint; separates a `>= 5s` write HTTP client from tight read timeouts.
+- **Bounded-window, lock-free payload-priority discovery with per-partition cursors & drained backoff (`internal/processors/{store,queue}.go`).** Replaces the lock-held `payloadReviewPrioritySQL` scan with a bounded 64-row raw index window (`payloadReviewWindowSQL`) evaluated outside `processor_control FOR UPDATE`, with per-`(artifact, policy, execution_generation)` keyset cursors, round-robin partition scheduling, leading rejected-prefix advancement, contiguous processed-prefix commit discipline, and a 30s `drainedUntil` backoff on drained partitions — eliminating steady-state empty full scans while preserving immediate generation-rollover pickup.
+- **Fail-closed cold-start loading for database-backed `csam_local_observations` (`internal/csamblocklist/`).** Exports `ErrLocalObservationsLoad` and `HasLocalStore()`; aborts startup fail-closed if `csam_local_observations` cannot be loaded on boot (including in local-only mode), while keeping optional external HTTP feeds bounded and fail-open.
+- **Streaming `l0.wal` replay, WAL byte/age compaction, and strict enum validation (`dhtms/crates/dh-tms-search/`, `dhtms/crates/dh-tmsd/`, `internal/database/dhtms/`).** Streams `l0.wal` frame-by-frame via `BufReader` instead of loading the entire file into memory, exposes `l0_wal_bytes` on `/v1/health` and `/v1/l0/upsert`, triggers compaction rebuilds on `DH_TMS_COMPACT_WAL_BYTES` (default `64 MiB`) and `DH_TMS_COMPACT_MAX_AGE` (default `24h`), and enforces strict bounds on `video_source` (`<= 9`), `video_codec` (`<= 9`), and `video_3d` (`<= 3`).
+- **Torznab, REST v1/v2, and GraphQL `dh-tmsd` parity hardening (`internal/torznab/adapter/`, `internal/restapi/`, `internal/gql/gqlmodel/`, `dhtms/`).**
+  - Torznab: ignores unknown categories when known categories are present (matching PostgreSQL), adds `require_v1` pre-count/pre-limit filtering, bypasses deep offsets (`> 500`), and falls back to PostgreSQL when `Lookup` reports `entity_found: false`.
+  - REST v1: bypasses cursor-producing unfiltered `published_at` browse (and cursor-producing lookups) to PostgreSQL so every `next_cursor` carries valid `torrent_contents.id` and nanosecond timestamps; validates `min_seeders` as `uint32` and preserves `min_seeders=0` to exclude `NULL` seeders; applies `require_v1` and deep-offset/capped-total bypasses.
+  - REST v2: implements L0-aware hash-ordered substring search (`hash_order: true`, `after_info_hash`) matching exact PostgreSQL `bytea` order with working `next_after` continuation across pages and bounded fallback on wide candidate sets.
+  - GraphQL: removes unpopulated fields (`items.title`, `items.createdAt`, `items.updatedAt`, `torrent.updatedAt`) from the `dh-tmsd` selection allowlist and passes `require_v1: true`.
+
 ## 6.0.6 — 2026-11-24
 
 ### Fixed

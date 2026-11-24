@@ -174,6 +174,7 @@ func TestTorznabDHTMSServesProwlarrMultiCatAnd3DAnime(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		require.Equal(t, "/v1/rss", r.URL.Path)
+		lastRSSReq = dhtms.RSSRequest{}
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&lastRSSReq))
 		docs := []dhtms.DocHit{
 			{
@@ -257,4 +258,64 @@ func TestTorznabDHTMSServesProwlarrMultiCatAnd3DAnime(t *testing.T) {
 		}
 	}
 	require.True(t, has5070, "anime TV hit from DH-TMS must emit category 5070 attr")
+
+	// 5. Mixed known + unknown category (2000,9999) ignores unknown cat 9999 instead of widening to all types.
+	resMixed, err := adp.Search(context.Background(), torznab.SearchRequest{
+		Type: torznab.FunctionSearch,
+		Cats: []int{2000, 9999},
+	})
+	require.NoError(t, err)
+	require.Equal(t, int32(0), spy.calls.Load())
+	require.NotNil(t, lastRSSReq.ContentType)
+	require.Equal(t, uint8(1), *lastRSSReq.ContentType)
+	require.True(t, lastRSSReq.RequireV1)
+	require.Len(t, resMixed.Channel.Items, 1)
+	require.Equal(t, movie3DHash, resMixed.Channel.Items[0].GUID)
+
+	// 6. Unknown-only category (9999) stays unconstrained across all types (matches PG).
+	resUnknownOnly, err := adp.Search(context.Background(), torznab.SearchRequest{
+		Type: torznab.FunctionSearch,
+		Cats: []int{9999},
+	})
+	require.NoError(t, err)
+	require.Equal(t, int32(0), spy.calls.Load())
+	require.Nil(t, lastRSSReq.ContentType)
+	require.Empty(t, lastRSSReq.AnyClauses)
+	require.Len(t, resUnknownOnly.Channel.Items, 3)
+
+	// 7. Deep search window (limit + offset + 1 > 500) bypasses DH-TMS to PG instead of truncating.
+	_, err = adp.Search(context.Background(), torznab.SearchRequest{
+		Profile: torznab.Profile{DefaultLimit: 50, MaxLimit: 100},
+		Type:    torznab.FunctionSearch,
+		Query:   "avatar",
+		Limit:   model.NewNullUint(100),
+		Offset:  model.NewNullUint(450),
+	})
+	require.NoError(t, err)
+	require.Equal(t, int32(1), spy.calls.Load(), "deep search offset > 500 must bypass DH-TMS to PG")
+}
+
+func TestTorznabDHTMSUnknownEntityBypassesToPG(t *testing.T) {
+	var lastLookupReq dhtms.LookupRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		require.Equal(t, "/v1/lookup", r.URL.Path)
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&lastLookupReq))
+		_ = json.NewEncoder(w).Encode(dhtms.LookupResponse{EntityFound: false})
+	}))
+	defer srv.Close()
+
+	cli, err := dhtms.NewClient(dhtms.Config{Mode: dhtms.ReadModeServe, Endpoint: srv.URL, Timeout: 2 * time.Second})
+	require.NoError(t, err)
+	defer cli.Close()
+
+	spy := &spyPGSearch{}
+	adp := New(spy).WithDHTMS(cli, nil, dhtms.NewMetrics(), nil)
+	_, err = adp.Search(context.Background(), torznab.SearchRequest{
+		Type:   torznab.FunctionMovie,
+		IMDBID: model.NewNullString("tt9999999"),
+	})
+	require.NoError(t, err)
+	require.True(t, lastLookupReq.RequireV1)
+	require.Equal(t, int32(1), spy.calls.Load(), "unknown entity_found=false must bypass to PG")
 }

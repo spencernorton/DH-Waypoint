@@ -105,6 +105,7 @@ func (t TorrentContentQuery) trySearchDHTMS(
 			Limit:         fetchLimit,
 			IncludeFacets: wantTotal,
 			AnyClauses:    clauses,
+			RequireV1:     true,
 		})
 		if err != nil {
 			recordErr(err)
@@ -137,6 +138,7 @@ func (t TorrentContentQuery) trySearchDHTMS(
 			Tier:         tier,
 			Limit:        fetchLimit,
 			Offset:       int(offset),
+			RequireV1:    true,
 		})
 		if err != nil {
 			recordErr(err)
@@ -201,15 +203,15 @@ func gqlSelectionEligibleForDHTMS(ctx context.Context) bool {
 			itemFields := graphql.CollectFields(opCtx, f.Selections, nil)
 			for _, itf := range itemFields {
 				switch itf.Name {
-				case "infoHash", "contentType", "title", "videoResolution",
+				case "infoHash", "contentType", "videoResolution",
 					"videoSource", "videoCodec", "video3d",
-					"seeders", "leechers", "publishedAt", "createdAt", "updatedAt", "__typename":
+					"seeders", "leechers", "publishedAt", "__typename":
 				case "torrent":
 					torFields := graphql.CollectFields(opCtx, itf.Selections, nil)
 					for _, tf := range torFields {
 						switch tf.Name {
 						case "infoHash", "name", "size", "private", "filesCount",
-							"magnetUri", "seeders", "leechers", "createdAt", "updatedAt", "__typename":
+							"magnetUri", "seeders", "leechers", "createdAt", "__typename":
 						default:
 							return false
 						}

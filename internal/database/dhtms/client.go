@@ -26,14 +26,19 @@ var (
 	ErrUnavailable = errors.New("dhtms: sidecar unavailable")
 )
 
-const maxResponseBytes = 32 * 1024 * 1024
+const (
+	maxResponseBytes = 32 * 1024 * 1024
+	minWriteTimeout  = 5 * time.Second
+)
 
 // Client speaks HTTP/1.1 JSON over a local Unix domain socket or loopback HTTP endpoint to dh-tmsd.
 type Client struct {
 	cfg             Config
 	httpClient      *http.Client
+	writeClient     *http.Client
 	streamClient    *http.Client
 	transport       *http.Transport
+	writeTransport  *http.Transport
 	streamTransport *http.Transport
 	baseURL         string
 	authToken       string
@@ -76,6 +81,15 @@ func NewClient(cfg Config) (*Client, error) {
 		return nil, fmt.Errorf("dhtms: unsupported endpoint scheme in %q", ep)
 	}
 
+	writeTimeout := cfg.Timeout
+	if writeTimeout < minWriteTimeout {
+		writeTimeout = minWriteTimeout
+	}
+	writeTr := &http.Transport{
+		DisableKeepAlives:     true,
+		ResponseHeaderTimeout: writeTimeout,
+		DialContext:           tr.DialContext,
+	}
 	streamTr := &http.Transport{
 		DisableKeepAlives:     true,
 		ResponseHeaderTimeout: 0,
@@ -87,10 +101,15 @@ func NewClient(cfg Config) (*Client, error) {
 			Transport: tr,
 			Timeout:   cfg.Timeout,
 		},
+		writeClient: &http.Client{
+			Transport: writeTr,
+			Timeout:   writeTimeout,
+		},
 		streamClient: &http.Client{
 			Transport: streamTr,
 		},
 		transport:       tr,
+		writeTransport:  writeTr,
 		streamTransport: streamTr,
 		baseURL:         baseURL,
 		authToken:       strings.TrimSpace(cfg.AuthToken),
@@ -104,6 +123,9 @@ func (c *Client) Close() {
 	}
 	if c.transport != nil {
 		c.transport.CloseIdleConnections()
+	}
+	if c.writeTransport != nil {
+		c.writeTransport.CloseIdleConnections()
 	}
 	if c.streamTransport != nil {
 		c.streamTransport.CloseIdleConnections()
@@ -119,6 +141,18 @@ func (c *Client) Config() Config {
 }
 
 func (c *Client) doJSON(ctx context.Context, method, path string, reqBody any, respBody any) error {
+	return c.doJSONWith(ctx, c.httpClient, method, path, reqBody, respBody)
+}
+
+func (c *Client) doWriteJSON(ctx context.Context, method, path string, reqBody any, respBody any) error {
+	cli := c.writeClient
+	if cli == nil {
+		cli = c.httpClient
+	}
+	return c.doJSONWith(ctx, cli, method, path, reqBody, respBody)
+}
+
+func (c *Client) doJSONWith(ctx context.Context, cli *http.Client, method, path string, reqBody any, respBody any) error {
 	var bodyReader io.Reader
 	if reqBody != nil {
 		raw, err := json.Marshal(reqBody)
@@ -140,7 +174,7 @@ func (c *Client) doJSON(ctx context.Context, method, path string, reqBody any, r
 		req.Header.Set("X-DHTMS-Token", c.authToken)
 	}
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := cli.Do(req)
 	if err != nil {
 		return fmt.Errorf("%w: %s %s: %v", ErrUnavailable, method, path, err)
 	}
@@ -252,10 +286,20 @@ func (c *Client) HashLookup(ctx context.Context, req HashLookupRequest) (*HashLo
 	return &out, nil
 }
 
+// SyncResolve executes authenticated POST /v1/sync/resolve to map infohashes to doc_ids
+// without requiring or renewing an active governance lease.
+func (c *Client) SyncResolve(ctx context.Context, req SyncResolveRequest) (*SyncResolveResponse, error) {
+	var out SyncResolveResponse
+	if err := c.doWriteJSON(ctx, http.MethodPost, "/v1/sync/resolve", req, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // PolicyRevoke executes POST /v1/policy/revoke for immediate fail-closed denial.
 func (c *Client) PolicyRevoke(ctx context.Context, req PolicyRevokeRequest) (*PolicyRevokeResponse, error) {
 	var out PolicyRevokeResponse
-	if err := c.doJSON(ctx, http.MethodPost, "/v1/policy/revoke", req, &out); err != nil {
+	if err := c.doWriteJSON(ctx, http.MethodPost, "/v1/policy/revoke", req, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -264,7 +308,7 @@ func (c *Client) PolicyRevoke(ctx context.Context, req PolicyRevokeRequest) (*Po
 // PolicyBatch executes POST /v1/policy/batch for batched governance updates.
 func (c *Client) PolicyBatch(ctx context.Context, req PolicyBatchRequest) (*PolicyBatchResponse, error) {
 	var out PolicyBatchResponse
-	if err := c.doJSON(ctx, http.MethodPost, "/v1/policy/batch", req, &out); err != nil {
+	if err := c.doWriteJSON(ctx, http.MethodPost, "/v1/policy/batch", req, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -273,7 +317,7 @@ func (c *Client) PolicyBatch(ctx context.Context, req PolicyBatchRequest) (*Poli
 // PolicyLease executes POST /v1/policy/lease to renew or expire the PG governance lease.
 func (c *Client) PolicyLease(ctx context.Context, req PolicyLeaseRequest) (*PolicyLeaseResponse, error) {
 	var out PolicyLeaseResponse
-	if err := c.doJSON(ctx, http.MethodPost, "/v1/policy/lease", req, &out); err != nil {
+	if err := c.doWriteJSON(ctx, http.MethodPost, "/v1/policy/lease", req, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -282,7 +326,7 @@ func (c *Client) PolicyLease(ctx context.Context, req PolicyLeaseRequest) (*Poli
 // SwarmUpdate executes POST /v1/swarm/update.
 func (c *Client) SwarmUpdate(ctx context.Context, req SwarmUpdateRequest) (*SwarmUpdateResponse, error) {
 	var out SwarmUpdateResponse
-	if err := c.doJSON(ctx, http.MethodPost, "/v1/swarm/update", req, &out); err != nil {
+	if err := c.doWriteJSON(ctx, http.MethodPost, "/v1/swarm/update", req, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -300,7 +344,7 @@ func (c *Client) SwarmSelectStale(ctx context.Context, req SwarmSelectStaleReque
 // SwarmCheckpoint executes POST /v1/swarm/checkpoint.
 func (c *Client) SwarmCheckpoint(ctx context.Context) (*SwarmCheckpointResponse, error) {
 	var out SwarmCheckpointResponse
-	if err := c.doJSON(ctx, http.MethodPost, "/v1/swarm/checkpoint", struct{}{}, &out); err != nil {
+	if err := c.doWriteJSON(ctx, http.MethodPost, "/v1/swarm/checkpoint", struct{}{}, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -309,7 +353,7 @@ func (c *Client) SwarmCheckpoint(ctx context.Context) (*SwarmCheckpointResponse,
 // L0Upsert executes POST /v1/l0/upsert for live metadata reclassifications.
 func (c *Client) L0Upsert(ctx context.Context, req L0UpsertRequest) (*L0UpsertResponse, error) {
 	var out L0UpsertResponse
-	if err := c.doJSON(ctx, http.MethodPost, "/v1/l0/upsert", req, &out); err != nil {
+	if err := c.doWriteJSON(ctx, http.MethodPost, "/v1/l0/upsert", req, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -367,7 +411,7 @@ func (c *Client) BuildGeneration(ctx context.Context, body io.Reader, contentLen
 // Reload executes POST /v1/reload to hot-swap dh-tmsd onto the latest CURRENT.json generation.
 func (c *Client) Reload(ctx context.Context, req ReloadRequest) (*ReloadResponse, error) {
 	var out ReloadResponse
-	if err := c.doJSON(ctx, http.MethodPost, "/v1/reload", req, &out); err != nil {
+	if err := c.doWriteJSON(ctx, http.MethodPost, "/v1/reload", req, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil

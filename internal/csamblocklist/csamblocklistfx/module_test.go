@@ -2,13 +2,16 @@ package csamblocklistfx
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/spencernorton/DH-Waypoint/internal/csamblocklist"
+	"github.com/spencernorton/DH-Waypoint/internal/lazy"
 	"github.com/spencernorton/DH-Waypoint/internal/protocol"
 	"go.uber.org/zap"
 )
@@ -41,7 +44,9 @@ func TestRunStartupRefresh_BlocksUntilFirstFetchCompletes(t *testing.T) {
 	mgr := csamblocklist.NewService(cfg, logger, csamblocklist.NewMetrics())
 
 	startTime := time.Now()
-	runStartupRefresh(context.Background(), mgr, logger, 5*time.Second)
+	if err := runStartupRefresh(context.Background(), mgr, logger, 5*time.Second); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	elapsed := time.Since(startTime)
 
 	if elapsed < 150*time.Millisecond {
@@ -80,7 +85,9 @@ func TestRunStartupRefresh_BoundedByBudget(t *testing.T) {
 	mgr := csamblocklist.NewService(cfg, logger, csamblocklist.NewMetrics())
 
 	startTime := time.Now()
-	runStartupRefresh(context.Background(), mgr, logger, 2*time.Second)
+	if err := runStartupRefresh(context.Background(), mgr, logger, 2*time.Second); err != nil {
+		t.Fatalf("external feed timeout without local store must remain fail-open, got: %v", err)
+	}
 	elapsed := time.Since(startTime)
 
 	// Should give up well within the outer budget — the per-feed
@@ -103,10 +110,29 @@ func TestRunStartupRefresh_NoOpReturnsImmediately(t *testing.T) {
 	mgr := csamblocklist.NewNoOp()
 
 	startTime := time.Now()
-	runStartupRefresh(context.Background(), mgr, logger, 5*time.Second)
+	if err := runStartupRefresh(context.Background(), mgr, logger, 5*time.Second); err != nil {
+		t.Fatalf("NoOp.runStartupRefresh returned error: %v", err)
+	}
 	elapsed := time.Since(startTime)
 
 	if elapsed > 50*time.Millisecond {
 		t.Errorf("NoOp.runStartupRefresh took %v — expected <50ms", elapsed)
+	}
+}
+
+// runStartupRefresh — when backed by PostgreSQL csam_local_observations, a
+// cold-start load failure must fail closed rather than booting with an empty bloom.
+func TestRunStartupRefresh_FailsClosedOnLocalStoreError(t *testing.T) {
+	logger := zap.NewNop().Sugar()
+	cfg := csamblocklist.NewDefaultConfig()
+	cfg.Enabled = false // local-only mode with external feeds disabled
+	brokenPool := lazy.New(func() (*pgxpool.Pool, error) {
+		return nil, errors.New("postgres unavailable")
+	})
+	mgr := csamblocklist.New(cfg, logger, csamblocklist.NewMetrics(), brokenPool, nil)
+
+	err := runStartupRefresh(context.Background(), mgr, logger, 2*time.Second)
+	if !errors.Is(err, csamblocklist.ErrLocalObservationsLoad) {
+		t.Fatalf("expected ErrLocalObservationsLoad fail-closed error, got: %v", err)
 	}
 }

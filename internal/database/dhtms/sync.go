@@ -65,9 +65,9 @@ type Syncer struct {
 
 	mu                    sync.Mutex
 	bootstrapped          bool
-	lastSeq               int64
 	lastLSN               uint64
 	lastGenerationID      uint64
+	lastBuildAt           time.Time
 	catalogEntity         map[catalogDigest]uint32
 	pendingRebuild        bool
 	firstNewHashAt        time.Time
@@ -159,12 +159,33 @@ func (s *Syncer) fullBuildLocked(ctx context.Context) (*BuildGenerationResponse,
 	defer func() { _ = tx.Rollback(context.Background()) }()
 
 	var lsnText string
-	var snapshotMaxSeq int64
-	if err := tx.QueryRow(ctx, `SELECT pg_current_wal_lsn()::text, COALESCE((SELECT MAX(seq) FROM dhtms_outbox), 0)`).
-		Scan(&lsnText, &snapshotMaxSeq); err != nil {
+	if err := tx.QueryRow(ctx, `SELECT pg_current_wal_lsn()::text`).Scan(&lsnText); err != nil {
 		s.metrics.RecordSync("full_build", "error")
-		return nil, fmt.Errorf("dhtms sync: read snapshot lsn/outbox: %w", err)
+		return nil, fmt.Errorf("dhtms sync: read snapshot lsn: %w", err)
 	}
+	// Capture exact outbox sequence IDs visible to this REPEATABLE READ snapshot so
+	// concurrent transactions holding lower uncommitted seq IDs are never pruned early.
+	seqRows, err := tx.Query(ctx, `SELECT seq FROM dhtms_outbox`)
+	if err != nil {
+		s.metrics.RecordSync("full_build", "error")
+		return nil, fmt.Errorf("dhtms sync: read snapshot outbox seqs: %w", err)
+	}
+	var snapshotSeqs []int64
+	for seqRows.Next() {
+		var seq int64
+		if err := seqRows.Scan(&seq); err != nil {
+			seqRows.Close()
+			s.metrics.RecordSync("full_build", "error")
+			return nil, fmt.Errorf("dhtms sync: scan snapshot outbox seq: %w", err)
+		}
+		snapshotSeqs = append(snapshotSeqs, seq)
+	}
+	if err := seqRows.Err(); err != nil {
+		seqRows.Close()
+		s.metrics.RecordSync("full_build", "error")
+		return nil, fmt.Errorf("dhtms sync: iterate snapshot outbox seqs: %w", err)
+	}
+	seqRows.Close()
 	lsnU64, err := ParsePGLSN(lsnText)
 	if err != nil {
 		lsnU64 = s.lastLSN + 1
@@ -375,16 +396,19 @@ ORDER BY type, source, id`)
 	} else if lsnU64 > s.lastLSN {
 		s.lastLSN = lsnU64
 	}
-	s.lastSeq = snapshotMaxSeq
 	s.lastGenerationID = resp.GenerationID
+	s.lastBuildAt = time.Now()
 	s.catalogEntity = entityMap
 	s.pendingRebuild = false
 	s.firstNewHashAt = time.Time{}
 	s.lastRegistrySig = regSig
 
-	if snapshotMaxSeq > 0 {
-		if _, delErr := s.pool.Exec(ctx, `DELETE FROM dhtms_outbox WHERE seq <= $1`, snapshotMaxSeq); delErr != nil {
-			s.logger.Warnw("prune applied outbox after full build failed", "seq", snapshotMaxSeq, "error", delErr)
+	const deleteChunk = 5000
+	for i := 0; i < len(snapshotSeqs); i += deleteChunk {
+		end := min(i+deleteChunk, len(snapshotSeqs))
+		if _, delErr := s.pool.Exec(ctx, `DELETE FROM dhtms_outbox WHERE seq = ANY($1::bigint[])`, snapshotSeqs[i:end]); delErr != nil {
+			s.logger.Warnw("prune applied outbox after full build failed", "count", end-i, "error", delErr)
+			break
 		}
 	}
 
@@ -523,17 +547,18 @@ LEFT JOIN torrent_file_bundles fb
 }
 
 type exportedTorrentRow struct {
-	infoHash   []byte
-	infoHashV2 []byte
-	doc        BuildDocLine
-	baseOK     bool
-	pubOK      bool
-	payloadExp uint32
-	isPrivate  bool
-	filePaths  []string
-	seeders    int32
-	leechers   int32
-	checkedMin uint32
+	infoHash      []byte
+	infoHashV2    []byte
+	doc           BuildDocLine
+	baseOK        bool
+	pubOK         bool
+	payloadExp    uint32
+	isPrivate     bool
+	hasContentRef bool
+	filePaths     []string
+	seeders       int32
+	leechers      int32
+	checkedMin    uint32
 }
 
 func scanExportedRow(rows pgx.Rows, entityMap map[catalogDigest]uint32) (exportedTorrentRow, error) {
@@ -661,17 +686,18 @@ func scanExportedRow(rows pgx.Rows, entityMap map[catalogDigest]uint32) (exporte
 	}
 
 	return exportedTorrentRow{
-		infoHash:   ih,
-		infoHashV2: ihv2,
-		doc:        doc,
-		baseOK:     baseOK,
-		pubOK:      pubOK,
-		payloadExp: payEp,
-		isPrivate:  isPrivate,
-		filePaths:  filePaths,
-		seeders:    seeders,
-		leechers:   leechers,
-		checkedMin: doc.CheckedEpochMin,
+		infoHash:      ih,
+		infoHashV2:    ihv2,
+		doc:           doc,
+		baseOK:        baseOK,
+		pubOK:         pubOK,
+		payloadExp:    payEp,
+		isPrivate:     isPrivate,
+		hasContentRef: contentType != "" && contentSource != "" && contentID != "",
+		filePaths:     filePaths,
+		seeders:       seeders,
+		leechers:      leechers,
+		checkedMin:    doc.CheckedEpochMin,
 	}, nil
 }
 
@@ -740,75 +766,113 @@ func (s *Syncer) SyncOnce(ctx context.Context) error {
 		nextLSN = s.lastLSN + 1
 	}
 
-	rows, err := s.pool.Query(ctx, `SELECT seq, op, info_hash
-FROM dhtms_outbox
-WHERE seq > $1
-ORDER BY seq
-LIMIT $2`, s.lastSeq, outboxBatchLimit)
-	if err != nil {
-		s.metrics.RecordSync("incremental", "error")
-		return fmt.Errorf("dhtms sync: query dhtms_outbox: %w", err)
+	markRebuild := func() {
+		if !s.pendingRebuild {
+			s.pendingRebuild = true
+			s.firstNewHashAt = time.Now()
+		}
+	}
+	if s.cfg.CompactWALBytes > 0 && health.L0WALBytes >= uint64(s.cfg.CompactWALBytes) {
+		markRebuild()
+	}
+	if s.cfg.CompactMaxAge > 0 && !s.lastBuildAt.IsZero() &&
+		time.Since(s.lastBuildAt) >= s.cfg.CompactMaxAge &&
+		(health.L0Count > 0 || health.L0WALBytes > 0) {
+		markRebuild()
 	}
 
-	changes := make(map[string]*outboxChangeFlags)
-	var maxSeq int64
-	rowCount := 0
-	for rows.Next() {
-		var seq int64
-		var op string
-		var ih []byte
-		if err := rows.Scan(&seq, &op, &ih); err != nil {
+	// When the governance lease is currently closed, drain all queued outbox
+	// batches before renewing the lease so pending revocations are guaranteed
+	// to apply before dh-tmsd resumes serving.
+	maxBatches := 1
+	if !health.LeaseActive {
+		maxBatches = 32
+	}
+	for batch := 0; batch < maxBatches; batch++ {
+		rows, err := s.pool.Query(ctx, `SELECT seq, op, info_hash
+FROM dhtms_outbox
+ORDER BY seq
+LIMIT $1`, outboxBatchLimit)
+		if err != nil {
+			s.metrics.RecordSync("incremental", "error")
+			return fmt.Errorf("dhtms sync: query dhtms_outbox: %w", err)
+		}
+
+		changes := make(map[string]*outboxChangeFlags)
+		var seqs []int64
+		catalogDirty := false
+		for rows.Next() {
+			var seq int64
+			var op string
+			var ih []byte
+			if err := rows.Scan(&seq, &op, &ih); err != nil {
+				rows.Close()
+				s.metrics.RecordSync("incremental", "error")
+				return fmt.Errorf("dhtms sync: scan dhtms_outbox: %w", err)
+			}
+			seqs = append(seqs, seq)
+			if op == "catalog" {
+				catalogDirty = true
+				continue
+			}
+			hexHash := hex.EncodeToString(ih)
+			f := changes[hexHash]
+			if f == nil {
+				f = &outboxChangeFlags{rawHash: append([]byte(nil), ih...)}
+				changes[hexHash] = f
+			}
+			switch op {
+			case "delete":
+				f.deleted = true
+			case "upsert":
+				f.upsert = true
+				f.policy = true
+				f.meta = true
+			case "policy":
+				f.policy = true
+				f.policyTable = true
+			case "meta":
+				f.meta = true
+				f.policy = true // name or content_type change can affect adult/namepolicy visibility
+			case "swarm":
+				f.swarm = true
+			}
+		}
+		if err := rows.Err(); err != nil {
 			rows.Close()
 			s.metrics.RecordSync("incremental", "error")
-			return fmt.Errorf("dhtms sync: scan dhtms_outbox: %w", err)
+			return fmt.Errorf("dhtms sync: iterate dhtms_outbox: %w", err)
 		}
-		rowCount++
-		if seq > maxSeq {
-			maxSeq = seq
-		}
-		hexHash := hex.EncodeToString(ih)
-		f := changes[hexHash]
-		if f == nil {
-			f = &outboxChangeFlags{rawHash: append([]byte(nil), ih...)}
-			changes[hexHash] = f
-		}
-		switch op {
-		case "delete":
-			f.deleted = true
-		case "upsert":
-			f.upsert = true
-			f.policy = true
-			f.meta = true
-		case "policy":
-			f.policy = true
-			f.policyTable = true
-		case "meta":
-			f.meta = true
-			f.policy = true // name or content_type change can affect adult/namepolicy visibility
-		case "swarm":
-			f.swarm = true
-		}
-	}
-	if err := rows.Err(); err != nil {
 		rows.Close()
-		s.metrics.RecordSync("incremental", "error")
-		return fmt.Errorf("dhtms sync: iterate dhtms_outbox: %w", err)
-	}
-	rows.Close()
 
-	if rowCount > 0 {
-		if err := s.applyOutboxBatchLocked(ctx, changes, nextLSN); err != nil {
-			s.metrics.RecordSync("incremental", "error")
-			return err
+		if len(seqs) == 0 {
+			break
 		}
-		s.lastSeq = maxSeq
+		if catalogDirty {
+			markRebuild()
+		}
+		if len(changes) > 0 {
+			if err := s.applyOutboxBatchLocked(ctx, changes, nextLSN); err != nil {
+				s.metrics.RecordSync("incremental", "error")
+				return err
+			}
+		}
 		s.lastLSN = nextLSN
-		if _, delErr := s.pool.Exec(ctx, `DELETE FROM dhtms_outbox WHERE seq <= $1`, maxSeq); delErr != nil {
-			s.logger.Warnw("delete processed dhtms_outbox rows failed", "seq", maxSeq, "error", delErr)
+		if _, delErr := s.pool.Exec(ctx, `DELETE FROM dhtms_outbox WHERE seq = ANY($1::bigint[])`, seqs); delErr != nil {
+			s.logger.Warnw("delete processed dhtms_outbox rows failed", "count", len(seqs), "error", delErr)
 		}
-		s.metrics.AddOutboxApplied(rowCount)
+		s.metrics.AddOutboxApplied(len(seqs))
 		s.metrics.RecordSync("incremental", "ok")
 		nextLSN++
+
+		if len(seqs) < outboxBatchLimit {
+			break
+		}
+		if !health.LeaseActive && batch+1 == maxBatches {
+			// More outbox rows remain while the lease is closed: defer lease
+			// renewal until the next tick finishes draining.
+			return nil
+		}
 	}
 
 	if s.pendingRebuild && time.Since(s.firstNewHashAt) >= s.cfg.RebuildDebounce {
@@ -845,28 +909,36 @@ func (s *Syncer) applyOutboxBatchLocked(
 	pgLSN uint64,
 ) error {
 	hasGate := s.hasServingGate()
+	hexOrder := make([]string, 0, len(changes))
+	for hexHash := range changes {
+		hexOrder = append(hexOrder, hexHash)
+	}
+	// Resolve infohashes to doc_ids via authenticated lease-independent /v1/sync/resolve
+	// so an expired lease remains closed until every pending revocation is applied.
+	resolvedDocID := make(map[string]*uint32, len(hexOrder))
+	const resolveChunk = 500
+	for i := 0; i < len(hexOrder); i += resolveChunk {
+		end := min(i+resolveChunk, len(hexOrder))
+		chunk := hexOrder[i:end]
+		res, err := s.client.SyncResolve(ctx, SyncResolveRequest{InfoHashes: chunk})
+		if err != nil {
+			return fmt.Errorf("dhtms sync: resolve %d hashes: %w", len(chunk), err)
+		}
+		for k, docIDPtr := range res.Docs {
+			if docIDPtr != nil {
+				id := *docIDPtr
+				resolvedDocID[k] = &id
+			}
+		}
+	}
 	lookups := make(map[string]*HashLookupResponse, len(changes))
 	hashSlice := make([][]byte, 0, len(changes))
-	for hexHash, f := range changes {
-		hl, err := s.client.HashLookup(ctx, HashLookupRequest{
-			InfoHash: hexHash,
-			Tier:     TierBase,
-		})
-		if errors.Is(err, ErrLeaseExpired) {
-			leaseMS := uint64(s.cfg.LeaseTTL / time.Millisecond)
-			if leaseMS == 0 {
-				leaseMS = uint64(defaultLeaseTTL / time.Millisecond)
-			}
-			if _, lerr := s.client.PolicyLease(ctx, PolicyLeaseRequest{PGLSN: pgLSN, TTLMS: leaseMS}); lerr != nil {
-				return fmt.Errorf("dhtms sync: renew lease before outbox lookup: %w", lerr)
-			}
-			hl, err = s.client.HashLookup(ctx, HashLookupRequest{
-				InfoHash: hexHash,
-				Tier:     TierBase,
-			})
-		}
-		if err != nil {
-			return fmt.Errorf("dhtms sync: hash lookup %s: %w", hexHash, err)
+	for _, hexHash := range hexOrder {
+		f := changes[hexHash]
+		docID := resolvedDocID[hexHash]
+		hl := &HashLookupResponse{
+			Found: docID != nil,
+			DocID: docID,
 		}
 		// When a publication or payload serving gate is active, unindexed raw crawl
 		// inserts/meta/swarm churn without a governance-table event cannot satisfy the gate.
@@ -939,6 +1011,11 @@ func (s *Syncer) applyOutboxBatchLocked(
 			continue
 		}
 
+		if rec.hasContentRef && rec.doc.EntityID == 0 {
+			// A new content catalog row was linked after the last generation build;
+			// schedule a debounced rebuild so catalog/entity_id mappings stay current.
+			markRebuild()
+		}
 		if !hl.Found || hl.DocID == nil {
 			if !s.shouldIndexNewRecord(rec, nowUnix) {
 				continue
@@ -1075,7 +1152,8 @@ func (s *Syncer) applyOutboxBatchLocked(
 				return fmt.Errorf("dhtms sync: apply new l0 insert (%d docs): %w", len(newL0Items), err)
 			}
 		} else {
-			if s.cfg.CompactDocs > 0 && newResp.L0Count >= s.cfg.CompactDocs {
+			if (s.cfg.CompactDocs > 0 && newResp.L0Count >= s.cfg.CompactDocs) ||
+				(s.cfg.CompactWALBytes > 0 && newResp.L0WALBytes >= uint64(s.cfg.CompactWALBytes)) {
 				markRebuild()
 			}
 			for i, assignedID := range newResp.DocIDs {
@@ -1154,7 +1232,8 @@ func (s *Syncer) applyOutboxBatchLocked(
 		if err != nil {
 			return fmt.Errorf("dhtms sync: apply l0 upsert (%d docs): %w", len(l0Items), err)
 		}
-		if s.cfg.CompactDocs > 0 && l0Resp.L0Count >= s.cfg.CompactDocs {
+		if (s.cfg.CompactDocs > 0 && l0Resp.L0Count >= s.cfg.CompactDocs) ||
+			(s.cfg.CompactWALBytes > 0 && l0Resp.L0WALBytes >= uint64(s.cfg.CompactWALBytes)) {
 			markRebuild()
 		}
 	}

@@ -9,7 +9,11 @@ use dh_tms_grammar::{
 use dh_tms_hashdir::{encode_hex, parse_info_hash_hex, HashDir, InfoHash};
 use dh_tms_policy::{PolicyError, PolicyOp, PolicyPlane, PolicyTier, RevokeReason};
 use dh_tms_search::l0::L0Doc;
-use dh_tms_search::{term_hash, CustomSearchPlane, QueryMode, SearchError, SearchFilterClause};
+use dh_tms_search::{
+    term_hash, CustomSearchPlane, QueryMode, SearchError, SearchFilterClause, MAX_VIDEO_CODEC,
+    MAX_VIDEO_SOURCE,
+};
+use std::collections::HashMap;
 use dh_tms_swarm::{SwarmError, SwarmPlane, SwarmUpdate};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
@@ -23,6 +27,7 @@ pub enum DaemonError {
     BadRequest(String),
     NotFound,
     TrigramsDisabled,
+    TooManyCandidates,
     LeaseExpired {
         now_ms: u64,
         valid_until_ms: u64,
@@ -59,6 +64,7 @@ impl From<SearchError> for DaemonError {
         match e {
             SearchError::Policy(pe) => pe.into(),
             SearchError::TrigramsDisabled => Self::TrigramsDisabled,
+            SearchError::TooManyCandidates => Self::TooManyCandidates,
             other => Self::Internal(other.to_string()),
         }
     }
@@ -133,6 +139,7 @@ pub struct HealthResponse {
     pub lease_active: bool,
     pub lease_remaining_ms: u64,
     pub l0_count: usize,
+    pub l0_wal_bytes: u64,
     pub base_eligible: u64,
     pub pub_eligible: u64,
     pub payload_eligible: u64,
@@ -231,6 +238,8 @@ pub struct SearchRequest {
     #[serde(default)]
     pub min_seeders: Option<u32>,
     #[serde(default)]
+    pub require_v1: bool,
+    #[serde(default)]
     pub now_epoch: Option<u32>,
 }
 
@@ -274,6 +283,8 @@ pub struct LookupRequest {
     #[serde(default)]
     pub include_files: bool,
     #[serde(default)]
+    pub require_v1: bool,
+    #[serde(default)]
     pub now_epoch: Option<u32>,
 }
 
@@ -281,6 +292,7 @@ pub struct LookupRequest {
 pub struct LookupResponse {
     pub linked: Vec<DocHit>,
     pub unlinked: Vec<DocHit>,
+    pub entity_found: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -301,6 +313,8 @@ pub struct RssRequest {
     pub any_clauses: Vec<FilterClause>,
     #[serde(default)]
     pub min_seeders: Option<u32>,
+    #[serde(default)]
+    pub require_v1: bool,
     #[serde(default)]
     pub now_epoch: Option<u32>,
 }
@@ -338,7 +352,21 @@ pub struct SubstringRequest {
     #[serde(default)]
     pub include_files: bool,
     #[serde(default)]
+    pub hash_order: bool,
+    #[serde(default)]
+    pub after_info_hash: Option<String>,
+    #[serde(default)]
     pub now_epoch: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SyncResolveRequest {
+    pub info_hashes: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SyncResolveResponse {
+    pub docs: HashMap<String, Option<u32>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -517,6 +545,7 @@ pub struct L0UpsertResponse {
     pub ok: bool,
     pub upserted: usize,
     pub l0_count: usize,
+    pub l0_wal_bytes: u64,
     pub doc_ids: Vec<u32>,
 }
 
@@ -599,6 +628,7 @@ impl DaemonEngine {
             lease_active: active,
             lease_remaining_ms: rem,
             l0_count: self.search.l0.len(),
+            l0_wal_bytes: self.search.l0.wal_bytes(),
             base_eligible: snap.base_eligible.len(),
             pub_eligible: snap.pub_eligible.len(),
             payload_eligible: snap.payload_eligible.len(),
@@ -614,6 +644,39 @@ impl DaemonEngine {
             // Production default: never allow caller-supplied timestamps to wind the clock back
             // and bypass PayloadProof v2 expiry.
             real
+        }
+    }
+
+    #[inline]
+    fn fresh_now(&self, req_now: Option<u32>) -> (u32, u64) {
+        let now_m = now_epoch_ms();
+        let real_s = (now_m / 1000) as u32;
+        let now_s = if self.allow_clock_override {
+            req_now.unwrap_or(real_s)
+        } else {
+            real_s
+        };
+        (now_s, now_m)
+    }
+
+    #[inline]
+    fn has_v1_hash(&self, doc_id: u32) -> bool {
+        if (doc_id as usize) < self.core.num_docs {
+            self.hash_dir.get_v1_for_doc(doc_id).is_some()
+        } else {
+            self.search
+                .l0
+                .get_doc(doc_id)
+                .is_some_and(|ov| ov.info_hash_v1.is_some())
+        }
+    }
+
+    fn primary_hash_bytes(&self, doc_id: u32) -> Option<Vec<u8>> {
+        let (v1, v2) = self.doc_hashes_any(doc_id);
+        if let Some(h1) = v1 {
+            Some(h1.to_vec())
+        } else {
+            v2.map(|h2| h2.to_vec())
         }
     }
 
@@ -823,16 +886,24 @@ impl DaemonEngine {
         } else {
             None
         };
-        let min_s = req.min_seeders.unwrap_or(0);
-        let seeder_closure = |doc_id: u32| {
-            self.swarm
-                .read(doc_id)
-                .ok()
-                .and_then(|sw| sw.seeders)
-                .is_some_and(|s| s >= min_s)
+        let min_seeders = req.min_seeders;
+        let require_v1 = req.require_v1;
+        let doc_closure = |doc_id: u32| {
+            if require_v1 && !self.has_v1_hash(doc_id) {
+                return false;
+            }
+            if let Some(min_s) = min_seeders {
+                return self
+                    .swarm
+                    .read(doc_id)
+                    .ok()
+                    .and_then(|sw| sw.seeders)
+                    .is_some_and(|s| s >= min_s);
+            }
+            true
         };
-        let doc_pred: Option<&dyn Fn(u32) -> bool> = if min_s > 0 {
-            Some(&seeder_closure)
+        let doc_pred: Option<&dyn Fn(u32) -> bool> = if min_seeders.is_some() || require_v1 {
+            Some(&doc_closure)
         } else {
             None
         };
@@ -870,9 +941,10 @@ impl DaemonEngine {
 
         let mut docs = Vec::with_capacity(scored.len());
         for sd in scored {
+            let (egress_s, egress_m) = self.fresh_now(req.now_epoch);
             if !self
                 .policy
-                .authorize_egress_one(sd.doc_id, tier, now_s, now_m)?
+                .authorize_egress_one(sd.doc_id, tier, egress_s, egress_m)?
             {
                 continue;
             }
@@ -880,6 +952,7 @@ impl DaemonEngine {
         }
 
         let (total_facets, ct_facets, res_facets) = if req.include_facets {
+            let (facet_s, facet_m) = self.fresh_now(req.now_epoch);
             let (ct, res, tot) = self.search.text_facet_counts_filtered(
                 &req.query,
                 clause_bm.as_ref(),
@@ -888,8 +961,8 @@ impl DaemonEngine {
                 &self.policy,
                 tier,
                 self.core.facet_bytes(),
-                now_s,
-                now_m,
+                facet_s,
+                facet_m,
             )?;
             (Some(tot), Some(ct), Some(res))
         } else {
@@ -912,6 +985,7 @@ impl DaemonEngine {
         self.policy.lease().check(now_m)?;
 
         let mut entity_id = req.entity_id;
+        let mut entity_found = entity_id != 0;
         let mut effective_ct = req.content_type;
         let mut titles = req.titles;
         let mut year = req.year;
@@ -947,6 +1021,7 @@ impl DaemonEngine {
                 }
             }
             if let Some(rec) = resolved {
+                entity_found = true;
                 entity_id = rec.entity_id;
                 if effective_ct == 0 {
                     effective_ct = rec.content_type;
@@ -964,12 +1039,19 @@ impl DaemonEngine {
         }
 
         let season_ep = req.season.map(|s| (s, req.episode));
-        let (linked_ids, unlinked_ids) = self.search.lookup_entity_with_fallback(
+        let v1_closure = |doc_id: u32| self.has_v1_hash(doc_id);
+        let doc_pred: Option<&dyn Fn(u32) -> bool> = if req.require_v1 {
+            Some(&v1_closure)
+        } else {
+            None
+        };
+        let (linked_ids, unlinked_ids) = self.search.lookup_entity_with_fallback_filtered(
             entity_id,
             &titles,
             effective_ct,
             year,
             season_ep,
+            doc_pred,
             &self.policy,
             tier,
             &self.core,
@@ -980,17 +1062,23 @@ impl DaemonEngine {
 
         let mut linked = Vec::with_capacity(linked_ids.len());
         for d in linked_ids {
-            if self.policy.authorize_egress_one(d, tier, now_s, now_m)? {
+            let (egress_s, egress_m) = self.fresh_now(req.now_epoch);
+            if self.policy.authorize_egress_one(d, tier, egress_s, egress_m)? {
                 linked.push(self.hydrate_hit(d, 0.0, req.include_files)?);
             }
         }
         let mut unlinked = Vec::with_capacity(unlinked_ids.len());
         for d in unlinked_ids {
-            if self.policy.authorize_egress_one(d, tier, now_s, now_m)? {
+            let (egress_s, egress_m) = self.fresh_now(req.now_epoch);
+            if self.policy.authorize_egress_one(d, tier, egress_s, egress_m)? {
                 unlinked.push(self.hydrate_hit(d, 0.0, req.include_files)?);
             }
         }
-        Ok(LookupResponse { linked, unlinked })
+        Ok(LookupResponse {
+            linked,
+            unlinked,
+            entity_found,
+        })
     }
 
     pub fn handle_rss(&self, req: RssRequest) -> Result<RssResponse, DaemonError> {
@@ -1021,16 +1109,24 @@ impl DaemonEngine {
         } else {
             None
         };
-        let min_s = req.min_seeders.unwrap_or(0);
-        let seeder_closure = |doc_id: u32| {
-            self.swarm
-                .read(doc_id)
-                .ok()
-                .and_then(|sw| sw.seeders)
-                .is_some_and(|s| s >= min_s)
+        let min_seeders = req.min_seeders;
+        let require_v1 = req.require_v1;
+        let doc_closure = |doc_id: u32| {
+            if require_v1 && !self.has_v1_hash(doc_id) {
+                return false;
+            }
+            if let Some(min_s) = min_seeders {
+                return self
+                    .swarm
+                    .read(doc_id)
+                    .ok()
+                    .and_then(|sw| sw.seeders)
+                    .is_some_and(|s| s >= min_s);
+            }
+            true
         };
-        let doc_pred: Option<&dyn Fn(u32) -> bool> = if min_s > 0 {
-            Some(&seeder_closure)
+        let doc_pred: Option<&dyn Fn(u32) -> bool> = if min_seeders.is_some() || require_v1 {
+            Some(&doc_closure)
         } else {
             None
         };
@@ -1050,11 +1146,13 @@ impl DaemonEngine {
         )?;
         let mut docs = Vec::with_capacity(doc_ids.len());
         for d in doc_ids {
-            if self.policy.authorize_egress_one(d, tier, now_s, now_m)? {
+            let (egress_s, egress_m) = self.fresh_now(req.now_epoch);
+            if self.policy.authorize_egress_one(d, tier, egress_s, egress_m)? {
                 docs.push(self.hydrate_hit(d, 0.0, req.include_files)?);
             }
         }
         let total_count = if req.include_total {
+            let (count_s, count_m) = self.fresh_now(req.now_epoch);
             Some(self.search.count_browse_filtered(
                 ct_opt,
                 clause_bm.as_ref(),
@@ -1062,8 +1160,8 @@ impl DaemonEngine {
                 doc_pred,
                 &self.policy,
                 tier,
-                now_s,
-                now_m,
+                count_s,
+                count_m,
             )?)
         } else {
             None
@@ -1096,18 +1194,47 @@ impl DaemonEngine {
         let now_s = self.effective_now_sec(req.now_epoch);
         let now_m = now_epoch_ms();
         self.policy.lease().check(now_m)?;
-        let doc_ids = self.search.search_substring(
-            &req.substring,
-            &self.policy,
-            tier,
-            &self.core,
-            limit,
-            now_s,
-            now_m,
-        )?;
+        let after_bytes: Option<Vec<u8>> = match req.after_info_hash.as_deref() {
+            Some(raw) if !raw.trim().is_empty() => match parse_info_hash_hex(raw.trim()) {
+                Some(InfoHash::V1(h)) => Some(h.to_vec()),
+                Some(InfoHash::V2(h)) => Some(h.to_vec()),
+                None => {
+                    return Err(DaemonError::BadRequest(
+                        "invalid after_info_hash hex".into(),
+                    ))
+                }
+            },
+            _ => None,
+        };
+        let doc_ids = if req.hash_order || after_bytes.is_some() {
+            const SUBSTRING_HASH_ORDER_MAX_SCAN: usize = 100_000;
+            self.search.search_substring_hash_ordered(
+                &req.substring,
+                after_bytes.as_deref(),
+                |d| self.primary_hash_bytes(d),
+                SUBSTRING_HASH_ORDER_MAX_SCAN,
+                &self.policy,
+                tier,
+                &self.core,
+                limit,
+                now_s,
+                now_m,
+            )?
+        } else {
+            self.search.search_substring(
+                &req.substring,
+                &self.policy,
+                tier,
+                &self.core,
+                limit,
+                now_s,
+                now_m,
+            )?
+        };
         let mut docs = Vec::with_capacity(doc_ids.len());
         for d in doc_ids {
-            if self.policy.authorize_egress_one(d, tier, now_s, now_m)? {
+            let (egress_s, egress_m) = self.fresh_now(req.now_epoch);
+            if self.policy.authorize_egress_one(d, tier, egress_s, egress_m)? {
                 docs.push(self.hydrate_hit(d, 0.0, req.include_files)?);
             }
         }
@@ -1119,7 +1246,6 @@ impl DaemonEngine {
 
     pub fn handle_hydrate(&self, req: HydrateRequest) -> Result<RssResponse, DaemonError> {
         let tier = parse_tier(&req.tier)?;
-        let now_s = self.effective_now_sec(req.now_epoch);
         let now_m = now_epoch_ms();
         self.policy.lease().check(now_m)?;
 
@@ -1140,7 +1266,8 @@ impl DaemonEngine {
         }
         let mut docs = Vec::with_capacity(targets.len());
         for d in targets {
-            if self.policy.authorize_egress_one(d, tier, now_s, now_m)? {
+            let (egress_s, egress_m) = self.fresh_now(req.now_epoch);
+            if self.policy.authorize_egress_one(d, tier, egress_s, egress_m)? {
                 docs.push(self.hydrate_hit(d, 0.0, true)?);
             }
         }
@@ -1155,7 +1282,6 @@ impl DaemonEngine {
         req: HashLookupRequest,
     ) -> Result<HashLookupResponse, DaemonError> {
         let tier = parse_tier(&req.tier)?;
-        let now_s = self.effective_now_sec(req.now_epoch);
         let now_m = now_epoch_ms();
         self.policy.lease().check(now_m)?;
 
@@ -1171,9 +1297,10 @@ impl DaemonEngine {
                 eligible: false,
             });
         };
+        let (egress_s, egress_m) = self.fresh_now(req.now_epoch);
         let eligible = self
             .policy
-            .authorize_egress_one(doc_id, tier, now_s, now_m)?;
+            .authorize_egress_one(doc_id, tier, egress_s, egress_m)?;
         let (v1, v2) = self.doc_hashes_any(doc_id);
         let magnet_xt = if let Some(h1) = v1 {
             Some(InfoHash::V1(h1).to_magnet_xt())
@@ -1188,6 +1315,22 @@ impl DaemonEngine {
             magnet_xt,
             eligible,
         })
+    }
+
+    /// Authenticated internal sync resolver: maps hex infohashes to internal `doc_id`s
+    /// WITHOUT requiring or renewing the public governance lease, so the sync worker can
+    /// replay pending revocations while public reads remain strictly fail-closed.
+    pub fn handle_sync_resolve(
+        &self,
+        req: SyncResolveRequest,
+    ) -> Result<SyncResolveResponse, DaemonError> {
+        let mut docs = HashMap::with_capacity(req.info_hashes.len());
+        for raw in req.info_hashes {
+            let ih = parse_info_hash_hex(&raw)
+                .ok_or_else(|| DaemonError::BadRequest(format!("invalid info_hash hex: {raw}")))?;
+            docs.insert(raw, self.lookup_hash_any(&ih));
+        }
+        Ok(SyncResolveResponse { docs })
     }
 
     pub fn handle_policy_revoke(
@@ -1388,8 +1531,26 @@ impl DaemonEngine {
                 files.len() as u32
             };
             let eps: Vec<EpisodeSpec> = pr.episodes;
+            if item.video_3d > 3 {
+                return Err(DaemonError::BadRequest(format!(
+                    "video_3d {} exceeds supported range 0..=3",
+                    item.video_3d
+                )));
+            }
+            if item.video_source > MAX_VIDEO_SOURCE {
+                return Err(DaemonError::BadRequest(format!(
+                    "video_source {} exceeds supported range 0..={}",
+                    item.video_source, MAX_VIDEO_SOURCE
+                )));
+            }
+            if item.video_codec > MAX_VIDEO_CODEC {
+                return Err(DaemonError::BadRequest(format!(
+                    "video_codec {} exceeds supported range 0..={}",
+                    item.video_codec, MAX_VIDEO_CODEC
+                )));
+            }
             let v3d = if item.video_3d != 0 {
-                item.video_3d.min(3)
+                item.video_3d
             } else if item.is_3d {
                 1
             } else {
@@ -1407,8 +1568,8 @@ impl DaemonEngine {
                 },
                 is_anime: item.is_anime,
                 video_3d: v3d,
-                video_source: item.video_source.min(15),
-                video_codec: item.video_codec.min(15),
+                video_source: item.video_source,
+                video_codec: item.video_codec,
                 entity_id: item.entity_id,
                 year: if item.year != 0 { item.year } else { pr.year },
                 published_epoch: item.published_epoch,
@@ -1433,6 +1594,7 @@ impl DaemonEngine {
             ok: true,
             upserted,
             l0_count: self.search.l0.len(),
+            l0_wal_bytes: self.search.l0.wal_bytes(),
             doc_ids: assigned_ids,
         })
     }

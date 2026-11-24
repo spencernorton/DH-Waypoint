@@ -43,6 +43,7 @@ type HealthResponse struct {
 	LeaseActive      bool   `json:"lease_active"`
 	LeaseRemainingMS uint64 `json:"lease_remaining_ms"`
 	L0Count          int    `json:"l0_count"`
+	L0WALBytes       uint64 `json:"l0_wal_bytes"`
 	BaseEligible     uint64 `json:"base_eligible"`
 	PubEligible      uint64 `json:"pub_eligible"`
 	PayloadEligible  uint64 `json:"payload_eligible"`
@@ -106,6 +107,7 @@ type SearchRequest struct {
 	IncludeFiles  bool           `json:"include_files,omitempty"`
 	AnyClauses    []FilterClause `json:"any_clauses,omitempty"`
 	MinSeeders    *uint32        `json:"min_seeders,omitempty"`
+	RequireV1     bool           `json:"require_v1,omitempty"`
 	NowEpoch      *uint32        `json:"now_epoch,omitempty"`
 }
 
@@ -130,13 +132,15 @@ type LookupRequest struct {
 	Tier          PolicyTier `json:"tier,omitempty"`
 	Limit         int        `json:"limit,omitempty"`
 	IncludeFiles  bool       `json:"include_files,omitempty"`
+	RequireV1     bool       `json:"require_v1,omitempty"`
 	NowEpoch      *uint32    `json:"now_epoch,omitempty"`
 }
 
 // LookupResponse separates linked entity hits from unlinked fallback hits.
 type LookupResponse struct {
-	Linked   []DocHit `json:"linked"`
-	Unlinked []DocHit `json:"unlinked"`
+	Linked      []DocHit `json:"linked"`
+	Unlinked    []DocHit `json:"unlinked"`
+	EntityFound bool     `json:"entity_found"`
 }
 
 // RSSRequest mirrors POST /v1/rss.
@@ -149,6 +153,7 @@ type RSSRequest struct {
 	IncludeTotal bool           `json:"include_total,omitempty"`
 	AnyClauses   []FilterClause `json:"any_clauses,omitempty"`
 	MinSeeders   *uint32        `json:"min_seeders,omitempty"`
+	RequireV1    bool           `json:"require_v1,omitempty"`
 	NowEpoch     *uint32        `json:"now_epoch,omitempty"`
 }
 
@@ -174,11 +179,23 @@ type DashstatsResponse struct {
 
 // SubstringRequest mirrors POST /v1/substring.
 type SubstringRequest struct {
-	Substring    string     `json:"substring"`
-	Tier         PolicyTier `json:"tier,omitempty"`
-	Limit        int        `json:"limit,omitempty"`
-	IncludeFiles bool       `json:"include_files,omitempty"`
-	NowEpoch     *uint32    `json:"now_epoch,omitempty"`
+	Substring     string     `json:"substring"`
+	Tier          PolicyTier `json:"tier,omitempty"`
+	Limit         int        `json:"limit,omitempty"`
+	IncludeFiles  bool       `json:"include_files,omitempty"`
+	HashOrder     bool       `json:"hash_order,omitempty"`
+	AfterInfoHash string     `json:"after_info_hash,omitempty"`
+	NowEpoch      *uint32    `json:"now_epoch,omitempty"`
+}
+
+// SyncResolveRequest mirrors POST /v1/sync/resolve.
+type SyncResolveRequest struct {
+	InfoHashes []string `json:"info_hashes"`
+}
+
+// SyncResolveResponse mirrors POST /v1/sync/resolve.
+type SyncResolveResponse struct {
+	Docs map[string]*uint32 `json:"docs"`
 }
 
 // HydrateRequest mirrors POST /v1/hydrate.
@@ -339,10 +356,11 @@ type L0UpsertRequest struct {
 
 // L0UpsertResponse mirrors POST /v1/l0/upsert.
 type L0UpsertResponse struct {
-	OK       bool     `json:"ok"`
-	Upserted int      `json:"upserted"`
-	L0Count  int      `json:"l0_count"`
-	DocIDs   []uint32 `json:"doc_ids,omitempty"`
+	OK         bool     `json:"ok"`
+	Upserted   int      `json:"upserted"`
+	L0Count    int      `json:"l0_count"`
+	L0WALBytes uint64   `json:"l0_wal_bytes,omitempty"`
+	DocIDs     []uint32 `json:"doc_ids,omitempty"`
 }
 
 // APIError captures structured non-2xx responses from dh-tmsd.

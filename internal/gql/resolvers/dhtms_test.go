@@ -40,8 +40,10 @@ func TestGraphQLExecutableSchemaDHTMSRoutingAndSelectionBypass(t *testing.T) {
 	tot := uint64(7)
 	seeders := uint32(15)
 
+	var lastReq dhtms.SearchRequest
 	tmsSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewDecoder(r.Body).Decode(&lastReq)
 		_ = json.NewEncoder(w).Encode(dhtms.SearchResponse{
 			Docs: []dhtms.DocHit{{
 				DocID: 1, InfoHashV1: tmsHash, Name: "Live.Schema.1080p.BluRay.x265",
@@ -65,7 +67,9 @@ func TestGraphQLExecutableSchemaDHTMSRoutingAndSelectionBypass(t *testing.T) {
 				InfoHash:    pgIH,
 				ContentType: model.NewNullContentType(model.ContentTypeMovie),
 				PublishedAt: time.Now().UTC(),
-				Torrent:     model.Torrent{InfoHash: pgIH, Name: "PG.UI.Row"},
+				CreatedAt:   time.Now().UTC(),
+				UpdatedAt:   time.Now().UTC(),
+				Torrent:     model.Torrent{InfoHash: pgIH, Name: "PG.UI.Row", CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()},
 			},
 		}},
 	}
@@ -88,9 +92,10 @@ func TestGraphQLExecutableSchemaDHTMSRoutingAndSelectionBypass(t *testing.T) {
 		return rec.Body.String()
 	}
 
-	// 1. Eligible query with torrent subfields hits DH-TMS directly (0 PG queries).
-	out1 := execGQL(`{ torrentContent { search(input: { queryString: "1080p", limit: 5, totalCount: true }) { totalCount items { infoHash contentType title videoResolution videoSource videoCodec seeders torrent { name size magnetUri } } } } }`)
+	// 1. Eligible query with torrent subfields hits DH-TMS directly (0 PG queries) with RequireV1=true.
+	out1 := execGQL(`{ torrentContent { search(input: { queryString: "1080p", limit: 5, totalCount: true }) { totalCount items { infoHash contentType videoResolution videoSource videoCodec seeders publishedAt torrent { name size magnetUri createdAt } } } } }`)
 	require.Equal(t, int32(0), spy.calls.Load())
+	require.True(t, lastReq.RequireV1, "GraphQL DH-TMS request must set RequireV1=true")
 	require.Contains(t, out1, tmsHash)
 	require.Contains(t, out1, `"totalCount":7`)
 
@@ -108,4 +113,22 @@ func TestGraphQLExecutableSchemaDHTMSRoutingAndSelectionBypass(t *testing.T) {
 	out4 := execGQL(`{ torrentContent { search(input: { queryString: "1080p", limit: 5 }) { items { infoHash torrent { name files { path } } } } } }`)
 	require.Equal(t, int32(3), spy.calls.Load())
 	require.Contains(t, out4, pgHash)
+
+	// 5. Unpopulated fields (title, createdAt, updatedAt, torrent.updatedAt) bypass DH-TMS cleanly,
+	// including when selected via aliases or inline fragments.
+	out5 := execGQL(`{ torrentContent { search(input: { queryString: "1080p", limit: 5 }) { items { infoHash title } } } }`)
+	require.Equal(t, int32(4), spy.calls.Load())
+	require.Contains(t, out5, pgHash)
+
+	out6 := execGQL(`{ torrentContent { search(input: { queryString: "1080p", limit: 5 }) { items { infoHash ... on TorrentContent { aliasedTitle: title } } } } }`)
+	require.Equal(t, int32(5), spy.calls.Load())
+	require.Contains(t, out6, pgHash)
+
+	out7 := execGQL(`{ torrentContent { search(input: { queryString: "1080p", limit: 5 }) { items { infoHash updatedAt } } } }`)
+	require.Equal(t, int32(6), spy.calls.Load())
+	require.Contains(t, out7, pgHash)
+
+	out8 := execGQL(`{ torrentContent { search(input: { queryString: "1080p", limit: 5 }) { items { infoHash torrent { updatedAt } } } } }`)
+	require.Equal(t, int32(7), spy.calls.Load())
+	require.Contains(t, out8, pgHash)
 }

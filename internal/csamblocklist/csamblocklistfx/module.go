@@ -105,38 +105,50 @@ func provideExporter(
 // provideRefreshWorker wires the periodic Refresh loop into the
 // worker manager. NoOp Manager has no Run method; type assertion
 // short-circuits cleanly.
-// runStartupRefresh runs the synchronous initial refresh that closes
-// the "fresh-deploy gap" review flagged. Bounded by
-// initialRefreshBudget so a misconfigured / unreachable feed cannot
-// permanently block app startup. Errors are logged and swallowed
-// (fail-open: better to boot with an empty filter than not boot at all).
+// runStartupRefresh runs the synchronous initial refresh that closes the
+// cold-start gap before DHT crawling accepts traffic.
 //
-// Pulled out of provideRefreshWorker so it's directly testable
-// without driving the whole fx wiring.
-func runStartupRefresh(ctx context.Context, mgr csamblocklist.Manager, log *zap.SugaredLogger, budget time.Duration) {
-	if !mgr.Enabled() {
-		return
+// External HTTP feeds remain bounded and fail-open so a slow upstream feed
+// cannot brick startup, while a database-backed local observations store
+// fails closed when csam_local_observations cannot be loaded on boot.
+func runStartupRefresh(ctx context.Context, mgr csamblocklist.Manager, log *zap.SugaredLogger, budget time.Duration) error {
+	hasLocal := false
+	if ls, ok := mgr.(interface{ HasLocalStore() bool }); ok {
+		hasLocal = ls.HasLocalStore()
+	}
+	if !mgr.Enabled() && !hasLocal {
+		return nil
 	}
 	refreshCtx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()
 	if err := mgr.Refresh(refreshCtx); err != nil {
+		if errors.Is(err, context.Canceled) && ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if hasLocal && (errors.Is(err, csamblocklist.ErrLocalObservationsLoad) || errors.Is(err, context.DeadlineExceeded)) {
+			log.Errorw(
+				"initial CSAM local observations load failed; aborting startup fail-closed",
+				"budget", budget.String(),
+				"err", err,
+			)
+			return err
+		}
 		switch {
 		case errors.Is(err, context.DeadlineExceeded):
 			log.Warnw(
-				"initial CSAM blocklist refresh timed out; continuing with empty filter",
+				"initial CSAM blocklist feed refresh timed out; continuing",
 				"budget", budget.String(),
 			)
 		case errors.Is(err, context.Canceled):
-			// Outer context was cancelled — caller is shutting down.
-			// No further logging needed.
-			return
+			return nil
 		default:
 			log.Warnw(
-				"initial CSAM blocklist refresh had errors; continuing",
+				"initial CSAM blocklist feed refresh had errors; continuing",
 				"err", err,
 			)
 		}
 	}
+	return nil
 }
 
 func provideRefreshWorker(mgr csamblocklist.Manager, sweep csamblocklist.SweepConfig, logger *zap.SugaredLogger) worker.Worker {
@@ -153,7 +165,9 @@ func provideRefreshWorker(mgr csamblocklist.Manager, sweep csamblocklist.SweepCo
 				// never accepts traffic with an empty bloom filter
 				// (review finding: "Initial blocklist refresh does
 				// not block crawler startup").
-				runStartupRefresh(startCtx, mgr, log, initialRefreshBudget)
+				if err := runStartupRefresh(startCtx, mgr, log, initialRefreshBudget); err != nil {
+					return err
+				}
 
 				// Periodic-refresh loop runs in the background for
 				// the remainder of app lifetime.
