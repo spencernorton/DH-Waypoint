@@ -17,7 +17,7 @@
 services:
 
   dh-waypoint:
-    image: ghcr.io/spencernorton/dh-waypoint:${DH_WAYPOINT_VERSION:-v6.0.5}
+    image: ghcr.io/spencernorton/dh-waypoint:${DH_WAYPOINT_VERSION:-v6.0.6}
     container_name: dh-waypoint
     restart: unless-stopped
     stop_grace_period: 20s
@@ -229,7 +229,7 @@ services:
       PROWLARR_IMPORT_SOURCE: ${PROWLARR_IMPORT_SOURCE:-prowlarr-sync}
 
   dh-tmsd:
-    image: ghcr.io/spencernorton/dh-waypoint-tms:${DH_WAYPOINT_VERSION:-v6.0.5}
+    image: ghcr.io/spencernorton/dh-waypoint-tms:${DH_WAYPOINT_VERSION:-v6.0.6}
     container_name: dh-waypoint-tmsd
     init: true
     restart: unless-stopped

@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 6.0.6 — 2026-11-24
+
+### Fixed
+- **Payload-backed processor priority scheduling (`internal/processors`):** Support both `piece-bound-media-format-v2` and `piece-bound-media-format-v1` contracts across both required and previous rollover payload verifier digests via a materialized backward index-only scan on `processor_payload_reviews_serving_idx` (`ORDER BY expires_at ASC, info_hash DESC`) so expiring-soonest verified torrents queue in ~2.5 ms without sorting.
+
 ## 6.0.5 — 2026-11-23
 
 Eliminates Torznab `2060`/`5070` `dh-tmsd` bypasses, adds structured `dh-tmsd` filtering for Torznab, REST v1, and eligible GraphQL searches, trims Go core live heap/GC overhead, and prioritizes PayloadProof-verified torrents ahead of linear processor catch-up.
