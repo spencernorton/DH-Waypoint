@@ -91,8 +91,8 @@ type Store struct {
 	transport        *Transport
 	metrics          *Metrics
 	// Resume points of the bounded outbox walks; a restart starts a new cycle.
-	outboxCursor, refillCursor keyset
-	scanHold                   time.Duration // scanHoldBound outside tests
+	outboxCursor, refillCursor, payloadReviewCursor keyset
+	scanHold                                        time.Duration // scanHoldBound outside tests
 }
 
 func NewStore(c Config, p lazy.Lazy[*pgxpool.Pool], policy string) (*Store, error) {

@@ -3,6 +3,7 @@ package dhtms
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -26,10 +27,29 @@ const (
 	outboxBatchLimit = 2000
 )
 
-type catalogKey struct {
-	contentType string
-	source      string
-	id          string
+// catalogDigest is a pointer-free 128-bit digest of (contentType, source, id)
+// so Go's GC marks the 200K+ entry catalogEntity map noscan and avoids storing
+// three heap-allocated strings per catalog row.
+type catalogDigest [16]byte
+
+func makeCatalogDigest(contentType, source, id string) catalogDigest {
+	var stackBuf [128]byte
+	n := len(contentType) + 1 + len(source) + 1 + len(id)
+	var buf []byte
+	if n <= len(stackBuf) {
+		buf = stackBuf[:0]
+	} else {
+		buf = make([]byte, 0, n)
+	}
+	buf = append(buf, contentType...)
+	buf = append(buf, 0)
+	buf = append(buf, source...)
+	buf = append(buf, 0)
+	buf = append(buf, id...)
+	sum := sha256.Sum256(buf)
+	var out catalogDigest
+	copy(out[:], sum[:16])
+	return out
 }
 
 // Syncer synchronizes PostgreSQL catalogue, serving policy, metadata, and swarm
@@ -48,7 +68,7 @@ type Syncer struct {
 	lastSeq               int64
 	lastLSN               uint64
 	lastGenerationID      uint64
-	catalogEntity         map[catalogKey]uint32
+	catalogEntity         map[catalogDigest]uint32
 	pendingRebuild        bool
 	firstNewHashAt        time.Time
 	hasLegacyTorrentFiles bool
@@ -80,7 +100,7 @@ func NewSyncer(
 		cfg:           cfg,
 		metrics:       metrics,
 		logger:        logger.Named(syncWorkerKey),
-		catalogEntity: make(map[catalogKey]uint32),
+		catalogEntity: make(map[catalogDigest]uint32),
 	}
 }
 
@@ -154,7 +174,7 @@ func (s *Syncer) fullBuildLocked(ctx context.Context) (*BuildGenerationResponse,
 	}
 
 	// Load content catalog + alternate identifiers first so docs resolve entity_id.
-	altMap := make(map[catalogKey][][2]string)
+	altMap := make(map[catalogDigest][][2]string)
 	attrRows, err := tx.Query(ctx, `SELECT content_type, content_source, content_id, source, value
 FROM content_attributes
 WHERE key = 'id' AND value <> ''`)
@@ -169,7 +189,7 @@ WHERE key = 'id' AND value <> ''`)
 			s.metrics.RecordSync("full_build", "error")
 			return nil, fmt.Errorf("dhtms sync: scan content_attributes: %w", err)
 		}
-		k := catalogKey{contentType: ct, source: csrc, id: cid}
+		k := makeCatalogDigest(ct, csrc, cid)
 		altMap[k] = append(altMap[k], [2]string{src, val})
 	}
 	if err := attrRows.Err(); err != nil {
@@ -179,7 +199,7 @@ WHERE key = 'id' AND value <> ''`)
 	}
 	attrRows.Close()
 
-	entityMap := make(map[catalogKey]uint32)
+	entityMap := make(map[catalogDigest]uint32)
 	var catalogLines []BuildCatalogLine
 	catRows, err := tx.Query(ctx, `SELECT type, source, id, title, COALESCE(original_title, ''), COALESCE(release_year, 0), COALESCE(adult, false)
 FROM content
@@ -198,7 +218,7 @@ ORDER BY type, source, id`)
 			s.metrics.RecordSync("full_build", "error")
 			return nil, fmt.Errorf("dhtms sync: scan content catalog: %w", err)
 		}
-		k := catalogKey{contentType: ct, source: src, id: id}
+		k := makeCatalogDigest(ct, src, id)
 		eid := nextEntityID
 		nextEntityID++
 		entityMap[k] = eid
@@ -437,6 +457,7 @@ func (s *Syncer) buildTorrentExportSQL(filterByHashes bool, includeLegacyTorrent
 
 	tcJoinSQL := `LEFT JOIN LATERAL (
 	SELECT tc0.content_type, tc0.content_source, tc0.content_id, tc0.video_resolution,
+	       tc0.video_source, tc0.video_codec, tc0.video_3d, tc0.is_anime,
 	       tc0.published_at, tc0.seeders, tc0.leechers
 	FROM torrent_contents tc0
 	WHERE tc0.info_hash = torrents.info_hash
@@ -449,7 +470,8 @@ func (s *Syncer) buildTorrentExportSQL(filterByHashes bool, includeLegacyTorrent
 		tcJoinSQL = `LEFT JOIN (
 	SELECT DISTINCT ON (tc0.info_hash)
 	       tc0.info_hash, tc0.content_type, tc0.content_source, tc0.content_id,
-	       tc0.video_resolution, tc0.published_at, tc0.seeders, tc0.leechers
+	       tc0.video_resolution, tc0.video_source, tc0.video_codec, tc0.video_3d, tc0.is_anime,
+	       tc0.published_at, tc0.seeders, tc0.leechers
 	FROM torrent_contents tc0
 	ORDER BY tc0.info_hash, (tc0.content_id IS NOT NULL) DESC, tc0.updated_at DESC
 ) tc ON tc.info_hash = torrents.info_hash`
@@ -475,6 +497,10 @@ func (s *Syncer) buildTorrentExportSQL(filterByHashes bool, includeLegacyTorrent
 	COALESCE(tc.content_source, '') AS content_source,
 	COALESCE(tc.content_id, '') AS content_id,
 	COALESCE(tc.video_resolution, '') AS video_resolution,
+	COALESCE(tc.video_source, '') AS video_source,
+	COALESCE(tc.video_codec, '') AS video_codec,
+	COALESCE(tc.video_3d, '') AS video_3d,
+	COALESCE(tc.is_anime, false) AS is_anime,
 	COALESCE(EXTRACT(EPOCH FROM COALESCE(tc.published_at, torrents.created_at))::bigint, 0) AS published_epoch,
 	COALESCE(tc.seeders, -1) AS seeders,
 	COALESCE(tc.leechers, -1) AS leechers,
@@ -510,7 +536,7 @@ type exportedTorrentRow struct {
 	checkedMin uint32
 }
 
-func scanExportedRow(rows pgx.Rows, entityMap map[catalogKey]uint32) (exportedTorrentRow, error) {
+func scanExportedRow(rows pgx.Rows, entityMap map[catalogDigest]uint32) (exportedTorrentRow, error) {
 	var (
 		ih             []byte
 		ihv2           []byte
@@ -522,6 +548,10 @@ func scanExportedRow(rows pgx.Rows, entityMap map[catalogKey]uint32) (exportedTo
 		contentSource  string
 		contentID      string
 		videoRes       string
+		videoSrc       string
+		videoCodec     string
+		video3D        string
+		isAnime        bool
 		publishedEpoch int64
 		seeders        int32
 		leechers       int32
@@ -536,6 +566,7 @@ func scanExportedRow(rows pgx.Rows, entityMap map[catalogKey]uint32) (exportedTo
 	if err := rows.Scan(
 		&ih, &ihv2, &name, &sizeBytes, &isPrivate, &createdEpoch,
 		&contentType, &contentSource, &contentID, &videoRes,
+		&videoSrc, &videoCodec, &video3D, &isAnime,
 		&publishedEpoch, &seeders, &leechers, &releaseYear,
 		&rawFilePaths, &rawFileSizes, &rawFileExts,
 		&baseOK, &pubOK, &payloadExp,
@@ -555,7 +586,7 @@ func scanExportedRow(rows pgx.Rows, entityMap map[catalogKey]uint32) (exportedTo
 
 	var eid uint32
 	if contentType != "" && contentSource != "" && contentID != "" {
-		eid = entityMap[catalogKey{contentType: contentType, source: contentSource, id: contentID}]
+		eid = entityMap[makeCatalogDigest(contentType, contentSource, contentID)]
 	}
 
 	var yr uint16
@@ -613,6 +644,11 @@ func scanExportedRow(rows pgx.Rows, entityMap map[catalogKey]uint32) (exportedTo
 		PublishedEpoch:      pubEp,
 		CreatedEpoch:        crEp,
 		Resolution:          ResolutionToCode(videoRes),
+		IsAnime:             isAnime,
+		Is3D:                Video3DToCode(video3D) != 0,
+		Video3D:             Video3DToCode(video3D),
+		VideoSource:         VideoSourceToCode(videoSrc),
+		VideoCodec:          VideoCodecToCode(videoCodec),
 		Files:               files,
 		IsPrivate:           isPrivate,
 		Excluded:            !baseOK && !isPrivate,
@@ -639,7 +675,7 @@ func scanExportedRow(rows pgx.Rows, entityMap map[catalogKey]uint32) (exportedTo
 	}, nil
 }
 
-func scanBuildDocRow(rows pgx.Rows, entityMap map[catalogKey]uint32) (BuildDocLine, error) {
+func scanBuildDocRow(rows pgx.Rows, entityMap map[catalogDigest]uint32) (BuildDocLine, error) {
 	rec, err := scanExportedRow(rows, entityMap)
 	if err != nil {
 		return BuildDocLine{}, err
@@ -921,6 +957,11 @@ func (s *Syncer) applyOutboxBatchLocked(
 				SizeBytes:      rec.doc.SizeBytes,
 				ContentType:    rec.doc.ContentType,
 				Resolution:     rec.doc.Resolution,
+				IsAnime:        rec.doc.IsAnime,
+				Is3D:           rec.doc.Is3D,
+				Video3D:        rec.doc.Video3D,
+				VideoSource:    rec.doc.VideoSource,
+				VideoCodec:     rec.doc.VideoCodec,
 				EntityID:       rec.doc.EntityID,
 				Year:           rec.doc.Year,
 				PublishedEpoch: rec.doc.PublishedEpoch,
@@ -983,6 +1024,11 @@ func (s *Syncer) applyOutboxBatchLocked(
 				SizeBytes:      rec.doc.SizeBytes,
 				ContentType:    rec.doc.ContentType,
 				Resolution:     rec.doc.Resolution,
+				IsAnime:        rec.doc.IsAnime,
+				Is3D:           rec.doc.Is3D,
+				Video3D:        rec.doc.Video3D,
+				VideoSource:    rec.doc.VideoSource,
+				VideoCodec:     rec.doc.VideoCodec,
 				EntityID:       rec.doc.EntityID,
 				Year:           rec.doc.Year,
 				PublishedEpoch: rec.doc.PublishedEpoch,

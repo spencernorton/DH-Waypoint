@@ -73,6 +73,16 @@ pub struct BuildDocRecord {
     #[serde(default)]
     pub resolution: u8,
     #[serde(default)]
+    pub is_anime: bool,
+    #[serde(default)]
+    pub is_3d: bool,
+    #[serde(default)]
+    pub video_3d: u8,
+    #[serde(default)]
+    pub video_source: u8,
+    #[serde(default)]
+    pub video_codec: u8,
+    #[serde(default)]
     pub files: Vec<BuildFileInput>,
     #[serde(default)]
     pub is_private: bool,
@@ -380,6 +390,12 @@ fn write_parsed_doc<W: Write>(w: &mut W, p: &ParsedDoc) -> Result<(), FormatErro
     if p.doc.pub_approved {
         flags |= 1 << 10;
     }
+    if p.doc.is_anime {
+        flags |= 1 << 11;
+    }
+    if p.doc.is_3d {
+        flags |= 1 << 12;
+    }
     write_u16(w, flags)?;
     w.write_all(&p.v1)?;
     if let Some(v2) = p.v2 {
@@ -387,6 +403,9 @@ fn write_parsed_doc<W: Write>(w: &mut W, p: &ParsedDoc) -> Result<(), FormatErro
     }
     write_u8(w, p.doc.content_type)?;
     write_u8(w, p.doc.resolution)?;
+    write_u8(w, p.doc.video_3d)?;
+    write_u8(w, p.doc.video_source)?;
+    write_u8(w, p.doc.video_codec)?;
     write_u16(w, p.doc.year)?;
     write_u32(w, p.doc.entity_id)?;
     write_u32(w, p.doc.published_epoch)?;
@@ -426,6 +445,9 @@ fn read_parsed_doc<R: Read>(r: &mut R) -> Result<Option<ParsedDoc>, FormatError>
     };
     let content_type = read_u8(r)?;
     let resolution = read_u8(r)?;
+    let video_3d = read_u8(r)?;
+    let video_source = read_u8(r)?;
+    let video_codec = read_u8(r)?;
     let year = read_u16(r)?;
     let entity_id = read_u32(r)?;
     let published_epoch = read_u32(r)?;
@@ -460,6 +482,11 @@ fn read_parsed_doc<R: Read>(r: &mut R) -> Result<Option<ParsedDoc>, FormatError>
             published_epoch,
             created_epoch,
             resolution,
+            is_anime: (flags & (1 << 11)) != 0,
+            is_3d: (flags & (1 << 12)) != 0,
+            video_3d,
+            video_source,
+            video_codec,
             files,
             is_private: (flags & (1 << 2)) != 0,
             quarantined: (flags & (1 << 3)) != 0,
@@ -911,6 +938,34 @@ where
         } else {
             parsed.resolution
         };
+        let v3d = if doc.video_3d != 0 {
+            doc.video_3d.min(3)
+        } else if doc.is_3d {
+            1
+        } else {
+            0
+        };
+        let (src_code, codec_code, is_anime) = if doc.authoritative_policy {
+            (
+                doc.video_source.min(15),
+                doc.video_codec.min(15),
+                doc.is_anime,
+            )
+        } else {
+            (
+                if doc.video_source != 0 {
+                    doc.video_source.min(15)
+                } else {
+                    parsed.source.min(15)
+                },
+                if doc.video_codec != 0 {
+                    doc.video_codec.min(15)
+                } else {
+                    parsed.codec.min(15)
+                },
+                doc.is_anime || parsed.is_anime_cue,
+            )
+        };
         let meta = MetaRow {
             size_bytes: total_size,
             entity_id: doc.entity_id,
@@ -918,10 +973,11 @@ where
             created_epoch: created_ep,
             files_count: file_tuples.len() as u32,
             year: if doc.year != 0 { doc.year } else { parsed.year },
-            flags_src: MetaRow::pack_flags(
-                parsed.source,
-                parsed.codec,
-                parsed.is_anime_cue,
+            flags_src: MetaRow::pack_flags_v2(
+                src_code,
+                codec_code,
+                is_anime,
+                v3d,
                 true,
                 false,
                 parsed.hdr_flags != 0,
@@ -938,6 +994,18 @@ where
         sb.facet_ct[ct as usize].insert(d);
         if (res as usize) < 10 {
             sb.facet_res[res as usize].insert(d);
+        }
+        if is_anime {
+            sb.facet_anime.insert(d);
+        }
+        if v3d != 0 {
+            sb.facet_3d.insert(d);
+        }
+        if src_code != 0 && (src_code as usize) < sb.facet_src.len() {
+            sb.facet_src[src_code as usize].insert(d);
+        }
+        if codec_code != 0 && (codec_code as usize) < sb.facet_codec.len() {
+            sb.facet_codec[codec_code as usize].insert(d);
         }
         if doc.entity_id != 0 {
             sb.facet_linked.insert(d);
@@ -1139,6 +1207,8 @@ mod tests {
                 tv_episode: None,
                 include_facets: false,
                 include_files: true,
+                any_clauses: vec![],
+                min_seeders: None,
                 now_epoch: None,
             })
             .unwrap();
@@ -1156,6 +1226,193 @@ mod tests {
             sub_err,
             Err(crate::engine::DaemonError::TrigramsDisabled)
         ));
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn test_structured_filter_clauses_3d_anime_source_codec_and_l0_wal_roundtrip() {
+        use crate::engine::{
+            FilterClause, L0UpsertItem, L0UpsertRequest, RssRequest, SearchRequest,
+        };
+
+        let base =
+            std::env::temp_dir().join(format!("dhtms_facets_v2_test_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let db = base.join("db");
+        let wal = base.join("wal");
+
+        let now = 1_800_000_000u32;
+        let h_3d = format!("{:040x}", 1);
+        let h_anime = format!("{:040x}", 2);
+        let h_plain = format!("{:040x}", 3);
+        let h_l0_anime = format!("{:040x}", 4);
+
+        let ndjson = format!(
+            concat!(
+                r#"{{"kind":"header","pg_lsn":10,"lease_ttl_ms":60000,"pg_lsn_text":"0/A","index_trigrams":false,"unique_hashes":true}}"#,
+                "
+",
+                r#"{{"kind":"doc","info_hash_v1":"{h_3d}","name":"Avatar.2009.1080p.3D.SBS.BluRay.x265","size_bytes":10000,"content_type":1,"resolution":6,"video_3d":2,"video_source":9,"video_codec":3,"published_epoch":{t1},"created_epoch":{t1},"authoritative_policy":true,"pub_approved":true,"seeders":25,"leechers":3}}"#,
+                "
+",
+                r#"{{"kind":"doc","info_hash_v1":"{h_anime}","name":"[SubsPlease] Frieren - 01 (1080p) [AV1]","size_bytes":2000,"content_type":2,"resolution":6,"is_anime":true,"video_source":7,"video_codec":9,"published_epoch":{t2},"created_epoch":{t2},"authoritative_policy":true,"pub_approved":true,"seeders":50,"leechers":2}}"#,
+                "
+",
+                r#"{{"kind":"doc","info_hash_v1":"{h_plain}","name":"Plain.Show.S01E01.720p.WEBRip.H264","size_bytes":1500,"content_type":2,"resolution":5,"is_anime":false,"video_source":8,"video_codec":1,"published_epoch":{t3},"created_epoch":{t3},"authoritative_policy":true,"pub_approved":true,"seeders":2,"leechers":1}}"#,
+                "
+"
+            ),
+            h_3d = h_3d,
+            h_anime = h_anime,
+            h_plain = h_plain,
+            t1 = now - 30,
+            t2 = now - 20,
+            t3 = now - 10,
+        );
+
+        build_generation_from_ndjson_with_limits(Cursor::new(&ndjson), &db, 1, 2, 10_000_000)
+            .unwrap();
+
+        {
+            let eng = DaemonEngine::open(&db, &wal, 10, 60_000).unwrap();
+
+            // 1. 2060 (Movies 3D) filter returns only the 3D movie with exact video_3d=2, source=9, codec=3.
+            let r3d = eng
+                .handle_rss(RssRequest {
+                    content_type: None,
+                    tier: "base".into(),
+                    limit: 10,
+                    offset: 0,
+                    include_files: false,
+                    include_total: true,
+                    any_clauses: vec![FilterClause {
+                        content_type: Some(1),
+                        require_3d: true,
+                        ..Default::default()
+                    }],
+                    min_seeders: None,
+                    now_epoch: None,
+                })
+                .unwrap();
+            assert_eq!(r3d.docs.len(), 1);
+            assert_eq!(r3d.total_count, Some(1));
+            assert_eq!(r3d.docs[0].video_3d, 2);
+            assert_eq!(r3d.docs[0].video_source, 9);
+            assert_eq!(r3d.docs[0].video_codec, 3);
+
+            // 2. 5070 (TV Anime) filter returns only the anime TV release with is_anime=true, codec=9 (AV1).
+            let ranime = eng
+                .handle_rss(RssRequest {
+                    content_type: None,
+                    tier: "base".into(),
+                    limit: 10,
+                    offset: 0,
+                    include_files: false,
+                    include_total: true,
+                    any_clauses: vec![FilterClause {
+                        content_type: Some(2),
+                        require_anime: true,
+                        ..Default::default()
+                    }],
+                    min_seeders: None,
+                    now_epoch: None,
+                })
+                .unwrap();
+            assert_eq!(ranime.docs.len(), 1);
+            assert_eq!(ranime.total_count, Some(1));
+            assert!(ranime.docs[0].is_anime);
+            assert_eq!(ranime.docs[0].video_codec, 9);
+
+            // 3. Combined video_source + video_codec + min_seeders on SearchRequest.
+            let sr = eng
+                .handle_search(SearchRequest {
+                    query: "1080p".into(),
+                    mode: "and".into(),
+                    tier: "base".into(),
+                    limit: 10,
+                    tv_season: None,
+                    tv_episode: None,
+                    include_facets: true,
+                    include_files: false,
+                    any_clauses: vec![FilterClause {
+                        video_source: Some(9),
+                        video_codec: Some(3),
+                        ..Default::default()
+                    }],
+                    min_seeders: Some(20),
+                    now_epoch: None,
+                })
+                .unwrap();
+            assert_eq!(sr.docs.len(), 1);
+            assert_eq!(sr.total_facets, Some(1));
+            assert_eq!(sr.docs[0].info_hash_v1.as_deref(), Some(h_3d.as_str()));
+
+            // 4. Live L0 dynamic anime insert persists flags through WAL replay.
+            let up = eng
+                .handle_l0_upsert(L0UpsertRequest {
+                    docs: vec![L0UpsertItem {
+                        doc_id: None,
+                        info_hash_v1: Some(h_l0_anime.clone()),
+                        info_hash_v2: None,
+                        name: "[Erai-raws] Dandadan - 02 [1080p][HEVC]".into(),
+                        size_bytes: 1800,
+                        content_type: 2,
+                        resolution: 6,
+                        is_anime: true,
+                        is_3d: false,
+                        video_3d: 0,
+                        video_source: 7,
+                        video_codec: 8,
+                        entity_id: 0,
+                        year: 2026,
+                        published_epoch: now,
+                        created_epoch: now,
+                        files_count: 1,
+                        file_paths: vec![],
+                        files: vec![],
+                    }],
+                    sync: true,
+                })
+                .unwrap();
+            let dyn_id = up.doc_ids[0];
+            let grant = serde_json::json!({
+                "ops": [{"op": "grant_base", "doc_id": dyn_id}],
+                "pg_lsn": 11,
+                "sync": true,
+                "rebuild_snapshot": true
+            });
+            eng.handle_policy_batch(&serde_json::to_vec(&grant).unwrap())
+                .unwrap();
+        }
+
+        // Reopen from WAL and verify dynamic L0 anime doc matches 5070 filter and preserves flags!
+        let eng2 = DaemonEngine::open(&db, &wal, 11, 60_000).unwrap();
+        let ranime2 = eng2
+            .handle_rss(RssRequest {
+                content_type: None,
+                tier: "base".into(),
+                limit: 10,
+                offset: 0,
+                include_files: false,
+                include_total: true,
+                any_clauses: vec![FilterClause {
+                    content_type: Some(2),
+                    require_anime: true,
+                    ..Default::default()
+                }],
+                min_seeders: None,
+                now_epoch: None,
+            })
+            .unwrap();
+        assert_eq!(ranime2.docs.len(), 2);
+        assert_eq!(ranime2.total_count, Some(2));
+        assert_eq!(
+            ranime2.docs[0].info_hash_v1.as_deref(),
+            Some(h_l0_anime.as_str())
+        );
+        assert!(ranime2.docs[0].is_anime);
+        assert_eq!(ranime2.docs[0].video_codec, 8);
 
         let _ = std::fs::remove_dir_all(&base);
     }

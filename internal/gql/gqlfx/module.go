@@ -4,6 +4,7 @@ import (
 	"github.com/99designs/gqlgen/graphql"
 	"github.com/spencernorton/DH-Waypoint/internal/blocking"
 	"github.com/spencernorton/DH-Waypoint/internal/database/dao"
+	"github.com/spencernorton/DH-Waypoint/internal/database/dhtms"
 	"github.com/spencernorton/DH-Waypoint/internal/database/search"
 	"github.com/spencernorton/DH-Waypoint/internal/evidence"
 	"github.com/spencernorton/DH-Waypoint/internal/gql"
@@ -12,10 +13,12 @@ import (
 	"github.com/spencernorton/DH-Waypoint/internal/gql/resolvers"
 	"github.com/spencernorton/DH-Waypoint/internal/health"
 	"github.com/spencernorton/DH-Waypoint/internal/lazy"
+	"github.com/spencernorton/DH-Waypoint/internal/leanmode"
 	"github.com/spencernorton/DH-Waypoint/internal/metrics/queuemetrics"
 	"github.com/spencernorton/DH-Waypoint/internal/metrics/torrentmetrics"
 	"github.com/spencernorton/DH-Waypoint/internal/processor"
 	"github.com/spencernorton/DH-Waypoint/internal/queue/manager"
+	"github.com/spencernorton/DH-Waypoint/internal/serving"
 	"github.com/spencernorton/DH-Waypoint/internal/worker"
 	"go.uber.org/fx"
 )
@@ -85,6 +88,10 @@ func New() fx.Option {
 							Processor:            pr,
 							BlockingManager:      bm,
 							EvidenceStore:        p.EvidenceStore,
+							DHTMSClient:          p.DHTMSClient,
+							ServingPolicy:        p.ServingPolicy,
+							DHTMSMetrics:         p.DHTMSMetrics,
+							LeanStore:            p.LeanStore,
 						}, nil
 					}),
 				}
@@ -114,6 +121,10 @@ type Params struct {
 	Processor            lazy.Lazy[processor.Processor]
 	BlockingManager      lazy.Lazy[blocking.Manager]
 	EvidenceStore        *evidence.Store
+	DHTMSClient          *dhtms.Client   `optional:"true"`
+	ServingPolicy        *serving.Policy `optional:"true"`
+	DHTMSMetrics         *dhtms.Metrics  `optional:"true"`
+	LeanStore            *leanmode.Store `optional:"true"`
 }
 
 type Result struct {

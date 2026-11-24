@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+## 6.0.5 — 2026-11-23
+
+Eliminates Torznab `2060`/`5070` `dh-tmsd` bypasses, adds structured `dh-tmsd` filtering for Torznab, REST v1, and eligible GraphQL searches, trims Go core live heap/GC overhead, and prioritizes PayloadProof-verified torrents ahead of linear processor catch-up.
+
+### Added
+
+- **Structured `dh-tmsd` facets & `FilterClause` disjunctions (`dhtms/`, `internal/database/dhtms/`).** Packs `video_3d` (2-bit exact enum) alongside `is_anime`, `video_source`, and `video_codec` into `MetaRow`'s existing 32-byte `flags_src` field (zero row-size growth) and backward-compatible `FEX2` `facets_static.bin` / L0 WAL v2 extensions; adds `any_clauses`, `min_seeders`, and `include_total` across `/v1/search` and `/v1/rss`.
+- **Direct `dh-tmsd` routing for eligible GraphQL `torrentContent.search` queries (`internal/gql/`).** Routes GraphQL search and browse queries whose selection set and input filters are fully satisfied by `dh-tmsd` directly through the sidecar with automatic fail-closed PostgreSQL fallback, while cleanly bypassing UI/aggregation queries that require PostgreSQL-only relations.
+
+### Fixed
+
+- **Eliminate Torznab `2060` (`Movies/3D`) & `5070` (`TV/Anime`) `dh-tmsd` bypasses (`internal/torznab/adapter/dhtms.go`).** Collapses subcategories subsumed by a present parent (`2000,2040,2060` -> `2000`, `5000,5040,5070` -> `5000`) and evaluates dedicated `2060`/`5070` and compound category lists natively in `dh-tmsd`, while hydrating `is_anime`, `video_3d`, `video_source`, and `video_codec` on returned hits so `5070` anime category and video codec attributes match PostgreSQL.
+- **Serve REST v1 `video_source`, `video_codec`, and `min_seeders` directly from `dh-tmsd` (`internal/restapi/dhtms.go`).** Delegates common video metadata and seeder filters to `dh-tmsd` while preserving 400 validation errors for invalid enum inputs and PostgreSQL bypass for `hdr`/cursor/custom sort queries.
+- **Prioritize unexpired PayloadProof-verified torrents for required publication re-review (`internal/processors/{store,queue}.go`).** Adds a bounded keyset-walked priority class ahead of linear `scan_after` catch-up when both a required publication processor and required payload verifier are configured, allowing active payload-verified torrents to complete generation re-reviews in minutes without advancing or skipping the linear catch-up cursor.
+- **Lower Go core steady-state heap & GC scan overhead (`internal/database/dhtms/sync.go`, `internal/csamblocklist/service.go`).** Replaces `Syncer.catalogEntity`'s 3-string map key with a pointer-free `[16]byte` SHA-256 digest (`noscan` map buckets, eliminating `200K+` live string objects), and releases the raw `csamblocklist.lastGoodLocal` slice once built into the active bloom filter in local-only mode while retaining full protection across transient database errors.
+
 ## 6.0.4 — 2026-11-23
 
 ### Fixed

@@ -48,13 +48,6 @@ func (a Adapter) canServeFromDHTMS(req torznab.SearchRequest) bool {
 		a.dhtmsMetrics.RecordRead("torznab", "bypass")
 		return false
 	}
-	// Delegate specialized categories not tracked in DH-TMS hot rows to PostgreSQL.
-	for _, cat := range req.Cats {
-		if cat == torznab.CategoryMovies3D.ID || cat == torznab.CategoryTVAnime.ID {
-			a.dhtmsMetrics.RecordRead("torznab", "bypass")
-			return false
-		}
-	}
 	return true
 }
 
@@ -72,8 +65,13 @@ func (a Adapter) trySearchDHTMS(
 	if fetchLimit > 500 {
 		fetchLimit = 500
 	}
-	// Over-fetch modestly when local post-filters or category filters are active.
-	if len(req.Cats) > 0 || a.liveness != nil || a.verdicts != nil || !a.freshness.IsZero() {
+	ctOpt, anyClauses, impossible := torznabFilterClauses(req)
+	if impossible && len(identifiers) == 0 {
+		a.dhtmsMetrics.RecordRead("torznab", "hit")
+		return search.TorrentContentResult{}, true
+	}
+	// Over-fetch modestly only when local post-filters (year/liveness/verdicts/freshness) are active.
+	if req.Year.Valid || a.liveness != nil || a.verdicts != nil || !a.freshness.IsZero() {
 		if fetchLimit < 200 {
 			fetchLimit = 200
 		}
@@ -87,9 +85,10 @@ func (a Adapter) trySearchDHTMS(
 	}
 
 	var (
-		collected []taggedHit
-		seen      = make(map[string]struct{})
-		isIDQuery = len(identifiers) > 0
+		collected       []taggedHit
+		seen            = make(map[string]struct{})
+		isIDQuery       = len(identifiers) > 0
+		delegatedOffset bool
 	)
 	addHit := func(h dhtms.DocHit, src, cid string, linked bool) {
 		if len(h.InfoHashV1) != 40 {
@@ -172,13 +171,19 @@ func (a Adapter) trySearchDHTMS(
 		collected = append(collected, unlinkedHits...)
 
 	case effectiveSearchQuery(req) != "":
+		searchClauses := anyClauses
+		if len(searchClauses) == 0 && ctOpt != nil {
+			c := *ctOpt
+			searchClauses = []dhtms.FilterClause{{ContentType: &c}}
+		}
 		sr, err := a.dhtms.Search(ctx, dhtms.SearchRequest{
-			Query:     effectiveSearchQuery(req),
-			Mode:      dhtms.ModeAnd,
-			Tier:      tier,
-			Limit:     fetchLimit,
-			TVSeason:  seasonPtr,
-			TVEpisode: episodePtr,
+			Query:      effectiveSearchQuery(req),
+			Mode:       dhtms.ModeAnd,
+			Tier:       tier,
+			Limit:      fetchLimit,
+			TVSeason:   seasonPtr,
+			TVEpisode:  episodePtr,
+			AnyClauses: searchClauses,
 		})
 		if err != nil {
 			recordErr(err)
@@ -189,12 +194,25 @@ func (a Adapter) trySearchDHTMS(
 		}
 
 	default:
-		ctPtr := singleContentTypeForTorznab(req)
+		rssOffset := 0
+		if !req.Year.Valid && a.liveness == nil && a.verdicts == nil && a.freshness.IsZero() && a.reranker == nil {
+			// Safe to delegate offset directly when no local post-filter or reranker shrinks/reorders items.
+			rssOffset = int(offset)
+			delegatedOffset = true
+			fetchLimit = int(limit + 1)
+			if fetchLimit < 1 {
+				fetchLimit = 1
+			}
+			if fetchLimit > 500 {
+				fetchLimit = 500
+			}
+		}
 		rss, err := a.dhtms.RSS(ctx, dhtms.RSSRequest{
-			ContentType: ctPtr,
+			ContentType: ctOpt,
+			AnyClauses:  anyClauses,
 			Tier:        tier,
 			Limit:       fetchLimit,
-			Offset:      0,
+			Offset:      rssOffset,
 		})
 		if err != nil {
 			recordErr(err)
@@ -236,6 +254,9 @@ func (a Adapter) trySearchDHTMS(
 	}
 
 	start := int(offset)
+	if delegatedOffset {
+		start = 0
+	}
 	if start >= len(res.Items) {
 		res.Items = nil
 		res.HasNextPage = false
@@ -254,19 +275,201 @@ func (a Adapter) trySearchDHTMS(
 	return res, true
 }
 
-func singleContentTypeForTorznab(req torznab.SearchRequest) *uint8 {
-	var code uint8
-	switch req.Type {
-	case torznab.FunctionMovie:
-		code = dhtms.ContentTypeToCode(string(model.ContentTypeMovie))
-	case torznab.FunctionTV:
-		code = dhtms.ContentTypeToCode(string(model.ContentTypeTvShow))
-	case torznab.FunctionMusic:
-		code = dhtms.ContentTypeToCode(string(model.ContentTypeMusic))
-	default:
+// collapseSubsumedCats normalizes Torznab category lists by first merging SD+HD
+// pairs into their parent and then dropping subcategories subsumed by a present
+// parent (e.g. 2000+2040+2060 -> [2000], 5000+5040+5070 -> [5000]).
+func collapseSubsumedCats(cats []int) []int {
+	if len(cats) == 0 {
 		return nil
 	}
-	return &code
+	merged := mergeResolutionCats(cats)
+	hasMovies := slices.Contains(merged, torznab.CategoryMovies.ID)
+	hasTV := slices.Contains(merged, torznab.CategoryTV.ID)
+	hasBooks := slices.Contains(merged, torznab.CategoryBooks.ID)
+	out := make([]int, 0, len(merged))
+	for _, c := range merged {
+		if hasMovies && torznab.CategoryMovies.Has(c) && c != torznab.CategoryMovies.ID {
+			continue
+		}
+		if hasTV && torznab.CategoryTV.Has(c) && c != torznab.CategoryTV.ID {
+			continue
+		}
+		if hasBooks && c == torznab.CategoryBooksComics.ID {
+			continue
+		}
+		if !slices.Contains(out, c) {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+func hdResolutionCodes() []uint8 {
+	out := make([]uint8, 0, len(hdResolutions))
+	for _, r := range hdResolutions {
+		if code := dhtms.ResolutionToCode(r.String()); code != 0 {
+			out = append(out, code)
+		}
+	}
+	return out
+}
+
+func uhdResolutionCodes() []uint8 {
+	out := make([]uint8, 0, len(uhdResolutions))
+	for _, r := range uhdResolutions {
+		if code := dhtms.ResolutionToCode(r.String()); code != 0 {
+			out = append(out, code)
+		}
+	}
+	return out
+}
+
+func ctCodePtr(ct model.ContentType) *uint8 {
+	c := dhtms.ContentTypeToCode(string(ct))
+	return &c
+}
+
+func isPureContentTypeClause(c dhtms.FilterClause) bool {
+	return c.ContentType != nil &&
+		len(c.Resolutions) == 0 &&
+		len(c.ExcludeResolutions) == 0 &&
+		!c.RequireAnime &&
+		!c.Require3D &&
+		c.VideoSource == nil &&
+		c.VideoCodec == nil
+}
+
+// torznabFilterClauses translates req.Type AND OR(req.Cats) into DH-TMS
+// structured filter clauses (or a single content_type fast-path pointer when
+// the normalized predicate reduces to one pure content type).
+func torznabFilterClauses(req torznab.SearchRequest) (ctOpt *uint8, clauses []dhtms.FilterClause, impossible bool) {
+	var allowedCTs []uint8
+	switch req.Type {
+	case torznab.FunctionMovie:
+		allowedCTs = []uint8{dhtms.ContentTypeToCode(string(model.ContentTypeMovie))}
+	case torznab.FunctionTV:
+		allowedCTs = []uint8{dhtms.ContentTypeToCode(string(model.ContentTypeTvShow))}
+	case torznab.FunctionMusic:
+		allowedCTs = []uint8{dhtms.ContentTypeToCode(string(model.ContentTypeMusic))}
+	case torznab.FunctionAudio:
+		allowedCTs = []uint8{
+			dhtms.ContentTypeToCode(string(model.ContentTypeMusic)),
+			dhtms.ContentTypeToCode(string(model.ContentTypeAudiobook)),
+		}
+	case torznab.FunctionBook:
+		allowedCTs = []uint8{
+			dhtms.ContentTypeToCode(string(model.ContentTypeEbook)),
+			dhtms.ContentTypeToCode(string(model.ContentTypeComic)),
+			dhtms.ContentTypeToCode(string(model.ContentTypeAudiobook)),
+		}
+	}
+
+	collapsed := collapseSubsumedCats(req.Cats)
+	if len(collapsed) == 0 {
+		if len(allowedCTs) == 0 {
+			return nil, nil, false
+		}
+		if len(allowedCTs) == 1 {
+			c := allowedCTs[0]
+			return &c, nil, false
+		}
+		out := make([]dhtms.FilterClause, 0, len(allowedCTs))
+		for _, ct := range allowedCTs {
+			c := ct
+			out = append(out, dhtms.FilterClause{ContentType: &c})
+		}
+		return nil, out, false
+	}
+
+	hdCodes := hdResolutionCodes()
+	uhdCodes := uhdResolutionCodes()
+	var raw []dhtms.FilterClause
+	unconstrained := false
+
+	for _, cat := range collapsed {
+		switch {
+		case torznab.CategoryMovies.Has(cat):
+			cl := dhtms.FilterClause{ContentType: ctCodePtr(model.ContentTypeMovie)}
+			switch cat {
+			case torznab.CategoryMoviesSD.ID:
+				cl.ExcludeResolutions = hdCodes
+			case torznab.CategoryMoviesHD.ID:
+				cl.Resolutions = hdCodes
+			case torznab.CategoryMoviesUHD.ID:
+				cl.Resolutions = uhdCodes
+			case torznab.CategoryMovies3D.ID:
+				cl.Require3D = true
+			}
+			raw = append(raw, cl)
+		case torznab.CategoryTV.Has(cat):
+			cl := dhtms.FilterClause{ContentType: ctCodePtr(model.ContentTypeTvShow)}
+			switch cat {
+			case torznab.CategoryTVSD.ID:
+				cl.ExcludeResolutions = hdCodes
+			case torznab.CategoryTVHD.ID:
+				cl.Resolutions = hdCodes
+			case torznab.CategoryTVUHD.ID:
+				cl.Resolutions = uhdCodes
+			case torznab.CategoryTVAnime.ID:
+				cl.RequireAnime = true
+			}
+			raw = append(raw, cl)
+		case torznab.CategoryXXX.Has(cat):
+			raw = append(raw, dhtms.FilterClause{ContentType: ctCodePtr(model.ContentTypeXxx)})
+		case torznab.CategoryPC.Has(cat):
+			raw = append(raw,
+				dhtms.FilterClause{ContentType: ctCodePtr(model.ContentTypeSoftware)},
+				dhtms.FilterClause{ContentType: ctCodePtr(model.ContentTypeGame)},
+			)
+		case torznab.CategoryAudioAudiobook.Has(cat):
+			raw = append(raw, dhtms.FilterClause{ContentType: ctCodePtr(model.ContentTypeAudiobook)})
+		case torznab.CategoryAudio.Has(cat):
+			raw = append(raw, dhtms.FilterClause{ContentType: ctCodePtr(model.ContentTypeMusic)})
+		case torznab.CategoryBooksComics.Has(cat):
+			raw = append(raw, dhtms.FilterClause{ContentType: ctCodePtr(model.ContentTypeComic)})
+		case torznab.CategoryBooks.Has(cat):
+			raw = append(raw,
+				dhtms.FilterClause{ContentType: ctCodePtr(model.ContentTypeEbook)},
+				dhtms.FilterClause{ContentType: ctCodePtr(model.ContentTypeComic)},
+				dhtms.FilterClause{ContentType: ctCodePtr(model.ContentTypeAudiobook)},
+			)
+		default:
+			unconstrained = true
+		}
+	}
+
+	if unconstrained {
+		if len(allowedCTs) == 0 {
+			return nil, nil, false
+		}
+		if len(allowedCTs) == 1 {
+			c := allowedCTs[0]
+			return &c, nil, false
+		}
+		out := make([]dhtms.FilterClause, 0, len(allowedCTs))
+		for _, ct := range allowedCTs {
+			c := ct
+			out = append(out, dhtms.FilterClause{ContentType: &c})
+		}
+		return nil, out, false
+	}
+
+	filtered := raw
+	if len(allowedCTs) > 0 {
+		filtered = make([]dhtms.FilterClause, 0, len(raw))
+		for _, cl := range raw {
+			if cl.ContentType != nil && slices.Contains(allowedCTs, *cl.ContentType) {
+				filtered = append(filtered, cl)
+			}
+		}
+		if len(filtered) == 0 {
+			return nil, nil, true
+		}
+	}
+	if len(filtered) == 1 && isPureContentTypeClause(filtered[0]) {
+		return filtered[0].ContentType, nil, false
+	}
+	return nil, filtered, false
 }
 
 func matchesTorznabFilters(req torznab.SearchRequest, tc model.TorrentContent, year uint16, isLinked bool) bool {
@@ -334,6 +537,8 @@ func matchesSingleTorznabCat(cat int, tc model.TorrentContent) bool {
 			return tc.VideoResolution.Valid && slices.Contains(hdResolutions, tc.VideoResolution.VideoResolution)
 		case torznab.CategoryMoviesUHD.ID:
 			return tc.VideoResolution.Valid && slices.Contains(uhdResolutions, tc.VideoResolution.VideoResolution)
+		case torznab.CategoryMovies3D.ID:
+			return tc.Video3D.Valid
 		default:
 			return true
 		}
@@ -348,6 +553,8 @@ func matchesSingleTorznabCat(cat int, tc model.TorrentContent) bool {
 			return tc.VideoResolution.Valid && slices.Contains(hdResolutions, tc.VideoResolution.VideoResolution)
 		case torznab.CategoryTVUHD.ID:
 			return tc.VideoResolution.Valid && slices.Contains(uhdResolutions, tc.VideoResolution.VideoResolution)
+		case torznab.CategoryTVAnime.ID:
+			return tc.IsAnime
 		default:
 			return true
 		}

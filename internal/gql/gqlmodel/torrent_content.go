@@ -8,16 +8,23 @@ import (
 	"time"
 
 	"github.com/99designs/gqlgen/graphql"
+	"github.com/spencernorton/DH-Waypoint/internal/database/dhtms"
 	q "github.com/spencernorton/DH-Waypoint/internal/database/query"
 	"github.com/spencernorton/DH-Waypoint/internal/database/search"
 	"github.com/spencernorton/DH-Waypoint/internal/gql/gqlmodel/gen"
+	"github.com/spencernorton/DH-Waypoint/internal/leanmode"
 	"github.com/spencernorton/DH-Waypoint/internal/maps"
 	"github.com/spencernorton/DH-Waypoint/internal/model"
 	"github.com/spencernorton/DH-Waypoint/internal/protocol"
+	"github.com/spencernorton/DH-Waypoint/internal/serving"
 )
 
 type TorrentContentQuery struct {
 	TorrentContentSearch search.TorrentContentSearch
+	DHTMS                *dhtms.Client
+	ServingPolicy        *serving.Policy
+	DHTMSMetrics         *dhtms.Metrics
+	LeanStore            *leanmode.Store
 }
 
 type TorrentContent struct {
@@ -160,6 +167,9 @@ func (t TorrentContentQuery) Search(
 	ctx context.Context,
 	input TorrentContentSearchQueryInput,
 ) (TorrentContentSearchResult, error) {
+	if res, ok := t.trySearchDHTMS(ctx, input); ok {
+		return res, nil
+	}
 	options := []q.Option{
 		q.Where(search.LegacyTorrentIdentityCriteria("torrent_contents")),
 		q.DefaultOption(),

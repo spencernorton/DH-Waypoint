@@ -163,3 +163,98 @@ func TestTorznabDirectServeAndFailClosedPGFallback(t *testing.T) {
 	require.Len(t, leanRes.Channel.Items, 1)
 	require.Equal(t, "PG.Fallback.Movie.2026.1080p", leanRes.Channel.Items[0].Title)
 }
+
+func TestTorznabDHTMSServesProwlarrMultiCatAnd3DAnime(t *testing.T) {
+	movie3DHash := strings.Repeat("11", 20)
+	animeTVHash := strings.Repeat("22", 20)
+	plainTVHash := strings.Repeat("33", 20)
+	nowEpoch := uint32(time.Now().Unix())
+
+	var lastRSSReq dhtms.RSSRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		require.Equal(t, "/v1/rss", r.URL.Path)
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&lastRSSReq))
+		docs := []dhtms.DocHit{
+			{
+				DocID: 1, InfoHashV1: movie3DHash, Name: "Avatar.2009.1080p.3D.SBS.BluRay",
+				SizeBytes: 12_000_000_000, ContentType: 1, Resolution: 6, Video3D: 2, VideoSource: 9, VideoCodec: 3,
+				PublishedEpoch: nowEpoch, CreatedEpoch: nowEpoch,
+			},
+			{
+				DocID: 2, InfoHashV1: animeTVHash, Name: "[SubsPlease] Frieren - 01 (1080p)",
+				SizeBytes: 1_500_000_000, ContentType: 2, Resolution: 6, IsAnime: true, VideoSource: 7, VideoCodec: 8,
+				PublishedEpoch: nowEpoch - 10, CreatedEpoch: nowEpoch - 10,
+			},
+			{
+				DocID: 3, InfoHashV1: plainTVHash, Name: "Ordinary.Show.S01E01.720p.WEBRip",
+				SizeBytes: 900_000_000, ContentType: 2, Resolution: 5, IsAnime: false, VideoSource: 8, VideoCodec: 1,
+				PublishedEpoch: nowEpoch - 20, CreatedEpoch: nowEpoch - 20,
+			},
+		}
+		_ = json.NewEncoder(w).Encode(dhtms.RSSResponse{Docs: docs})
+	}))
+	defer srv.Close()
+
+	cli, err := dhtms.NewClient(dhtms.Config{Mode: dhtms.ReadModeServe, Endpoint: srv.URL, Timeout: 2 * time.Second})
+	require.NoError(t, err)
+	defer cli.Close()
+
+	spy := &spyPGSearch{}
+	adp := New(spy).WithDHTMS(cli, nil, dhtms.NewMetrics(), nil)
+
+	// 1. Prowlarr default Movies poll (2000,2040,2060) collapses to pure ct=1 with 0 PG queries!
+	resMovies, err := adp.Search(context.Background(), torznab.SearchRequest{
+		Type: torznab.FunctionMovie,
+		Cats: []int{2000, 2040, 2060},
+	})
+	require.NoError(t, err)
+	require.Equal(t, int32(0), spy.calls.Load())
+	require.NotNil(t, lastRSSReq.ContentType)
+	require.Equal(t, uint8(1), *lastRSSReq.ContentType)
+	require.Empty(t, lastRSSReq.AnyClauses)
+	require.Len(t, resMovies.Channel.Items, 1)
+
+	// 2. Prowlarr default TV poll (5000,5040,5070) collapses to pure ct=2 with 0 PG queries!
+	resTV, err := adp.Search(context.Background(), torznab.SearchRequest{
+		Type: torznab.FunctionTV,
+		Cats: []int{5000, 5040, 5070},
+	})
+	require.NoError(t, err)
+	require.Equal(t, int32(0), spy.calls.Load())
+	require.NotNil(t, lastRSSReq.ContentType)
+	require.Equal(t, uint8(2), *lastRSSReq.ContentType)
+	require.Empty(t, lastRSSReq.AnyClauses)
+	require.Len(t, resTV.Channel.Items, 2)
+
+	// 3. Dedicated cat=2060 (Movies/3D) sends require_3d clause and serves directly from DH-TMS!
+	res3D, err := adp.Search(context.Background(), torznab.SearchRequest{
+		Type: torznab.FunctionSearch,
+		Cats: []int{2060},
+	})
+	require.NoError(t, err)
+	require.Equal(t, int32(0), spy.calls.Load())
+	require.Len(t, lastRSSReq.AnyClauses, 1)
+	require.True(t, lastRSSReq.AnyClauses[0].Require3D)
+	require.Len(t, res3D.Channel.Items, 1)
+	require.Equal(t, movie3DHash, res3D.Channel.Items[0].GUID)
+
+	// 4. Dedicated cat=5070 (TV/Anime) sends require_anime clause, filters non-anime, and emits 5070 attr!
+	resAnime, err := adp.Search(context.Background(), torznab.SearchRequest{
+		Type: torznab.FunctionSearch,
+		Cats: []int{5070},
+	})
+	require.NoError(t, err)
+	require.Equal(t, int32(0), spy.calls.Load())
+	require.Len(t, lastRSSReq.AnyClauses, 1)
+	require.True(t, lastRSSReq.AnyClauses[0].RequireAnime)
+	require.Len(t, resAnime.Channel.Items, 1)
+	require.Equal(t, animeTVHash, resAnime.Channel.Items[0].GUID)
+	has5070 := false
+	for _, a := range resAnime.Channel.Items[0].TorznabAttrs {
+		if a.AttrName == torznab.AttrCategory && a.AttrValue == "5070" {
+			has5070 = true
+		}
+	}
+	require.True(t, has5070, "anime TV hit from DH-TMS must emit category 5070 attr")
+}

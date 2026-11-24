@@ -117,6 +117,138 @@ func CodeToResolution(code uint8) model.NullVideoResolution {
 	}
 }
 
+// VideoSourceToCode maps DH-Waypoint video_source enum strings to DH-TMS u8 codes (1..=9).
+func VideoSourceToCode(src string) uint8 {
+	switch strings.ToUpper(strings.TrimSpace(src)) {
+	case "CAM":
+		return 1
+	case "TELESYNC":
+		return 2
+	case "TELECINE":
+		return 3
+	case "WORKPRINT":
+		return 4
+	case "DVD":
+		return 5
+	case "TV":
+		return 6
+	case "WEBDL":
+		return 7
+	case "WEBRIP":
+		return 8
+	case "BLURAY":
+		return 9
+	default:
+		return 0
+	}
+}
+
+// CodeToVideoSource maps a DH-TMS u8 video_source code back to model.NullVideoSource.
+func CodeToVideoSource(code uint8) model.NullVideoSource {
+	switch code {
+	case 1:
+		return model.NewNullVideoSource(model.VideoSourceCAM)
+	case 2:
+		return model.NewNullVideoSource(model.VideoSourceTELESYNC)
+	case 3:
+		return model.NewNullVideoSource(model.VideoSourceTELECINE)
+	case 4:
+		return model.NewNullVideoSource(model.VideoSourceWORKPRINT)
+	case 5:
+		return model.NewNullVideoSource(model.VideoSourceDVD)
+	case 6:
+		return model.NewNullVideoSource(model.VideoSourceTV)
+	case 7:
+		return model.NewNullVideoSource(model.VideoSourceWEBDL)
+	case 8:
+		return model.NewNullVideoSource(model.VideoSourceWEBRip)
+	case 9:
+		return model.NewNullVideoSource(model.VideoSourceBluRay)
+	default:
+		return model.NullVideoSource{}
+	}
+}
+
+// VideoCodecToCode maps DH-Waypoint video_codec enum strings to DH-TMS u8 codes (1..=9).
+func VideoCodecToCode(codec string) uint8 {
+	switch strings.ToUpper(strings.TrimSpace(codec)) {
+	case "H264":
+		return 1
+	case "X264":
+		return 2
+	case "X265":
+		return 3
+	case "XVID":
+		return 4
+	case "DIVX":
+		return 5
+	case "MPEG2":
+		return 6
+	case "MPEG4":
+		return 7
+	case "HEVC":
+		return 8
+	case "AV1":
+		return 9
+	default:
+		return 0
+	}
+}
+
+// CodeToVideoCodec maps a DH-TMS u8 video_codec code back to model.NullVideoCodec.
+func CodeToVideoCodec(code uint8) model.NullVideoCodec {
+	switch code {
+	case 1:
+		return model.NewNullVideoCodec(model.VideoCodecH264)
+	case 2:
+		return model.NewNullVideoCodec(model.VideoCodecX264)
+	case 3:
+		return model.NewNullVideoCodec(model.VideoCodecX265)
+	case 4:
+		return model.NewNullVideoCodec(model.VideoCodecXviD)
+	case 5:
+		return model.NewNullVideoCodec(model.VideoCodecDivX)
+	case 6:
+		return model.NewNullVideoCodec(model.VideoCodecMPEG2)
+	case 7:
+		return model.NewNullVideoCodec(model.VideoCodecMPEG4)
+	case 8:
+		return model.NewNullVideoCodec(model.VideoCodecHEVC)
+	case 9:
+		return model.NewNullVideoCodec(model.VideoCodecAV1)
+	default:
+		return model.NullVideoCodec{}
+	}
+}
+
+// Video3DToCode maps DH-Waypoint video_3d enum strings to DH-TMS 2-bit codes (1..=3).
+func Video3DToCode(v3d string) uint8 {
+	switch strings.ToUpper(strings.TrimSpace(v3d)) {
+	case "V3D", "3D":
+		return 1
+	case "V3DSBS", "3DSBS":
+		return 2
+	case "V3DOU", "3DOU":
+		return 3
+	default:
+		return 0
+	}
+}
+
+// CodeToVideo3D maps a DH-TMS 2-bit video_3d code back to model.NullVideo3D.
+func CodeToVideo3D(code uint8) model.NullVideo3D {
+	switch code {
+	case 1:
+		return model.NewNullVideo3D(model.Video3DV3D)
+	case 2:
+		return model.NewNullVideo3D(model.Video3DV3DSBS)
+	case 3:
+		return model.NewNullVideo3D(model.Video3DV3DOU)
+	default:
+		return model.NullVideo3D{}
+	}
+}
+
 // TierForPolicy maps DH-Waypoint's active serving.Policy to the matching DH-TMS PolicyTier.
 func TierForPolicy(p *serving.Policy) PolicyTier {
 	if p == nil {

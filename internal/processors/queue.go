@@ -148,6 +148,63 @@ func (s *Store) Scan(ctx context.Context) (int, error) {
 		return 0, e
 	}
 	changed := len(hashes)
+	// Torrents that already hold a valid, unexpired approved PayloadProof but
+	// lack a current-generation required publication review get bounded priority
+	// ahead of linear catalogue catch-up so active payload-verified torrents
+	// re-enter serving in minutes instead of waiting weeks behind full-hash
+	// backfill. An in-memory PK keyset cursor ensures non-admissible rows can
+	// never wedge the head of the queue.
+	var payloadAfter []byte
+	payloadLimit, payloadFetched := 0, 0
+	var reqGen int64
+	hasReqPayloadPriority := false
+	if s.publication.RequiredProcessor != "" && s.publication.RequiredPayloadVerifierArtifactDigest != "" {
+		for _, st := range plan.Steps {
+			if st.Entry.ID == s.publication.RequiredProcessor {
+				reqGen = st.Entry.ExecutionGeneration
+				hasReqPayloadPriority = true
+				break
+			}
+		}
+	}
+	if hasReqPayloadPriority {
+		payloadLimit = min(16, max(0, (capacity-len(hashes)+1)/2))
+		if payloadLimit > 0 {
+			_, payloadAfter = s.payloadReviewCursor.get()
+			if payloadAfter == nil {
+				payloadAfter = []byte{}
+			}
+			rows, e = tx.Query(ctx, payloadReviewPrioritySQL,
+				s.publication.RequiredPayloadVerifierArtifactDigest,
+				serving.PayloadEvidenceContract,
+				s.publication.RequiredProcessor,
+				reqGen,
+				serving.PublicationReviewPolicy,
+				payloadAfter,
+				payloadLimit,
+			)
+			if e != nil {
+				return 0, e
+			}
+			for rows.Next() {
+				var h []byte
+				if e = rows.Scan(&h); e != nil {
+					rows.Close()
+					return 0, e
+				}
+				payloadFetched++
+				if !priority[string(h)] {
+					hashes = append(hashes, h)
+					priority[string(h)] = true
+				}
+			}
+			rows.Close()
+			if e = rows.Err(); e != nil {
+				return 0, e
+			}
+		}
+	}
+	payloadEnd := len(hashes)
 	// The repeated cursor bound keeps both probes on index ranges: without it
 	// the plan merge-joins from the start of the hash space.
 	catchUp := `SELECT t.info_hash FROM torrents t WHERE t.info_hash>$1 AND EXISTS(SELECT 1 FROM torrent_contents c WHERE c.info_hash=t.info_hash AND c.info_hash>$1)
@@ -158,7 +215,7 @@ func (s *Store) Scan(ctx context.Context) (int, error) {
 		// queues them when their files arrive.
 		catchUp = strings.Replace(catchUp, `WHERE `, `WHERE `+fileEvidenceSQL+` AND `, 1)
 	}
-	rows, e = tx.Query(ctx, catchUp, after, s.cfg.ScanBatch-len(hashes))
+	rows, e = tx.Query(ctx, catchUp, after, max(0, s.cfg.ScanBatch-len(hashes)))
 	if e != nil {
 		return 0, e
 	}
@@ -179,11 +236,12 @@ func (s *Store) Scan(ctx context.Context) (int, error) {
 		return 0, e
 	}
 	admitted, bounded := 0, false
+	payloadProcessedAll := true
 	for i := 0; i < len(hashes); i++ {
 		// Bound the hold, but process at least the first hash of each class
-		// (requests, source changes, catch-up) so every class advances. The
-		// cursor only moves past processed hashes.
-		if i != 0 && i != requested && i != changed && time.Since(locked) > s.scanHold {
+		// (requests, source changes, payload-backed priority, catch-up) so every
+		// class advances. Cursors only move past processed hashes.
+		if i != 0 && i != requested && i != changed && i != payloadEnd && time.Since(locked) > s.scanHold {
 			bounded = true
 			if i < requested {
 				i = requested - 1
@@ -193,10 +251,17 @@ func (s *Store) Scan(ctx context.Context) (int, error) {
 				i = changed - 1
 				continue
 			}
+			if i < payloadEnd {
+				payloadProcessedAll = false
+				i = payloadEnd - 1
+				continue
+			}
 			break
 		}
 		h := hashes[i]
-		if !priority[string(h)] {
+		if i >= changed && i < payloadEnd {
+			payloadAfter = h
+		} else if !priority[string(h)] {
 			after = h
 		}
 		if !admittedByPolicy(h, plan.Admission) {
@@ -334,6 +399,9 @@ func (s *Store) Scan(ctx context.Context) (int, error) {
 			return 0, err
 		}
 		if admitted >= capacity {
+			if i+1 < payloadEnd {
+				payloadProcessedAll = false
+			}
 			break
 		}
 	}
@@ -346,6 +414,13 @@ func (s *Store) Scan(ctx context.Context) (int, error) {
 	}
 	e = tx.Commit(ctx)
 	if e == nil {
+		if hasReqPayloadPriority && payloadLimit > 0 {
+			if payloadProcessedAll && payloadFetched < payloadLimit {
+				s.payloadReviewCursor.set(time.Time{}, nil)
+			} else {
+				s.payloadReviewCursor.set(time.Time{}, payloadAfter)
+			}
+		}
 		s.metrics.admission.WithLabelValues("queued").Add(float64(admitted))
 		if bounded {
 			s.metrics.admission.WithLabelValues("bounded").Inc()
@@ -440,6 +515,29 @@ const (
 	requeueStaleSQL = `INSERT INTO processor_publication_pending(info_hash,source_revision)
  SELECT t.info_hash,COALESCE(s.revision,1) FROM torrents t LEFT JOIN processor_publication_sources s ON s.info_hash=t.info_hash
  WHERE t.info_hash=$1 ON CONFLICT DO NOTHING`
+	payloadReviewPrioritySQL = `SELECT r.info_hash
+ FROM processor_payload_reviews r
+ JOIN torrents t ON t.info_hash=r.info_hash
+ WHERE r.info_hash>$6
+   AND r.verifier_artifact=$1
+   AND r.policy=$2
+   AND r.approved
+   AND r.expires_at>clock_timestamp()
+   AND NOT t.private
+   AND ` + fileEvidenceSQL + `
+   AND COALESCE((SELECT ps.revision FROM processor_publication_sources ps WHERE ps.info_hash=r.info_hash),1)=r.source_revision
+   AND EXISTS(SELECT 1 FROM torrent_contents c WHERE c.info_hash=r.info_hash)
+   AND NOT EXISTS(SELECT 1 FROM processor_publication_reviews pr
+     WHERE pr.info_hash=r.info_hash AND pr.processor_id=$3
+       AND pr.execution_generation=$4 AND pr.policy_contract=$5
+       AND pr.source_revision=r.source_revision)
+   AND NOT EXISTS(SELECT 1 FROM processor_jobs j
+     WHERE j.info_hash=r.info_hash AND j.state IN('queued','deferred','leased'))
+   AND NOT EXISTS(SELECT 1 FROM processor_reprocess_requests req
+     WHERE req.info_hash=r.info_hash AND req.state='waiting_core')
+   AND NOT EXISTS(SELECT 1 FROM processor_exclusions ex WHERE ex.info_hash=r.info_hash)
+   AND NOT EXISTS(SELECT 1 FROM processor_publication_holds ph WHERE ph.info_hash=r.info_hash AND ph.held)
+ ORDER BY r.info_hash LIMIT $7`
 )
 
 func queryHashes(ctx context.Context, tx pgx.Tx, out *[][]byte, sql string, args ...any) error {
