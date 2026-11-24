@@ -13,10 +13,10 @@ use dh_tms_search::{
     term_hash, CustomSearchPlane, QueryMode, SearchError, SearchFilterClause, MAX_VIDEO_CODEC,
     MAX_VIDEO_SOURCE,
 };
-use std::collections::HashMap;
 use dh_tms_swarm::{SwarmError, SwarmPlane, SwarmUpdate};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::io::BufRead;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -1063,14 +1063,20 @@ impl DaemonEngine {
         let mut linked = Vec::with_capacity(linked_ids.len());
         for d in linked_ids {
             let (egress_s, egress_m) = self.fresh_now(req.now_epoch);
-            if self.policy.authorize_egress_one(d, tier, egress_s, egress_m)? {
+            if self
+                .policy
+                .authorize_egress_one(d, tier, egress_s, egress_m)?
+            {
                 linked.push(self.hydrate_hit(d, 0.0, req.include_files)?);
             }
         }
         let mut unlinked = Vec::with_capacity(unlinked_ids.len());
         for d in unlinked_ids {
             let (egress_s, egress_m) = self.fresh_now(req.now_epoch);
-            if self.policy.authorize_egress_one(d, tier, egress_s, egress_m)? {
+            if self
+                .policy
+                .authorize_egress_one(d, tier, egress_s, egress_m)?
+            {
                 unlinked.push(self.hydrate_hit(d, 0.0, req.include_files)?);
             }
         }
@@ -1147,7 +1153,10 @@ impl DaemonEngine {
         let mut docs = Vec::with_capacity(doc_ids.len());
         for d in doc_ids {
             let (egress_s, egress_m) = self.fresh_now(req.now_epoch);
-            if self.policy.authorize_egress_one(d, tier, egress_s, egress_m)? {
+            if self
+                .policy
+                .authorize_egress_one(d, tier, egress_s, egress_m)?
+            {
                 docs.push(self.hydrate_hit(d, 0.0, req.include_files)?);
             }
         }
@@ -1234,7 +1243,10 @@ impl DaemonEngine {
         let mut docs = Vec::with_capacity(doc_ids.len());
         for d in doc_ids {
             let (egress_s, egress_m) = self.fresh_now(req.now_epoch);
-            if self.policy.authorize_egress_one(d, tier, egress_s, egress_m)? {
+            if self
+                .policy
+                .authorize_egress_one(d, tier, egress_s, egress_m)?
+            {
                 docs.push(self.hydrate_hit(d, 0.0, req.include_files)?);
             }
         }
@@ -1267,7 +1279,10 @@ impl DaemonEngine {
         let mut docs = Vec::with_capacity(targets.len());
         for d in targets {
             let (egress_s, egress_m) = self.fresh_now(req.now_epoch);
-            if self.policy.authorize_egress_one(d, tier, egress_s, egress_m)? {
+            if self
+                .policy
+                .authorize_egress_one(d, tier, egress_s, egress_m)?
+            {
                 docs.push(self.hydrate_hit(d, 0.0, true)?);
             }
         }

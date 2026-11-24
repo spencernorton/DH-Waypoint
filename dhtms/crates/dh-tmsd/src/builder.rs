@@ -1613,7 +1613,10 @@ mod tests {
             }],
             sync: true,
         });
-        assert!(matches!(bad_enum, Err(crate::engine::DaemonError::BadRequest(_))));
+        assert!(matches!(
+            bad_enum,
+            Err(crate::engine::DaemonError::BadRequest(_))
+        ));
 
         // Insert L0 doc + rename h_hi away from "alpha" so substring must include h_l0 and exclude renamed h_hi!
         let up = eng
@@ -1737,7 +1740,11 @@ mod tests {
         assert!(resolved.docs.get(&h_lo).copied().flatten().is_some());
         assert_eq!(resolved.docs.get(&h_l0).copied().flatten(), Some(dyn_id));
         assert_eq!(
-            resolved.docs.get(&format!("{:040x}", 0xdead)).copied().flatten(),
+            resolved
+                .docs
+                .get(&format!("{:040x}", 0xdead))
+                .copied()
+                .flatten(),
             None
         );
         // Verify sync_resolve did NOT reopen the public lease!

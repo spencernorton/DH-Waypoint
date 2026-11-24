@@ -205,7 +205,10 @@ impl std::fmt::Display for SearchError {
                 write!(f, "trigram substring index is disabled for this generation")
             }
             Self::TooManyCandidates => {
-                write!(f, "substring candidate set exceeds bounded hash-order scan cap")
+                write!(
+                    f,
+                    "substring candidate set exceeds bounded hash-order scan cap"
+                )
             }
         }
     }
