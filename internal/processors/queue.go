@@ -154,7 +154,9 @@ func (s *Store) Scan(ctx context.Context) (int, error) {
 	// re-enter serving in minutes instead of waiting weeks behind full-hash
 	// backfill. An in-memory PK keyset cursor ensures non-admissible rows can
 	// never wedge the head of the queue.
-	var payloadAfter []byte
+	var payloadAfterAt time.Time
+	var payloadAfterHash []byte
+	payloadExp := map[string]time.Time{}
 	payloadLimit, payloadFetched := 0, 0
 	var reqGen int64
 	hasReqPayloadPriority := false
@@ -170,37 +172,70 @@ func (s *Store) Scan(ctx context.Context) (int, error) {
 	if hasReqPayloadPriority {
 		payloadLimit = min(16, max(0, (capacity-len(hashes)+1)/2))
 		if payloadLimit > 0 {
-			_, payloadAfter = s.payloadReviewCursor.get()
-			if payloadAfter == nil {
-				payloadAfter = []byte{}
+			type payloadPair struct{ artifact, policy string }
+			pairs := []payloadPair{
+				{s.publication.RequiredPayloadVerifierArtifactDigest, serving.PayloadEvidenceContractV2},
+				{s.publication.RequiredPayloadVerifierArtifactDigest, serving.PayloadEvidenceContract},
 			}
-			rows, e = tx.Query(ctx, payloadReviewPrioritySQL,
-				s.publication.RequiredPayloadVerifierArtifactDigest,
-				serving.PayloadEvidenceContract,
-				s.publication.RequiredProcessor,
-				reqGen,
-				serving.PublicationReviewPolicy,
-				payloadAfter,
-				payloadLimit,
-			)
-			if e != nil {
-				return 0, e
+			if prev := s.publication.PreviousPayloadVerifierArtifactDigest; prev != "" && prev != s.publication.RequiredPayloadVerifierArtifactDigest {
+				pairs = append(pairs,
+					payloadPair{prev, serving.PayloadEvidenceContractV2},
+					payloadPair{prev, serving.PayloadEvidenceContract},
+				)
 			}
-			for rows.Next() {
-				var h []byte
-				if e = rows.Scan(&h); e != nil {
-					rows.Close()
+			cursorAt, cursorHash := s.payloadReviewCursor.get()
+			for _, pair := range pairs {
+				rem := payloadLimit - payloadFetched
+				if rem <= 0 {
+					break
+				}
+				qAt := cursorAt
+				qHash := cursorHash
+				if qAt.IsZero() {
+					qAt = time.Unix(0, 0).UTC()
+					qHash = []byte{0xff}
+				} else if len(qHash) == 0 {
+					qHash = []byte{0xff}
+				}
+				candLimit := max(32, rem*2)
+				rows, e = tx.Query(ctx, payloadReviewPrioritySQL,
+					pair.artifact,
+					pair.policy,
+					s.publication.RequiredProcessor,
+					reqGen,
+					serving.PublicationReviewPolicy,
+					qAt,
+					qHash,
+					candLimit,
+					rem,
+				)
+				if e != nil {
 					return 0, e
 				}
-				payloadFetched++
-				if !priority[string(h)] {
-					hashes = append(hashes, h)
-					priority[string(h)] = true
+				pairCount := 0
+				for rows.Next() {
+					var h []byte
+					var exp time.Time
+					if e = rows.Scan(&h, &exp); e != nil {
+						rows.Close()
+						return 0, e
+					}
+					pairCount++
+					payloadFetched++
+					payloadExp[string(h)] = exp
+					if !priority[string(h)] {
+						hashes = append(hashes, h)
+						priority[string(h)] = true
+					}
 				}
-			}
-			rows.Close()
-			if e = rows.Err(); e != nil {
-				return 0, e
+				rows.Close()
+				if e = rows.Err(); e != nil {
+					return 0, e
+				}
+				if pairCount < rem {
+					cursorAt = time.Time{}
+					cursorHash = nil
+				}
 			}
 		}
 	}
@@ -260,7 +295,8 @@ func (s *Store) Scan(ctx context.Context) (int, error) {
 		}
 		h := hashes[i]
 		if i >= changed && i < payloadEnd {
-			payloadAfter = h
+			payloadAfterAt = payloadExp[string(h)]
+			payloadAfterHash = h
 		} else if !priority[string(h)] {
 			after = h
 		}
@@ -417,8 +453,8 @@ func (s *Store) Scan(ctx context.Context) (int, error) {
 		if hasReqPayloadPriority && payloadLimit > 0 {
 			if payloadProcessedAll && payloadFetched < payloadLimit {
 				s.payloadReviewCursor.set(time.Time{}, nil)
-			} else {
-				s.payloadReviewCursor.set(time.Time{}, payloadAfter)
+			} else if !payloadAfterAt.IsZero() {
+				s.payloadReviewCursor.set(payloadAfterAt, payloadAfterHash)
 			}
 		}
 		s.metrics.admission.WithLabelValues("queued").Add(float64(admitted))
@@ -515,29 +551,37 @@ const (
 	requeueStaleSQL = `INSERT INTO processor_publication_pending(info_hash,source_revision)
  SELECT t.info_hash,COALESCE(s.revision,1) FROM torrents t LEFT JOIN processor_publication_sources s ON s.info_hash=t.info_hash
  WHERE t.info_hash=$1 ON CONFLICT DO NOTHING`
-	payloadReviewPrioritySQL = `SELECT r.info_hash
- FROM processor_payload_reviews r
- JOIN torrents t ON t.info_hash=r.info_hash
- WHERE r.info_hash>$6
-   AND r.verifier_artifact=$1
-   AND r.policy=$2
-   AND r.approved
-   AND r.expires_at>clock_timestamp()
-   AND NOT t.private
-   AND ` + fileEvidenceSQL + `
-   AND COALESCE((SELECT ps.revision FROM processor_publication_sources ps WHERE ps.info_hash=r.info_hash),1)=r.source_revision
-   AND EXISTS(SELECT 1 FROM torrent_contents c WHERE c.info_hash=r.info_hash)
-   AND NOT EXISTS(SELECT 1 FROM processor_publication_reviews pr
-     WHERE pr.info_hash=r.info_hash AND pr.processor_id=$3
-       AND pr.execution_generation=$4 AND pr.policy_contract=$5
-       AND pr.source_revision=r.source_revision)
-   AND NOT EXISTS(SELECT 1 FROM processor_jobs j
-     WHERE j.info_hash=r.info_hash AND j.state IN('queued','deferred','leased'))
-   AND NOT EXISTS(SELECT 1 FROM processor_reprocess_requests req
-     WHERE req.info_hash=r.info_hash AND req.state='waiting_core')
-   AND NOT EXISTS(SELECT 1 FROM processor_exclusions ex WHERE ex.info_hash=r.info_hash)
-   AND NOT EXISTS(SELECT 1 FROM processor_publication_holds ph WHERE ph.info_hash=r.info_hash AND ph.held)
- ORDER BY r.info_hash LIMIT $7`
+	payloadReviewPrioritySQL = `WITH cand AS MATERIALIZED (
+  SELECT r.info_hash, r.source_revision, r.expires_at
+  FROM processor_payload_reviews r
+  WHERE r.verifier_artifact=$1
+    AND r.policy=$2
+    AND r.approved
+    AND r.expires_at>clock_timestamp()
+    AND r.expires_at>=$6
+    AND (r.expires_at>$6 OR r.info_hash<$7)
+    AND NOT EXISTS(SELECT 1 FROM processor_publication_reviews pr
+      WHERE pr.info_hash=r.info_hash AND pr.processor_id=$3
+        AND pr.execution_generation=$4 AND pr.policy_contract=$5
+        AND pr.source_revision=r.source_revision)
+    AND NOT EXISTS(SELECT 1 FROM processor_jobs j
+      WHERE j.info_hash=r.info_hash AND j.state IN('queued','deferred','leased'))
+  ORDER BY r.expires_at ASC, r.info_hash DESC
+  LIMIT $8
+)
+SELECT c.info_hash, c.expires_at
+FROM cand c
+JOIN torrents t ON t.info_hash=c.info_hash
+WHERE NOT t.private
+  AND ` + fileEvidenceSQL + `
+  AND COALESCE((SELECT ps.revision FROM processor_publication_sources ps WHERE ps.info_hash=c.info_hash),1)=c.source_revision
+  AND EXISTS(SELECT 1 FROM torrent_contents tc WHERE tc.info_hash=c.info_hash)
+  AND NOT EXISTS(SELECT 1 FROM processor_reprocess_requests req
+    WHERE req.info_hash=c.info_hash AND req.state='waiting_core')
+  AND NOT EXISTS(SELECT 1 FROM processor_exclusions ex WHERE ex.info_hash=c.info_hash)
+  AND NOT EXISTS(SELECT 1 FROM processor_publication_holds ph WHERE ph.info_hash=c.info_hash AND ph.held)
+ORDER BY c.expires_at ASC, c.info_hash DESC
+LIMIT $9`
 )
 
 func queryHashes(ctx context.Context, tx pgx.Tx, out *[][]byte, sql string, args ...any) error {
