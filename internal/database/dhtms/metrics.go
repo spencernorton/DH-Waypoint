@@ -8,6 +8,7 @@ type Metrics struct {
 	syncTotal       *prometheus.CounterVec
 	outboxApplied   prometheus.Counter
 	generationGauge prometheus.Gauge
+	eligibleDocs    *prometheus.GaugeVec
 }
 
 // NewMetrics constructs Prometheus collectors for DH-TMS.
@@ -29,6 +30,10 @@ func NewMetrics() *Metrics {
 			Name: "dh_waypoint_dhtms_generation_id",
 			Help: "Active generation_id reported by the co-located dh-tmsd sidecar.",
 		}),
+		eligibleDocs: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "dh_waypoint_dhtms_eligible_documents",
+			Help: "Documents in each policy tier at the last healthy leased sidecar observation.",
+		}, []string{"tier"}),
 	}
 }
 
@@ -42,6 +47,7 @@ func (m *Metrics) Collectors() []prometheus.Collector {
 		m.syncTotal,
 		m.outboxApplied,
 		m.generationGauge,
+		m.eligibleDocs,
 	}
 }
 
@@ -75,4 +81,17 @@ func (m *Metrics) SetGeneration(gen uint64) {
 		return
 	}
 	m.generationGauge.Set(float64(gen))
+}
+
+func (m *Metrics) observeEligibility(health HealthResponse) {
+	if m == nil {
+		return
+	}
+	if health.Status != "ok" || !health.LeaseActive {
+		m.eligibleDocs.Reset()
+		return
+	}
+	m.eligibleDocs.WithLabelValues("base").Set(float64(health.BaseEligible))
+	m.eligibleDocs.WithLabelValues("publication").Set(float64(health.PubEligible))
+	m.eligibleDocs.WithLabelValues("payload").Set(float64(health.PayloadEligible))
 }

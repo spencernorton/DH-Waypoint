@@ -218,15 +218,27 @@ pub fn fold_accents_lowercase(s: &str) -> String {
 }
 
 /// Shared accent-folded alphanumeric tokenizer used identically by ingest AND query.
-/// Collapses apostrophes (`'`, `’`, `` ` ``) and expands `&` -> `"and"`.
+/// Keeps ordinary apostrophized names together, separates elided French
+/// articles before un/une, and expands `&` to `"and"`.
 pub fn tokenize_alnum(s: &str) -> Vec<String> {
     let folded = fold_accents_lowercase(s);
     let mut out = Vec::with_capacity(12);
     let mut cur = String::with_capacity(16);
-    for ch in folded.chars() {
+    let mut chars = folded.chars();
+    while let Some(ch) = chars.next() {
         if ch.is_alphanumeric() {
             cur.push(ch);
         } else if matches!(ch, '\'' | '\u{2019}' | '`') {
+            if matches!(cur.as_str(), "d" | "l") {
+                let next: String = chars
+                    .clone()
+                    .take_while(|c| c.is_alphanumeric())
+                    .take(4)
+                    .collect();
+                if matches!(next.as_str(), "un" | "une") {
+                    out.push(std::mem::take(&mut cur));
+                }
+            }
             continue;
         } else if ch == '&' {
             if !cur.is_empty() {
@@ -958,6 +970,16 @@ pub fn extract_substring_query_trigrams(q: &str) -> Vec<[u8; 3]> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn elided_articles_do_not_create_a_different_title_word() {
+        assert_eq!(
+            tokenize_alnum("Histoire d’une dune"),
+            ["histoire", "d", "une", "dune"]
+        );
+        assert_eq!(tokenize_alnum("d'un l’une"), ["d", "un", "l", "une"]);
+        assert_eq!(tokenize_alnum("D'Angelo O’Neil"), ["dangelo", "oneil"]);
+    }
 
     #[test]
     fn test_release_parser_edge_cases() {

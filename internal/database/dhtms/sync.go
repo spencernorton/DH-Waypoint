@@ -731,6 +731,7 @@ func (s *Syncer) SyncOnce(ctx context.Context) error {
 
 	health, err := s.client.Health(ctx)
 	if err != nil {
+		s.metrics.observeEligibility(HealthResponse{})
 		s.metrics.RecordSync("incremental", "error")
 		return fmt.Errorf("dhtms sync: health check: %w", err)
 	}
@@ -739,6 +740,7 @@ func (s *Syncer) SyncOnce(ctx context.Context) error {
 		return err
 	}
 	s.metrics.SetGeneration(health.GenerationID)
+	s.metrics.observeEligibility(*health)
 	if s.policy != nil && s.policy.RequiresPublicationReview() {
 		if curSig, err := s.queryRegistrySignature(ctx, s.pool); err == nil && curSig != s.lastRegistrySig {
 			s.logger.Infow("processor_registry state changed; rebuilding dh-tmsd generation",
