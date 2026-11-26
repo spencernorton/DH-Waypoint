@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 6.1.0 — 2026-11-26
+
+- Restrict grouped candidate searches to the payload-proof population when verification is required. Full publication checks continue to select the highest-seeded eligible representative.
+- Keep French elisions before *un* and *une* from matching unrelated title words. A fresh DH-TMS generation applies the improved tokenization to existing releases.
+- Expose the document counts for each policy tier in the last healthy leased DH-TMS observation.
+
 ## 6.0.7 — 2026-11-24
 
 Comprehensive reliability, consistency, and steady-state efficiency hardening across `dh-tmsd`, PostgreSQL outbox CDC, processor payload-priority scheduling, CSAM cold-start safety, and Torznab/REST/GraphQL read routing.

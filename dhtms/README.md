@@ -19,6 +19,12 @@ See [`docs/adr/ADR-dh-tms-engine.md`](../docs/adr/ADR-dh-tms-engine.md) for the 
 
 ## Local Development & Testing
 
+The core exports `dh_waypoint_dhtms_eligible_documents{tier="base|publication|payload"}`
+from the last healthy lease observation. Each tier counts documents that passed
+its policy in the sidecar. A lost lease or failed health read removes the samples.
+Rebuild the DH-TMS generation after upgrading to 6.1.0 to apply the updated
+apostrophe tokenization to previously indexed titles.
+
 ```bash
 cd dhtms
 cargo fmt --check

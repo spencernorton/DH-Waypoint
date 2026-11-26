@@ -11,12 +11,12 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5/stdlib"
+	"github.com/pressly/goose/v3"
 	"github.com/spencernorton/DH-Waypoint/internal/database/dao"
 	"github.com/spencernorton/DH-Waypoint/internal/database/query"
 	"github.com/spencernorton/DH-Waypoint/internal/model"
 	"github.com/spencernorton/DH-Waypoint/internal/serving"
 	migrationssql "github.com/spencernorton/DH-Waypoint/migrations"
-	"github.com/pressly/goose/v3"
 	"github.com/stretchr/testify/require"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -68,6 +68,9 @@ func TestPayloadGatePrefixEscalationAndFailClosed(t *testing.T) {
 
 	procArtifact := strings.Repeat("a", 64)
 	payloadArtifact := strings.Repeat("b", 64)
+	_, err = pool.Exec(ctx, `INSERT INTO content (type, source, id, title, adult, created_at, updated_at)
+		VALUES ('tv_show','tmdb','100','Synthetic series',false,now(),now())`)
+	require.NoError(t, err)
 	procIdentity := fmt.Sprintf(`{"artifact_digest":"%s","name":"test-reviewer","version":"1.0.0"}`, procArtifact)
 	_, err = pool.Exec(ctx, `
 INSERT INTO processor_registry (id, generation, execution_generation, endpoint, mode, state, priority, manifest, configuration)
@@ -94,8 +97,8 @@ VALUES ('test-reviewer', 1, 1, 'http://synthetic.invalid', 'apply', 'active', 1,
 VALUES ($1, $2, 1000000, $3, 'single', $4, $4)`, h, name, isPrivate, pubAt)
 		require.NoError(t, err)
 		var tcID string
-		require.NoError(t, pool.QueryRow(ctx, `INSERT INTO torrent_contents (info_hash, content_type, published_at, tsv, created_at, updated_at)
-VALUES ($1, 'tv_show', $2, to_tsvector('simple', $3), $2, $2) RETURNING id`, h, pubAt, fmt.Sprintf("synthetic show s01e%03d 1080p", i)).Scan(&tcID))
+		require.NoError(t, pool.QueryRow(ctx, `INSERT INTO torrent_contents (info_hash, content_type, content_source, content_id, published_at, tsv, created_at, updated_at)
+VALUES ($1, 'tv_show', 'tmdb', '100', $2, to_tsvector('simple', $3), $2, $2) RETURNING id`, h, pubAt, fmt.Sprintf("synthetic show s01e%03d 1080p", i)).Scan(&tcID))
 
 		var rev int64
 		require.NoError(t, pool.QueryRow(ctx, `SELECT revision FROM processor_publication_sources WHERE info_hash = $1`, h).Scan(&rev))
@@ -126,6 +129,20 @@ VALUES ($1, 'test-reviewer', $2, 1, $3::jsonb, true, 'core-publication-policy-v1
 	require.NoError(t, err)
 
 	s := search{q: dao.Use(gdb), adultPolicy: policy}
+
+	// Every row has payload evidence, but the early members of this group
+	// lack publication approval, are private, or are held. Both the browse
+	// and the searched group must pick the first fully eligible hash.
+	for _, term := range []string{"", "synthetic"} {
+		opts := []query.Option{TorrentContentDefaultOption(), TorrentContentGroupByContentOption(), query.Limit(5)}
+		if term != "" {
+			opts = append(opts, query.SearchString(term))
+		}
+		group, groupErr := s.TorrentContent(ctx, opts...)
+		require.NoError(t, groupErr)
+		require.Len(t, group.Items, 1)
+		require.Equal(t, expectedEligible[0], group.Items[0].ID)
+	}
 
 	// Page 1: limit=10, offset=0 (must escalate 128 -> 512 and return rows 148..157 with HasNextPage=true)
 	res1, err := s.TorrentContent(ctx,

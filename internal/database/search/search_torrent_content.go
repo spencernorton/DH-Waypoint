@@ -118,6 +118,13 @@ func (s search) torrentContent(ctx context.Context, serial bool, options ...quer
 			if s.adultPolicy != nil {
 				// The candidate superset shares the same stored rows and client
 				// filters. The complete serving policy remains on every winner.
+				if gate, ok := s.adultPolicy.PayloadGateCondition(model.TableNameTorrentContent); ok {
+					candidates = candidates.Scopes(func(d gen.Dao) gen.Dao {
+						do := d.(*gen.DO)
+						do.ReplaceDB(do.UnderlyingDB().Where(gate))
+						return d
+					})
+				}
 				return query.WithCandidatePrefixSource(eligible, query.GenericSubQuery[dao.ITorrentContentDo]{SubQuery: candidates})
 			}
 			return eligible
