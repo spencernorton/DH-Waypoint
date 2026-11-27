@@ -12,6 +12,28 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestSingleFileAttributesSurviveProjection(t *testing.T) {
+	piece := sha1.Sum([]byte("synthetic fixture"))
+	for _, tc := range []struct {
+		attr   string
+		unsafe bool
+	}{{"", false}, {"x", true}, {"l", true}} {
+		raw, err := bencode.Marshal(map[string]any{
+			"name": "Fictional.mkv", "length": 17, "piece length": 16384, "pieces": piece[:], "attr": tc.attr,
+		})
+		require.NoError(t, err)
+		info, err := metainfo.ParseInfoBytes(protocol.InfoHashV1(protocol.ID(sha1.Sum(raw))), raw)
+		require.NoError(t, err)
+		require.Equal(t, tc.unsafe, info.HasUnsafeFileAttributes())
+		projected := model.TorrentFromMetadata(info, "fixture", false, 20)
+		if tc.unsafe {
+			require.Equal(t, model.UnsafeFileAttributesTag, projected.Tags[0].Name)
+		} else {
+			require.Empty(t, projected.Tags)
+		}
+	}
+}
+
 func TestTorrentFromMetadataRetainsExecutableAttributes(t *testing.T) {
 	piece := sha1.Sum([]byte("synthetic fixture"))
 	raw, err := bencode.Marshal(map[string]any{

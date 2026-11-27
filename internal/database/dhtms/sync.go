@@ -73,6 +73,7 @@ type Syncer struct {
 	firstNewHashAt        time.Time
 	hasLegacyTorrentFiles bool
 	lastRegistrySig       string
+	audioCatchupThrough   int64
 }
 
 // NewSyncer creates a Syncer bound to a PostgreSQL pool, DH-TMS client, and serving policy.
@@ -148,6 +149,11 @@ func (s *Syncer) FullBuild(ctx context.Context) (*BuildGenerationResponse, error
 }
 
 func (s *Syncer) fullBuildLocked(ctx context.Context) (*BuildGenerationResponse, error) {
+	if s.policy.RequiresEnglishMainAudio() {
+		s.client.AwaitPolicyBuild()
+		s.metrics.observeEligibility(HealthResponse{}, s.policy)
+		s.audioCatchupThrough = -1
+	}
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{
 		IsoLevel:   pgx.RepeatableRead,
 		AccessMode: pgx.ReadOnly,
@@ -731,18 +737,28 @@ func (s *Syncer) SyncOnce(ctx context.Context) error {
 
 	health, err := s.client.Health(ctx)
 	if err != nil {
-		s.metrics.observeEligibility(HealthResponse{})
+		s.metrics.observeEligibility(HealthResponse{}, s.policy)
 		s.metrics.RecordSync("incremental", "error")
 		return fmt.Errorf("dhtms sync: health check: %w", err)
 	}
-	if !s.bootstrapped || health.GenerationID == 0 {
+	if !s.bootstrapped || health.GenerationID == 0 || (s.policy.RequiresEnglishMainAudio() && health.GenerationID != s.lastGenerationID) {
 		_, err := s.fullBuildLocked(ctx)
 		return err
 	}
 	s.metrics.SetGeneration(health.GenerationID)
-	s.metrics.observeEligibility(*health)
+
 	if s.policy != nil && s.policy.RequiresPublicationReview() {
-		if curSig, err := s.queryRegistrySignature(ctx, s.pool); err == nil && curSig != s.lastRegistrySig {
+		curSig, err := s.queryRegistrySignature(ctx, s.pool)
+		if err != nil && s.policy.RequiresEnglishMainAudio() {
+			s.client.AwaitPolicyBuild()
+			s.metrics.observeEligibility(HealthResponse{}, s.policy)
+			return fmt.Errorf("dhtms sync: check current audio reviewer: %w", err)
+		}
+		if err == nil && curSig != s.lastRegistrySig {
+			if s.policy.RequiresEnglishMainAudio() {
+				s.client.AwaitPolicyBuild()
+				s.metrics.observeEligibility(HealthResponse{}, s.policy)
+			}
 			s.logger.Infow("processor_registry state changed; rebuilding dh-tmsd generation",
 				"previous", s.lastRegistrySig,
 				"current", curSig,
@@ -750,6 +766,18 @@ func (s *Syncer) SyncOnce(ctx context.Context) error {
 			_, err := s.fullBuildLocked(ctx)
 			return err
 		}
+	}
+
+	catchingUp := s.policy.RequiresEnglishMainAudio() && s.client.awaitPolicyBuild.Load()
+	if catchingUp && s.audioCatchupThrough < 0 {
+		// Fence outbox changes committed during the snapshot, without chasing
+		// unrelated new arrivals indefinitely. Exact seqs alone are deleted.
+		if err := s.pool.QueryRow(ctx, "SELECT COALESCE(max(seq),0) FROM dhtms_outbox").Scan(&s.audioCatchupThrough); err != nil {
+			return err
+		}
+	}
+	if !catchingUp {
+		s.metrics.observeEligibility(*health, s.policy)
 	}
 
 	var lsnText string
@@ -787,14 +815,17 @@ func (s *Syncer) SyncOnce(ctx context.Context) error {
 	// batches before renewing the lease so pending revocations are guaranteed
 	// to apply before dh-tmsd resumes serving.
 	maxBatches := 1
-	if !health.LeaseActive {
+	if !health.LeaseActive || catchingUp {
 		maxBatches = 32
 	}
 	for batch := 0; batch < maxBatches; batch++ {
-		rows, err := s.pool.Query(ctx, `SELECT seq, op, info_hash
-FROM dhtms_outbox
-ORDER BY seq
-LIMIT $1`, outboxBatchLimit)
+		query := "SELECT seq,op,info_hash FROM dhtms_outbox"
+		args := []any{outboxBatchLimit}
+		if catchingUp {
+			query += " WHERE seq <= $2"
+			args = append(args, s.audioCatchupThrough)
+		}
+		rows, err := s.pool.Query(ctx, query+" ORDER BY seq LIMIT $1", args...)
 		if err != nil {
 			s.metrics.RecordSync("incremental", "error")
 			return fmt.Errorf("dhtms sync: query dhtms_outbox: %w", err)
@@ -870,18 +901,30 @@ LIMIT $1`, outboxBatchLimit)
 		if len(seqs) < outboxBatchLimit {
 			break
 		}
-		if !health.LeaseActive && batch+1 == maxBatches {
+		if (!health.LeaseActive || catchingUp) && batch+1 == maxBatches {
 			// More outbox rows remain while the lease is closed: defer lease
 			// renewal until the next tick finishes draining.
 			return nil
 		}
 	}
 
-	if s.pendingRebuild && time.Since(s.firstNewHashAt) >= s.cfg.RebuildDebounce {
+	if !catchingUp && s.pendingRebuild && time.Since(s.firstNewHashAt) >= s.cfg.RebuildDebounce {
 		if _, err := s.fullBuildLocked(ctx); err != nil {
 			return err
 		}
 		return nil
+	}
+
+	if catchingUp {
+		// A new reviewer or source policy may have committed while applying
+		// the fence. The next tick rebuilds before any consumer can use it.
+		sig, err := s.queryRegistrySignature(ctx, s.pool)
+		if err != nil {
+			return err
+		}
+		if sig != s.lastRegistrySig {
+			return nil
+		}
 	}
 
 	leaseMS := uint64(s.cfg.LeaseTTL / time.Millisecond)
@@ -900,6 +943,10 @@ LIMIT $1`, outboxBatchLimit)
 		s.lastLSN = leaseResp.PGLSN
 	} else {
 		s.lastLSN = nextLSN
+	}
+	if catchingUp {
+		s.audioCatchupThrough = -1
+		s.client.awaitPolicyBuild.Store(false)
 	}
 	s.metrics.RecordSync("lease", "ok")
 	return nil

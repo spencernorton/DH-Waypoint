@@ -15,6 +15,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/spencernorton/DH-Waypoint/internal/httpserver"
 	"github.com/spencernorton/DH-Waypoint/internal/lazy"
+	"github.com/spencernorton/DH-Waypoint/internal/serving"
 	"github.com/vektah/gqlparser/v2/ast"
 	"go.uber.org/fx"
 	"go.uber.org/zap"
@@ -22,8 +23,9 @@ import (
 
 type Params struct {
 	fx.In
-	Schema lazy.Lazy[graphql.ExecutableSchema]
-	Logger *zap.SugaredLogger
+	Schema  lazy.Lazy[graphql.ExecutableSchema]
+	Logger  *zap.SugaredLogger
+	Serving serving.Config
 }
 
 type Result struct {
@@ -34,13 +36,15 @@ type Result struct {
 func New(p Params) Result {
 	return Result{
 		Option: &builder{
-			schema: p.Schema,
+			schema:        p.Schema,
+			audioRequired: p.Serving.RequireEnglishMainAudio,
 		},
 	}
 }
 
 type builder struct {
-	schema lazy.Lazy[graphql.ExecutableSchema]
+	audioRequired bool
+	schema        lazy.Lazy[graphql.ExecutableSchema]
 }
 
 func (builder) Key() string {
@@ -56,6 +60,10 @@ func (b builder) Apply(e *gin.Engine) error {
 	gql := newServer(schema)
 
 	e.POST("/graphql", httpserver.QueryBudget(30*time.Second), func(c *gin.Context) {
+		if b.audioRequired {
+			c.Header("X-Publication-Audio", serving.PublicationAudioContract)
+			c.Header("Cache-Control", "no-store")
+		}
 		mediaType, _, err := mime.ParseMediaType(c.GetHeader("Content-Type"))
 		if err != nil || mediaType != "application/json" {
 			c.AbortWithStatusJSON(http.StatusUnsupportedMediaType, gin.H{"error": "application_json_required"})

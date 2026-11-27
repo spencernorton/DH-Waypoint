@@ -22,11 +22,13 @@ func TestServingAdultExclusionIsExplicitAndDefaultsOff(t *testing.T) {
 
 func TestRequiredPublicationReviewEnvironmentIsPinned(t *testing.T) {
 	cfg := resolveSectionFromEnv(t, "serving", serving.Config{}, map[string]string{
+		"SERVING_REQUIRE_ENGLISH_MAIN_AUDIO":                "true",
 		"SERVING_REQUIRED_PROCESSOR":                        "synthetic-reviewer",
 		"SERVING_REQUIRED_PROCESSOR_ARTIFACT_DIGEST":        strings.Repeat("a", 64),
 		"SERVING_REQUIRED_PAYLOAD_VERIFIER_ARTIFACT_DIGEST": strings.Repeat("b", 64),
 		"SERVING_PREVIOUS_PAYLOAD_VERIFIER_ARTIFACT_DIGEST": strings.Repeat("c", 64),
 	}).(serving.Config)
+	require.True(t, cfg.RequireEnglishMainAudio)
 	require.Equal(t, "synthetic-reviewer", cfg.RequiredProcessor)
 	require.Equal(t, strings.Repeat("a", 64), cfg.RequiredProcessorArtifactDigest)
 	require.Equal(t, strings.Repeat("b", 64), cfg.RequiredPayloadVerifierArtifactDigest)
@@ -40,6 +42,7 @@ func TestRequiredPublicationReviewEnvironmentIsPinned(t *testing.T) {
 	_, err := serving.NewPolicy(cfg, []string{"syntheticadult"}, []string{"mkv"})
 	require.NoError(t, err)
 	for _, broken := range []serving.Config{
+		{RequireEnglishMainAudio: true},
 		{RequiredProcessor: "synthetic-reviewer"},
 		{RequiredProcessorArtifactDigest: strings.Repeat("a", 64)},
 		{RequiredProcessor: "synthetic-reviewer", RequiredProcessorArtifactDigest: "latest"},

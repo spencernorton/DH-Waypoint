@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"strings"
 	"testing"
@@ -458,6 +459,30 @@ VALUES (decode($1, 'hex'), true, 'operator_hold', repeat('3', 64))`, hashLateVer
 	res5, err := cli.Search(ctx, SearchRequest{Query: "verified release", Mode: ModeAnd, Tier: TierPayload, Limit: 10})
 	require.NoError(t, err)
 	require.Empty(t, res5.Docs, "old-generation publication approval must no longer be served after generation bump")
+	// Revoke audio after the sidecar swaps its snapshot but before FullBuild
+	// returns. The retained response can only become readable after CDC drains.
+	_, err = pool.Exec(ctx, "UPDATE processor_registry SET execution_generation=1 WHERE id='test-reviewer'")
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, "UPDATE processor_publication_reviews SET release_audio_v1='english_main' WHERE info_hash=decode($1,'hex')", hashVerified)
+	require.NoError(t, err)
+	strict, err := serving.NewPolicy(serving.Config{RequiredProcessor: "test-reviewer", RequiredProcessorArtifactDigest: procDigest, RequireEnglishMainAudio: true}, strongKW, mediaExt)
+	require.NoError(t, err)
+	strictSync := NewSyncer(pool, cli, strict, syncCfg, NewMetrics(), zap.NewNop().Sugar())
+	transport := cli.streamClient.Transport
+	cli.streamClient.Transport = postSnapshotTransport{RoundTripper: transport, after: func() error {
+		_, err := pool.Exec(ctx, "UPDATE processor_publication_reviews SET release_audio_v1='foreign' WHERE info_hash=decode($1,'hex')", hashVerified)
+		return err
+	}}
+	_, err = strictSync.FullBuild(ctx)
+	cli.streamClient.Transport = transport
+	require.NoError(t, err)
+	_, err = cli.Search(ctx, SearchRequest{Query: "verified release", Mode: ModeAnd, Tier: TierPub, Limit: 10})
+	require.ErrorIs(t, err, ErrLeaseExpired)
+	require.NoError(t, strictSync.SyncOnce(ctx))
+	afterFence, err := cli.Search(ctx, SearchRequest{Query: "verified release", Mode: ModeAnd, Tier: TierPub, Limit: 10})
+	require.NoError(t, err)
+	require.Empty(t, afterFence.Docs)
+
 }
 
 // TestSyncerAuditHardeningMVCCOutboxTriggersAndExpiredLeaseRecovery proves:
@@ -624,4 +649,20 @@ VALUES ('movie', 'tmdb', '702', 'Post Build Entity', 'Post Build Entity', 2025, 
 	luMissing, err := cli.Lookup(ctx, LookupRequest{ContentType: 1, ContentSource: "tmdb", ContentID: "999999", Tier: TierBase, Limit: 10})
 	require.NoError(t, err)
 	require.False(t, luMissing.EntityFound, "absent content row must report entity_found=false")
+}
+
+type postSnapshotTransport struct {
+	http.RoundTripper
+	after func() error
+}
+
+func (p postSnapshotTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	response, err := p.RoundTripper.RoundTrip(r)
+	if err == nil && response.StatusCode == http.StatusOK {
+		if err = p.after(); err != nil {
+			response.Body.Close()
+			return nil, err
+		}
+	}
+	return response, err
 }

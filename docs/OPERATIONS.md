@@ -164,3 +164,38 @@ See [ParadeDB BM25 Search & Migration](paradedb-bm25.md) for complete commands, 
 
 See [security](operations/security.md), [monitoring](operations/monitoring.md)
 and [troubleshooting](troubleshooting.md) for further operational guidance.
+
+### Release-level English audio
+
+Set `SERVING_REQUIRE_ENGLISH_MAIN_AUDIO=true` with a pinned required publication
+processor to limit consumer results to English-audio films and series.
+The processor must supply a completed language proposal with English in its
+audio list, a boolean anime decision, a film or series category and a positive
+release audio decision. The matching fields in the result trace are
+`audio_language`, `anime` and `neural_heads.category`. Anime needs a dub claim
+for this release. Conflicting media filenames and partial or uncertain packs
+remain held. A source change invalidates the grant through the existing
+publication revision. This feature reads torrent metadata and processor
+results.
+
+After migrating, start in shadow with the option off. New reviews retain their
+audio verdict in `processor_publication_reviews.release_audio_v1`. Reconcile
+older reviews in small transactions with
+`SELECT * FROM publication_reconcile_audio_v1($1,$2,$3)`, binding the reviewer
+ID, pinned artifact digest and a batch size from 1 to 10,000. Each call returns
+counts grouped by outcome. Repeated calls skip reviewed rows. A missing or
+superseded processor result stays unresolved until a new review.
+For missing receipts, budget model executions separately and call
+`publication_retry_missing_audio_v1` with the same three arguments. This schedules
+specific hashes through the normal processor admission queue when English-audio
+publication is active. Repeating a request skips already requested rows. Ambiguous
+audio remains parked for better evidence.
+Check agreement and counts before enabling the option. Torznab and the
+authenticated public-hash check advertise the active policy with
+`X-Publication-Audio: reviewed-english-main-audio-v1`.
+
+For offline metadata recovery, run `go run ./scripts/metainfo_inventory DIRECTORY`
+against originals named by expected torrent hash. Each JSON line reports the
+native parser disposition and size. Public originals with safe file attributes
+also carry a SHA-256 of the whole file. A recovery worker can bind a staged
+copy to those exact bytes before submitting it to the normal metainfo importer.

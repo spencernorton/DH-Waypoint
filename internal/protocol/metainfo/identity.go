@@ -36,7 +36,9 @@ func (v ValidatedInfo) HasUnsafeFileAttributes() bool {
 	unsafe := func(f mi.FileInfo) bool {
 		return strings.ContainsAny(f.Attr, "lx") || len(f.SymlinkPath) > 0
 	}
-	if slices.ContainsFunc(v.Files, unsafe) {
+	// A single-file v1 torrent stores these fields directly in info.
+	// Upverting its length into a synthetic file does not carry the root attributes.
+	if strings.ContainsAny(v.Info.Attr, "lx") || len(v.Info.SymlinkPath) > 0 || slices.ContainsFunc(v.Files, unsafe) {
 		return true
 	}
 	// Hybrid torrents also expose a v1 list.

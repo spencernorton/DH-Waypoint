@@ -25,13 +25,14 @@ func NewPublicHash(s lazy.Lazy[search.ServingSearch], policy *namepolicy.Policy)
 }
 
 func NewPublicHashWithReview(s lazy.Lazy[search.ServingSearch], policy *namepolicy.Policy, review serving.Config) httpserver.Option {
-	return publicHashBuilder{search: s, policy: policy, reviewRequired: review.RequiredProcessor != "", payloadRequired: review.RequiredPayloadVerifierArtifactDigest != ""}
+	return publicHashBuilder{search: s, policy: policy, reviewRequired: review.RequiredProcessor != "", audioRequired: review.RequireEnglishMainAudio, payloadRequired: review.RequiredPayloadVerifierArtifactDigest != ""}
 }
 
 type publicHashBuilder struct {
 	search          lazy.Lazy[search.ServingSearch]
 	policy          *namepolicy.Policy
 	reviewRequired  bool
+	audioRequired   bool
 	payloadRequired bool
 }
 
@@ -112,6 +113,9 @@ func (b publicHashBuilder) check(c *gin.Context) {
 	// hashes, including missing or suppressed records, are never echoed.
 	if b.reviewRequired {
 		c.Header("X-Publication-Review", serving.PublicationReviewContract)
+	}
+	if b.audioRequired {
+		c.Header("X-Publication-Audio", serving.PublicationAudioContract)
 	}
 	if b.payloadRequired {
 		c.Header("X-Publication-Payload", serving.PayloadEvidenceContract)
