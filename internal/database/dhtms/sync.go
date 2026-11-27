@@ -732,7 +732,7 @@ func (s *Syncer) SyncOnce(ctx context.Context) error {
 
 	health, err := s.client.Health(ctx)
 	if err != nil {
-		s.metrics.observeEligibility(HealthResponse{})
+		s.metrics.observeEligibility(HealthResponse{}, s.policy)
 		s.metrics.RecordSync("incremental", "error")
 		return fmt.Errorf("dhtms sync: health check: %w", err)
 	}
@@ -741,18 +741,18 @@ func (s *Syncer) SyncOnce(ctx context.Context) error {
 		return err
 	}
 	s.metrics.SetGeneration(health.GenerationID)
-	s.metrics.observeEligibility(*health)
+
 	if s.policy != nil && s.policy.RequiresPublicationReview() {
 		curSig, err := s.queryRegistrySignature(ctx, s.pool)
 		if err != nil && s.policy.RequiresEnglishMainAudio() {
 			s.client.AwaitPolicyBuild()
-			s.metrics.observeEligibility(HealthResponse{})
+			s.metrics.observeEligibility(HealthResponse{}, s.policy)
 			return fmt.Errorf("dhtms sync: check current audio reviewer: %w", err)
 		}
 		if (err == nil && curSig != s.lastRegistrySig) || s.client.awaitPolicyBuild.Load() {
 			if s.policy.RequiresEnglishMainAudio() {
 				s.client.AwaitPolicyBuild()
-				s.metrics.observeEligibility(HealthResponse{})
+				s.metrics.observeEligibility(HealthResponse{}, s.policy)
 			}
 			s.logger.Infow("processor_registry state changed; rebuilding dh-tmsd generation",
 				"previous", s.lastRegistrySig,
@@ -762,6 +762,8 @@ func (s *Syncer) SyncOnce(ctx context.Context) error {
 			return err
 		}
 	}
+
+	s.metrics.observeEligibility(*health, s.policy)
 
 	var lsnText string
 	if err := s.pool.QueryRow(ctx, `SELECT pg_current_wal_lsn()::text`).Scan(&lsnText); err != nil {

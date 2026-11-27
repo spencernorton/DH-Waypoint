@@ -462,3 +462,31 @@ func TestEndToEndWithRealDaemon(t *testing.T) {
 		t.Fatalf("expected recovery after lease renew, got %v", err)
 	}
 }
+
+func TestInitialPolicyBuildClosesConsumerReads(t *testing.T) {
+	hits := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	}))
+	defer server.Close()
+	client, err := NewClient(Config{Mode: ReadModeServe, Endpoint: server.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	client.AwaitPolicyBuild()
+	ctx := context.Background()
+	_, err = client.Search(ctx, SearchRequest{})
+	if !errors.Is(err, ErrLeaseExpired) || hits != 0 {
+		t.Fatal("retained generation accepted before policy build")
+	}
+	if _, err = client.Health(ctx); err != nil {
+		t.Fatal(err)
+	}
+	client.awaitPolicyBuild.Store(false)
+	if _, err = client.Search(ctx, SearchRequest{}); err != nil || hits != 2 {
+		t.Fatal("qualified generation unavailable", err)
+	}
+}

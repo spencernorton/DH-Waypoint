@@ -1,6 +1,9 @@
 package dhtms
 
-import "github.com/prometheus/client_golang/prometheus"
+import (
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/spencernorton/DH-Waypoint/internal/serving"
+)
 
 // Metrics exposes operational telemetry for DH-TMS sync and read serving.
 type Metrics struct {
@@ -83,13 +86,20 @@ func (m *Metrics) SetGeneration(gen uint64) {
 	m.generationGauge.Set(float64(gen))
 }
 
-func (m *Metrics) observeEligibility(health HealthResponse) {
+func (m *Metrics) observeEligibility(health HealthResponse, policy *serving.Policy) {
 	if m == nil {
 		return
 	}
 	if health.Status != "ok" || !health.LeaseActive {
 		m.eligibleDocs.Reset()
 		return
+	}
+	if policy.RequiresEnglishMainAudio() {
+		eligible := health.PubEligible
+		if policy.RequiresPayloadEvidence() {
+			eligible = health.PayloadEligible
+		}
+		m.eligibleDocs.WithLabelValues("english_audio").Set(float64(eligible))
 	}
 	m.eligibleDocs.WithLabelValues("base").Set(float64(health.BaseEligible))
 	m.eligibleDocs.WithLabelValues("publication").Set(float64(health.PubEligible))

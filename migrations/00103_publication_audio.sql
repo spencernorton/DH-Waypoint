@@ -11,6 +11,7 @@ DECLARE
     en constant text := '\m(en|eng|english)\M';
     other_lang constant text := '\m(french|truefrench|fra|fre|german|deu|ger|spanish|spa|italian|ita|russian|rus|japanese|jpn|korean|kor|hindi|hin|tamil|tam|telugu|tel|portuguese|por|chinese|zho|mandarin|cantonese|arabic|ara|polish|pol|turkish|tur|ukrainian|ukr)\M';
     scoped_list text;
+    technical_tail text;
     ambiguous boolean;
 BEGIN
     IF s ~ ('\m(no|without|except|excluding|non)\M[[:space:]]+' || en)
@@ -29,6 +30,12 @@ BEGIN
         IF scoped_list ~ en THEN RETURN 'english'; END IF;
         ambiguous := true;
     END LOOP;
+    -- Bare language codes in a technical release suffix describe the edition.
+    -- Catalogue title words and explicitly labelled subtitles carry no such role.
+    technical_tail := substring(s FROM '\m(?:(?:19|20)[0-9]{2}|s[0-9]{1,2}(?:e[0-9]{1,3})?|[0-9]{3,4}[pi]|web[ ]?(?:dl|rip)|blu[ ]?ray|hdtv|dvdrip)\M.*');
+    technical_tail := regexp_replace(coalesce(technical_tail,''), other_lang || '[[:space:]]+(subtitles?|subs?|commentary)\M', ' ', 'g');
+    technical_tail := regexp_replace(technical_tail, '\m(subtitles?|subs?|commentary)\M[[:space:]:=]+' || other_lang, ' ', 'g');
+    IF technical_tail ~ other_lang THEN ambiguous := true; END IF;
     IF s ~ ('(?:' || other_lang || ')[[:space:]]+(audio|dub(bed)?|aac|ac3|dts|only)\M')
         OR s ~ ('\m(audio|dub(bed)?)\M[[:space:]:=]+' || other_lang)
         OR s ~ '\m(dual|multi)\M([[:space:]]+audio)?|\m(vff|vfq|truefrench|pldub)\M' THEN
