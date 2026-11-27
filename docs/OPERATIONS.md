@@ -193,3 +193,9 @@ audio remains parked for better evidence.
 Check agreement and counts before enabling the option. Torznab and the
 authenticated public-hash check advertise the active policy with
 `X-Publication-Audio: reviewed-english-main-audio-v1`.
+
+For offline metadata recovery, run `go run ./scripts/metainfo_inventory DIRECTORY`
+against originals named by expected torrent hash. Each JSON line reports the
+native parser disposition and size. Public originals with safe file attributes
+also carry a SHA-256 of the whole file. A recovery worker can bind a staged
+copy to those exact bytes before submitting it to the normal metainfo importer.

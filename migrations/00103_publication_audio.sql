@@ -16,6 +16,14 @@ DECLARE
 BEGIN
     IF s ~ ('\m(no|not|without|except|excluding|non)\M[[:space:]]+' || en)
         OR s ~ (en || '[[:space:]]+(absent|unavailable|excluded)\M') THEN RETURN 'conflict'; END IF;
+    -- Commentary can be separated from its language by arbitrary channel,
+    -- codec and edition labels. Discard the entire labelled track segment.
+    -- Only an independently delimited main-audio claim can resolve this case.
+    IF s ~ '\mcommentar(y|ies)\M' THEN
+        SELECT string_agg(part,' ') INTO s FROM regexp_split_to_table(s,'[\[\]|;]') part
+          WHERE part !~ '\mcommentar(y|ies)\M';
+        IF s IS NULL OR s !~ en THEN RETURN 'conflict'; END IF;
+    END IF;
     -- An English commentary or subtitle may coexist with a main English track.
     -- Strip its own claim before looking for independent main-audio evidence.
     ambiguous := s ~ (en || '[[:space:]]+((audio|dub(bed)?|aac|ac3|ddp|dts|truehd|flac)[[:space:]]+)?(commentary|(hard|soft)?[[:space:]]*sub(s|bed|titles?)?)\M')
@@ -77,7 +85,7 @@ BEGIN
     END IF;
     is_anime := (receipt#>>'{trace,anime}')::boolean;
     root_claim := publication_track_claim_v1(release_name);
-    mixed_scope := regexp_replace(lower(release_name),'[._-]+',' ','g') ~ '\m(mixed (audio|dub)|partial(ly)? (dub|english)|except episodes?|dub(bed)? .{0,48}(only|except)|only (ep(isode)?s? |s[0-9])|ep(isode)?s? [0-9]+.{0,18}only)\M';
+    mixed_scope := regexp_replace(lower(release_name),'[._-]+',' ','g') ~ '\m(mixed (audio|dub)|partial(ly)? (dub|english)|except episodes?|s[0-9]+e[0-9]+([ ]+e?[0-9]+)? only|only (ep(isode)?s? |s[0-9])|ep(isode)?s? [0-9]+.{0,18}only)\M';
     FOREACH child IN ARRAY coalesce(media_names,ARRAY[]::text[]) LOOP
         episode_english := false;
         FOREACH component IN ARRAY string_to_array(replace(child,chr(92),'/'),'/') LOOP
