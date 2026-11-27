@@ -12,16 +12,18 @@ import (
 	"os"
 	"strings"
 
+	"github.com/spencernorton/DH-Waypoint/internal/model"
 	"github.com/spencernorton/DH-Waypoint/internal/protocol"
 	"github.com/spencernorton/DH-Waypoint/internal/protocol/metainfo"
 )
 
 type result struct {
-	Hash   string `json:"hash,omitempty"`
-	State  string `json:"state"`
-	Size   int64  `json:"size"`
-	Files  int    `json:"files"`
-	SHA256 string `json:"sha256,omitempty"`
+	Hash          string `json:"hash,omitempty"`
+	CatalogueSize *uint  `json:"catalogue_size,omitempty"`
+	State         string `json:"state"`
+	Size          int64  `json:"size"`
+	Files         int    `json:"files"`
+	SHA256        string `json:"sha256,omitempty"`
 }
 
 func inspect(root *os.Root, entry os.DirEntry) result {
@@ -58,6 +60,9 @@ func inspect(root *os.Root, entry os.DirEntry) result {
 		out.State = "unsafe_attributes"
 	default:
 		out.State = "validated"
+		// The native catalogue excludes BEP 47 padding from its indexed size.
+		projected := model.TorrentFromMetadata(parsed, "metainfo_import", false, metainfo.MaxFilesCount)
+		out.CatalogueSize = &projected.Size
 		sum := sha256.Sum256(raw)
 		out.SHA256 = hex.EncodeToString(sum[:])
 	}
