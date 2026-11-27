@@ -414,6 +414,7 @@ func (i *activeImport) persistItemsTx(tx *dao.Query, items []Item, committedSour
 	torrentsTorrentSources := make([]*model.TorrentsTorrentSource, 0, len(items))
 	torrentHints := make([]*model.TorrentHint, 0, len(items))
 	var torrentFiles []*model.TorrentFile
+	var torrentTags []*model.TorrentTag
 	var metadataUpdates []model.Torrent
 	infoHashes := make([]protocol.InfoHash, 0, len(items))
 
@@ -436,6 +437,10 @@ func (i *activeImport) persistItemsTx(tx *dao.Query, items []Item, committedSour
 				torrentFiles = append(torrentFiles, &f)
 			}
 			torrent.Files = nil
+			for _, tag := range torrent.Tags {
+				torrentTags = append(torrentTags, &tag)
+			}
+			torrent.Tags = nil
 		}
 		if !torrent.Hint.IsNil() {
 			hint := torrent.Hint
@@ -514,6 +519,13 @@ func (i *activeImport) persistItemsTx(tx *dao.Query, items []Item, committedSour
 			UpdateAll: true,
 		}).CreateInBatches(torrentHints, 100); createTorrentHintsErr != nil {
 			return createTorrentHintsErr
+		}
+	}
+	if len(torrentTags) > 0 {
+		if err := tx.TorrentTag.WithContext(i.ctx).Clauses(clause.OnConflict{
+			DoNothing: true,
+		}).CreateInBatches(torrentTags, 100); err != nil {
+			return err
 		}
 	}
 

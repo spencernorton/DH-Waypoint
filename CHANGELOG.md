@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 6.2.0 — 2026-11-26
+
+- Preserve executable and symlink attributes from authenticated torrent metadata and reject those attributes during media publication review.
+- Add an optional hold-only import guard API. A dedicated credential can place a publication hold on an existing public torrent without access to processor administration or hold release.
+
 ## 6.1.0 — 2026-11-26
 
 - Restrict grouped candidate searches to the payload-proof population when verification is required. Full publication checks continue to select the highest-seeded eligible representative.

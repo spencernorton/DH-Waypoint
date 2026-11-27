@@ -173,6 +173,40 @@ func TestPayloadEvidenceBindsActualBytesAndCompleteSource(t *testing.T) {
 	require.ErrorIs(t, err, errPayloadEvidence, "a hash-valid executable renamed to media is still denied")
 }
 
+func TestImportGuardMayOnlyApplyAHold(t *testing.T) {
+	s, p, _ := fixture(t)
+	h, _, src := fictionalPayloadEvidence(t, "Fictional.Track.wav", fictionalWAV())
+	_, err := p.Exec(testContext, `INSERT INTO torrents(info_hash,name,size,private,files_status,created_at,updated_at)
+VALUES($1,$2,$3,false,'single',now(),now())`, h, src.Name, src.Size)
+	require.NoError(t, err)
+	s.cfg.AdminToken = namepolicy.SecretToken(strings.Repeat("admin", 12))
+	token := strings.Repeat("import", 8)
+	s.cfg.ImportHoldToken = namepolicy.SecretToken(token)
+	engine := gin.New()
+	require.NoError(t, s.Apply(engine))
+	path := "/api/publication/v1/import-hold/" + hex.EncodeToString(h)
+	request := func(method, path, key, body string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(method, path, strings.NewReader(body))
+		r.Header.Set("Content-Type", "application/json")
+		r.Header.Set("Authorization", "Bearer "+key)
+		w := httptest.NewRecorder()
+		engine.ServeHTTP(w, r)
+		return w
+	}
+	id := strings.Repeat("a", 64)
+	body := `{"request_id":"` + id + `","reason":"unsafe_media_extension"}`
+	require.Equal(t, 401, request("POST", path, string(s.cfg.AdminToken), body).Code)
+	require.Equal(t, 401, request("GET", "/api/processors/v1/status", token, "").Code)
+	require.Equal(t, 200, request("POST", path, token, body).Code)
+	require.Equal(t, 200, request("POST", path, token, body).Code)
+	var events int
+	require.NoError(t, p.QueryRow(testContext, `SELECT count(*) FROM processor_publication_hold_events WHERE info_hash=$1`, h).Scan(&events))
+	require.Equal(t, 1, events)
+	var held bool
+	require.NoError(t, p.QueryRow(testContext, `SELECT held FROM processor_publication_holds WHERE info_hash=$1`, h).Scan(&held))
+	require.True(t, held)
+}
+
 func TestRequiredPayloadProofAndAuditedHoldThroughRealHTTP(t *testing.T) {
 	s, p, _ := fixture(t)
 	h, evidence, src := fictionalPayloadEvidence(t, "Fictional.Track.wav", fictionalWAV())

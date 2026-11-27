@@ -35,6 +35,7 @@ func publicationBody(c *gin.Context, value any, limit int64) bool {
 func (s *Store) Key() string { return "processors" }
 func (s *Store) Apply(e *gin.Engine) error {
 	s.applyPayloadHTTP(e)
+	s.applyImportHoldHTTP(e)
 	g := e.Group("/api/processors/v1", func(c *gin.Context) {
 		if s.cfg.AdminToken == "" {
 			c.AbortWithStatusJSON(503, gin.H{"error": "administration_disabled"})

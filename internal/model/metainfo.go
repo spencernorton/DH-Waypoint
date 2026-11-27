@@ -84,6 +84,9 @@ func TorrentFromMetadata(metadata metainfo.ValidatedInfo, source string, savePie
 	if info.Private != nil {
 		t.Private = *info.Private
 	}
+	if metadata.HasUnsafeFileAttributes() {
+		t.Tags = []TorrentTag{{InfoHash: hash, Name: UnsafeFileAttributesTag}}
+	}
 	// In v2 the advisory name does not determine the actual single-file path.
 	// Preserve a different file-tree path by using the ordinary file listing.
 	if len(realFiles) == 1 && (info.MetaVersion == 0 && len(info.Files) == 0 ||

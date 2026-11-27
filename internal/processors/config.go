@@ -16,6 +16,7 @@ type Config struct {
 	PluginsDir           string
 	AdminToken           namepolicy.SecretToken
 	PayloadVerifierToken namepolicy.SecretToken
+	ImportHoldToken      namepolicy.SecretToken
 	Concurrency          int
 	QueueCapacity        int
 	RetainedJobs         int
@@ -31,6 +32,10 @@ func NewDefaultConfig() Config {
 	return Config{CredentialDirectory: "/run/secrets/dh-waypoint-processors", PluginsDir: "plugins", Concurrency: 2, QueueCapacity: 1000, RetainedJobs: 10000, PollInterval: time.Second, RequestTimeout: 10 * time.Second, MaxAttempts: 3, Retention: 7 * 24 * time.Hour, ScanBatch: 32, PolicyMaxRetryWindow: 2 * time.Hour}
 }
 func (c Config) Validate() error {
+	if c.ImportHoldToken != "" && (len(c.ImportHoldToken) < 32 || len(c.ImportHoldToken) > 256 ||
+		c.ImportHoldToken == c.AdminToken || c.ImportHoldToken == c.PayloadVerifierToken) {
+		return fmt.Errorf("invalid import hold credential")
+	}
 	if c.PayloadVerifierToken != "" && (len(c.PayloadVerifierToken) < 32 || len(c.PayloadVerifierToken) > 256) {
 		return fmt.Errorf("invalid payload verifier credential bounds")
 	}

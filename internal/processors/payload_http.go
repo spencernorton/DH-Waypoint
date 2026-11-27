@@ -704,6 +704,11 @@ func (s *Store) retractExclusion(ctx context.Context, hash []byte, w exclusionRe
 }
 
 func (s *Store) setPublicationHold(ctx context.Context, hash []byte, w publicationHoldWrite) (map[string]any, error) {
+	// Only the import endpoint can omit the current revision, and it may
+	// add a hold but has no authority to release one.
+	if w.ExpectedRevision == 0 && !w.Held {
+		return nil, ErrControl
+	}
 	out := map[string]any{"request_id": w.RequestID, "info_hash": hex.EncodeToString(hash), "held": w.Held}
 	tx, err := s.begin(ctx)
 	if err != nil {
@@ -723,7 +728,7 @@ func (s *Store) setPublicationHold(ctx context.Context, hash []byte, w publicati
 	var previousReason string
 	err = tx.QueryRow(ctx, `SELECT info_hash,expected_source_revision,source_revision,held,reason FROM processor_publication_hold_events WHERE request_id=$1`, w.RequestID).Scan(&previousHash, &previousRevision, &afterRevision, &previousHeld, &previousReason)
 	if err == nil {
-		if hex.EncodeToString(previousHash) != hex.EncodeToString(hash) || previousRevision != w.ExpectedRevision || previousHeld != w.Held || previousReason != w.Reason {
+		if !bytes.Equal(previousHash, hash) || (w.ExpectedRevision != 0 && previousRevision != w.ExpectedRevision) || previousHeld != w.Held || previousReason != w.Reason {
 			return nil, ErrConflict
 		}
 		out["source_revision"] = afterRevision
@@ -731,6 +736,18 @@ func (s *Store) setPublicationHold(ctx context.Context, hash []byte, w publicati
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return nil, err
+	}
+	if w.ExpectedRevision == 0 {
+		var held bool
+		err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM processor_publication_holds WHERE info_hash=$1 AND held)`, hash).Scan(&held)
+		if err != nil {
+			return nil, err
+		}
+		if held {
+			out["source_revision"] = src.PublicationRevision
+			return out, nil
+		}
+		w.ExpectedRevision = src.PublicationRevision
 	}
 	if src.PublicationRevision != w.ExpectedRevision {
 		return nil, ErrConflict

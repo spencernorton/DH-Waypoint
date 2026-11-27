@@ -12,6 +12,23 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestTorrentFromMetadataRetainsExecutableAttributes(t *testing.T) {
+	piece := sha1.Sum([]byte("synthetic fixture"))
+	raw, err := bencode.Marshal(map[string]any{
+		"name": "Fictional.Show", "piece length": 16384, "pieces": piece[:],
+		"files": []map[string]any{
+			{"length": 17, "path": []string{"episode.mkv"}, "attr": "x"},
+		},
+	})
+	require.NoError(t, err)
+	info, err := metainfo.ParseInfoBytes(protocol.InfoHashV1(protocol.ID(sha1.Sum(raw))), raw)
+	require.NoError(t, err)
+	projected := model.TorrentFromMetadata(info, "fixture", false, 256)
+	require.Len(t, projected.Tags, 1)
+	require.Equal(t, model.UnsafeFileAttributesTag, projected.Tags[0].Name)
+	require.Equal(t, projected.InfoHash, projected.Tags[0].InfoHash)
+}
+
 func TestTorrentFromMetadataSkipsBEP47PaddingAndPreservesOriginalIndexes(t *testing.T) {
 	piece := make([]byte, 16384)
 	sum := sha1.Sum(piece)

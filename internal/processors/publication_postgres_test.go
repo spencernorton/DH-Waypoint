@@ -11,6 +11,7 @@ import (
 	"github.com/spencernorton/DH-Waypoint/internal/database/query"
 	"github.com/spencernorton/DH-Waypoint/internal/database/search"
 	"github.com/spencernorton/DH-Waypoint/internal/lazy"
+	"github.com/spencernorton/DH-Waypoint/internal/model"
 	"github.com/spencernorton/DH-Waypoint/internal/serving"
 	v1 "github.com/spencernorton/DH-Waypoint/processorapi/v1"
 	"github.com/stretchr/testify/require"
@@ -163,6 +164,9 @@ func TestPublicationPayloadRequiresCompleteSafeMedia(t *testing.T) {
 		require.NotEmpty(t, reason, ext)
 	}
 	require.Empty(t, publicationPayloadReason(source{Name: "Fictional.Show.mkv", Size: 100, FilesStatus: "single"}, "tv_show"))
+	require.Equal(t, "unsafe_file_attributes", publicationPayloadReason(source{
+		Name: "Fictional.Show.mkv", Size: 100, FilesStatus: "single", Tags: []string{model.UnsafeFileAttributesTag},
+	}, "tv_show"))
 	require.Equal(t, "incomplete_file_evidence", publicationPayloadReason(source{Size: 100, FilesStatus: "multi", FileCount: &count, Files: []sourceFile{{Path: "video.mkv", Size: 100}}}, "movie"))
 	require.Equal(t, "unsafe_media_payload", publicationPayloadReason(source{Size: 100, FilesStatus: "multi", FileCount: &count, Files: []sourceFile{{Path: "video.mkv", Size: 99}, {Path: "codec.exe", Size: 1}}}, "movie"))
 	require.Empty(t, publicationPayloadReason(source{Name: "Fictional.Installer.exe", Size: 100, FilesStatus: "single"}, "software"))
