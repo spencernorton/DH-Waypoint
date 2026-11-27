@@ -13,6 +13,9 @@ DECLARE
     scoped_list text;
     technical_tail text;
     ambiguous boolean;
+    segment text;
+    kept text[] := '{}';
+    preceding integer;
 BEGIN
     IF s ~ ('\m(no|not|without|except|excluding|non)\M[[:space:]]+' || en)
         OR s ~ (en || '[[:space:]]+(absent|unavailable|excluded)\M') THEN RETURN 'conflict'; END IF;
@@ -20,9 +23,23 @@ BEGIN
     -- codec and edition labels. Discard the entire labelled track segment.
     -- Only an independently delimited main-audio claim can resolve this case.
     IF s ~ '\mcommentar(y|ies)\M' THEN
-        SELECT string_agg(part,' ') INTO s FROM regexp_split_to_table(s,'[\[\]|;]') part
-          WHERE part !~ '\mcommentar(y|ies)\M';
-        IF s IS NULL OR s !~ en THEN RETURN 'conflict'; END IF;
+        FOREACH segment IN ARRAY regexp_split_to_array(s,'[\[\]|;]') LOOP
+            IF btrim(segment)='' THEN CONTINUE; END IF;
+            IF segment !~ '\mcommentar(y|ies)\M' THEN
+                kept := array_append(kept,segment);
+            ELSIF segment !~ en AND segment !~ other_lang THEN
+                -- A role in its own brackets qualifies the preceding track.
+                -- Drop intervening codec/channel fragments with that track.
+                preceding := cardinality(kept);
+                WHILE preceding>0 AND kept[preceding] !~ en AND kept[preceding] !~ other_lang LOOP
+                    preceding := preceding-1;
+                END LOOP;
+                IF preceding=0 THEN RETURN 'conflict'; END IF;
+                kept := kept[1:preceding-1];
+            END IF;
+        END LOOP;
+        s := array_to_string(kept,' ');
+        IF s !~ en THEN RETURN 'conflict'; END IF;
     END IF;
     -- An English commentary or subtitle may coexist with a main English track.
     -- Strip its own claim before looking for independent main-audio evidence.
