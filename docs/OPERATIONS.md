@@ -164,3 +164,27 @@ See [ParadeDB BM25 Search & Migration](paradedb-bm25.md) for complete commands, 
 
 See [security](operations/security.md), [monitoring](operations/monitoring.md)
 and [troubleshooting](troubleshooting.md) for further operational guidance.
+
+### Release-level English audio
+
+Set `SERVING_REQUIRE_ENGLISH_MAIN_AUDIO=true` with a pinned required publication
+processor to limit consumer results to English-audio films and series.
+The processor must supply a completed language proposal with English in its
+audio list, a boolean anime decision, a film or series category and a positive
+release audio decision. The matching fields in the result trace are
+`audio_language`, `anime` and `neural_heads.category`. Anime needs a dub claim
+for this release. Conflicting media filenames and partial or uncertain packs
+remain held. A source change invalidates the grant through the existing
+publication revision. This feature reads torrent metadata and processor
+results.
+
+After migrating, start in shadow with the option off. New reviews retain their
+audio verdict in `processor_publication_reviews.release_audio_v1`. Reconcile
+older reviews in small transactions with
+`SELECT * FROM publication_reconcile_audio_v1($1,$2,$3)`, binding the reviewer
+ID, pinned artifact digest and a batch size from 1 to 10,000. Each call returns
+counts grouped by outcome. Repeated calls skip reviewed rows. A missing or
+superseded processor result stays unresolved until a new review.
+Check agreement and counts before enabling the option. Torznab and the
+authenticated public-hash check advertise the active policy with
+`X-Publication-Audio: reviewed-english-main-audio-v1`.

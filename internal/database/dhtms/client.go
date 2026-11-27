@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -33,15 +34,16 @@ const (
 
 // Client speaks HTTP/1.1 JSON over a local Unix domain socket or loopback HTTP endpoint to dh-tmsd.
 type Client struct {
-	cfg             Config
-	httpClient      *http.Client
-	writeClient     *http.Client
-	streamClient    *http.Client
-	transport       *http.Transport
-	writeTransport  *http.Transport
-	streamTransport *http.Transport
-	baseURL         string
-	authToken       string
+	cfg              Config
+	httpClient       *http.Client
+	writeClient      *http.Client
+	streamClient     *http.Client
+	transport        *http.Transport
+	writeTransport   *http.Transport
+	streamTransport  *http.Transport
+	baseURL          string
+	authToken        string
+	awaitPolicyBuild atomic.Bool
 }
 
 // NewClient constructs a Client from Config.
@@ -140,6 +142,17 @@ func (c *Client) Config() Config {
 	return c.cfg
 }
 
+// AwaitPolicyBuild makes consumer reads fall back to PostgreSQL until the syncer
+// has replaced a retained generation with the currently configured policy.
+func (c *Client) AwaitPolicyBuild() { c.awaitPolicyBuild.Store(true) }
+
+func (c *Client) consumerJSON(ctx context.Context, path string, request, result any) error {
+	if c.awaitPolicyBuild.Load() {
+		return ErrLeaseExpired
+	}
+	return c.doJSON(ctx, http.MethodPost, path, request, result)
+}
+
 func (c *Client) doJSON(ctx context.Context, method, path string, reqBody any, respBody any) error {
 	return c.doJSONWith(ctx, c.httpClient, method, path, reqBody, respBody)
 }
@@ -226,7 +239,7 @@ func (c *Client) Health(ctx context.Context) (*HealthResponse, error) {
 // Search executes POST /v1/search.
 func (c *Client) Search(ctx context.Context, req SearchRequest) (*SearchResponse, error) {
 	var out SearchResponse
-	if err := c.doJSON(ctx, http.MethodPost, "/v1/search", req, &out); err != nil {
+	if err := c.consumerJSON(ctx, "/v1/search", req, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -235,7 +248,7 @@ func (c *Client) Search(ctx context.Context, req SearchRequest) (*SearchResponse
 // Lookup executes POST /v1/lookup (entity ID + unlinked fallback).
 func (c *Client) Lookup(ctx context.Context, req LookupRequest) (*LookupResponse, error) {
 	var out LookupResponse
-	if err := c.doJSON(ctx, http.MethodPost, "/v1/lookup", req, &out); err != nil {
+	if err := c.consumerJSON(ctx, "/v1/lookup", req, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -244,7 +257,7 @@ func (c *Client) Lookup(ctx context.Context, req LookupRequest) (*LookupResponse
 // RSS executes POST /v1/rss.
 func (c *Client) RSS(ctx context.Context, req RSSRequest) (*RSSResponse, error) {
 	var out RSSResponse
-	if err := c.doJSON(ctx, http.MethodPost, "/v1/rss", req, &out); err != nil {
+	if err := c.consumerJSON(ctx, "/v1/rss", req, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -253,7 +266,7 @@ func (c *Client) RSS(ctx context.Context, req RSSRequest) (*RSSResponse, error) 
 // Dashstats executes POST /v1/dashstats.
 func (c *Client) Dashstats(ctx context.Context, req DashstatsRequest) (*DashstatsResponse, error) {
 	var out DashstatsResponse
-	if err := c.doJSON(ctx, http.MethodPost, "/v1/dashstats", req, &out); err != nil {
+	if err := c.consumerJSON(ctx, "/v1/dashstats", req, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -262,7 +275,7 @@ func (c *Client) Dashstats(ctx context.Context, req DashstatsRequest) (*Dashstat
 // Substring executes POST /v1/substring.
 func (c *Client) Substring(ctx context.Context, req SubstringRequest) (*RSSResponse, error) {
 	var out RSSResponse
-	if err := c.doJSON(ctx, http.MethodPost, "/v1/substring", req, &out); err != nil {
+	if err := c.consumerJSON(ctx, "/v1/substring", req, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -271,7 +284,7 @@ func (c *Client) Substring(ctx context.Context, req SubstringRequest) (*RSSRespo
 // Hydrate executes POST /v1/hydrate to retrieve full file trees.
 func (c *Client) Hydrate(ctx context.Context, req HydrateRequest) (*RSSResponse, error) {
 	var out RSSResponse
-	if err := c.doJSON(ctx, http.MethodPost, "/v1/hydrate", req, &out); err != nil {
+	if err := c.consumerJSON(ctx, "/v1/hydrate", req, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -280,7 +293,7 @@ func (c *Client) Hydrate(ctx context.Context, req HydrateRequest) (*RSSResponse,
 // HashLookup executes POST /v1/hash/lookup for a 40-hex v1 or 64-hex v2 infohash.
 func (c *Client) HashLookup(ctx context.Context, req HashLookupRequest) (*HashLookupResponse, error) {
 	var out HashLookupResponse
-	if err := c.doJSON(ctx, http.MethodPost, "/v1/hash/lookup", req, &out); err != nil {
+	if err := c.consumerJSON(ctx, "/v1/hash/lookup", req, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil

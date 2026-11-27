@@ -14,6 +14,7 @@ import (
 )
 
 const PublicationReviewContract = "required-publication-review-v1"
+const PublicationAudioContract = "reviewed-english-main-audio-v1"
 const PublicationReviewPolicy = "core-publication-policy-v1"
 const PayloadEvidenceContract = "piece-bound-media-format-v1"
 const PayloadEvidenceContractV2 = "piece-bound-media-format-v2"
@@ -22,6 +23,7 @@ const PayloadEvidenceContractV2 = "piece-bound-media-format-v2"
 type Config struct {
 	ProcessorExclusions                   bool   `yaml:"-"`
 	ExcludeAdult                          bool   `yaml:"exclude_adult"`
+	RequireEnglishMainAudio               bool   `yaml:"require_english_main_audio"`
 	RequiredProcessor                     string `yaml:"required_processor"`
 	RequiredProcessorArtifactDigest       string `yaml:"required_processor_artifact_digest"`
 	RequiredPayloadVerifierArtifactDigest string `yaml:"required_payload_verifier_artifact_digest"`
@@ -33,6 +35,7 @@ type Config struct {
 type Policy struct {
 	excludeAdult            bool
 	processorExclusions     bool
+	requireEnglishMainAudio bool
 	requiredProcessor       string
 	requiredArtifact        string
 	requiredPayloadArtifact string
@@ -46,6 +49,9 @@ type Policy struct {
 // NewPolicy uses only the core classifier's precision-vetted strong keywords.
 // Weak keywords and the matcher's abstention heuristic are not serving evidence.
 func NewPolicy(cfg Config, strongKeywords, mediaExtensions []string, names ...*namepolicy.Policy) (*Policy, error) {
+	if cfg.RequireEnglishMainAudio && cfg.RequiredProcessor == "" {
+		return nil, fmt.Errorf("English main-audio review needs a pinned publication processor")
+	}
 	if cfg.RequiredProcessor != "" {
 		if !regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,95}$`).MatchString(cfg.RequiredProcessor) ||
 			!regexp.MustCompile(`^[a-f0-9]{64}$`).MatchString(cfg.RequiredProcessorArtifactDigest) {
@@ -77,6 +83,7 @@ func NewPolicy(cfg Config, strongKeywords, mediaExtensions []string, names ...*n
 	pattern = expandPostgresDigits(pattern)
 	p := &Policy{processorExclusions: cfg.ProcessorExclusions, excludeAdult: cfg.ExcludeAdult, strongPattern: pattern, mediaExtensions: append([]string(nil), mediaExtensions...)}
 	p.requiredProcessor, p.requiredArtifact = cfg.RequiredProcessor, cfg.RequiredProcessorArtifactDigest
+	p.requireEnglishMainAudio = cfg.RequireEnglishMainAudio
 	p.requiredPayloadArtifact = cfg.RequiredPayloadVerifierArtifactDigest
 	p.previousPayloadArtifact = cfg.PreviousPayloadVerifierArtifactDigest
 	p.candidateNeedles = candidateForPattern(r.String()).needles
@@ -308,6 +315,16 @@ func (p *Policy) RequiredProcessor() string {
 	return p.requiredProcessor
 }
 
+// RequiresEnglishMainAudio selects the bound release-level audio decision.
+func (p *Policy) RequiresEnglishMainAudio() bool { return p != nil && p.requireEnglishMainAudio }
+
+func (p *Policy) reviewedAudioSQL() string {
+	if p.RequiresEnglishMainAudio() {
+		return " AND review.release_audio_v1 IN ('english_main','english_dub')"
+	}
+	return ""
+}
+
 // PublicationApprovedSQL returns a correlated EXISTS predicate for table.info_hash
 // matching PublicationGateCondition. Suitable for SELECT-list evaluation on small
 // or filtered batches without forcing PostgreSQL to materialize an unhashed
@@ -330,7 +347,7 @@ func (p *Policy) PublicationApprovedSQL(table string) (clause.Expr, bool) {
  AND reviewer.execution_generation=review.execution_generation
  AND reviewer.manifest->'processor'=review.processor_identity
  AND review.processor_identity->>'artifact_digest'=?
- AND jsonb_exists(reviewer.manifest->'capabilities','policy'))`,
+ AND jsonb_exists(reviewer.manifest->'capabilities','policy')` + p.reviewedAudioSQL() + `)`,
 		Vars: []any{p.requiredProcessor, PublicationReviewPolicy, p.requiredArtifact},
 	}, true
 }
@@ -355,7 +372,7 @@ func (p *Policy) PublicationGateCondition(table string) (clause.Expr, bool) {
  AND reviewer.execution_generation=review.execution_generation
  AND reviewer.manifest->'processor'=review.processor_identity
  AND review.processor_identity->>'artifact_digest'=?
- AND jsonb_exists(reviewer.manifest->'capabilities','policy'))`,
+ AND jsonb_exists(reviewer.manifest->'capabilities','policy')` + p.reviewedAudioSQL() + `)`,
 		Vars: []any{p.requiredProcessor, PublicationReviewPolicy, p.requiredArtifact},
 	}, true
 }

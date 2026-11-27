@@ -45,11 +45,15 @@ func New() fx.Option {
 			search.New,
 			dhtms.ConfigFromEnv,
 			dhtms.NewMetrics,
-			func(cfg dhtms.Config) (*dhtms.Client, error) {
+			func(cfg dhtms.Config, policy *serving.Policy) (*dhtms.Client, error) {
 				if !cfg.Enabled() {
 					return nil, nil
 				}
-				return dhtms.NewClient(cfg)
+				client, err := dhtms.NewClient(cfg)
+				if err == nil && policy.RequiresEnglishMainAudio() {
+					client.AwaitPolicyBuild()
+				}
+				return client, err
 			},
 			dhtms.NewSyncWorker,
 		),

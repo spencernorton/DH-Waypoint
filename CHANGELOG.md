@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 6.3.0 — 2026-11-27
+
+- Add optional English main-audio publication for film and TV, including release-specific English dubs for anime. Current processor decisions and complete media manifests determine eligibility.
+- Reconcile historical publication reviews from their bound processor results in bounded batches. Search falls back to the current database policy while the first matching index generation builds.
+
 ## 6.2.0 — 2026-11-26
 
 - Preserve executable and symlink attributes from authenticated torrent metadata and reject those attributes during media publication review.

@@ -391,6 +391,7 @@ ORDER BY type, source, id`)
 	_ = tx.Rollback(context.Background())
 
 	s.bootstrapped = true
+	s.client.awaitPolicyBuild.Store(false)
 	if resp.PGLSN > s.lastLSN {
 		s.lastLSN = resp.PGLSN
 	} else if lsnU64 > s.lastLSN {
@@ -742,7 +743,17 @@ func (s *Syncer) SyncOnce(ctx context.Context) error {
 	s.metrics.SetGeneration(health.GenerationID)
 	s.metrics.observeEligibility(*health)
 	if s.policy != nil && s.policy.RequiresPublicationReview() {
-		if curSig, err := s.queryRegistrySignature(ctx, s.pool); err == nil && curSig != s.lastRegistrySig {
+		curSig, err := s.queryRegistrySignature(ctx, s.pool)
+		if err != nil && s.policy.RequiresEnglishMainAudio() {
+			s.client.AwaitPolicyBuild()
+			s.metrics.observeEligibility(HealthResponse{})
+			return fmt.Errorf("dhtms sync: check current audio reviewer: %w", err)
+		}
+		if (err == nil && curSig != s.lastRegistrySig) || s.client.awaitPolicyBuild.Load() {
+			if s.policy.RequiresEnglishMainAudio() {
+				s.client.AwaitPolicyBuild()
+				s.metrics.observeEligibility(HealthResponse{})
+			}
 			s.logger.Infow("processor_registry state changed; rebuilding dh-tmsd generation",
 				"previous", s.lastRegistrySig,
 				"current", curSig,

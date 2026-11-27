@@ -19,6 +19,7 @@ func NewWithReview(lazyClient lazy.Lazy[torznab.Client], config torznab.Config, 
 		config:          config,
 		metrics:         metrics,
 		reviewRequired:  review.RequiredProcessor != "",
+		audioRequired:   review.RequireEnglishMainAudio,
 		payloadRequired: review.RequiredPayloadVerifierArtifactDigest != "",
 	}
 }
@@ -28,6 +29,7 @@ type builder struct {
 	config          torznab.Config
 	metrics         *Metrics
 	reviewRequired  bool
+	audioRequired   bool
 	payloadRequired bool
 }
 
@@ -50,6 +52,9 @@ func (b builder) Apply(e *gin.Engine) error {
 		if b.reviewRequired {
 			c.Header("X-Publication-Review", serving.PublicationReviewContract)
 			c.Header("Cache-Control", "no-store")
+		}
+		if b.audioRequired {
+			c.Header("X-Publication-Audio", serving.PublicationAudioContract)
 		}
 		if b.payloadRequired {
 			c.Header("X-Publication-Payload", serving.PayloadEvidenceContract)
