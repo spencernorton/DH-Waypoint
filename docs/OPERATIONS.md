@@ -28,6 +28,17 @@ curl --fail http://localhost:3333/metrics
 
 With `HTTP_SERVER_API_KEY` set, add `-H "X-API-Key: <key>"` to that request.
 
+### Import guard holds
+
+An optional `PROCESSORS_IMPORT_HOLD_TOKEN` authorizes a download import guard to
+call `POST /api/publication/v1/import-hold/<info-hash>` with that bearer token.
+Send a JSON `request_id` (64 lowercase hexadecimal digits) and a `reason`
+of `unsafe_media_extension` or `unsafe_file_attributes`. Use a stable request
+ID for retries of the same event. The endpoint applies a publication hold to
+an existing public torrent and retains an existing operator hold. It is
+disabled by default and has no authority to remove holds or administer
+processors.
+
 The example publishes backend HTTP (port 3333) on `127.0.0.1` only, unless
 `DH_WAYPOINT_HTTP_BIND` names another address, and
 peer traffic on the configured peer port. PostgreSQL stays on the Compose network. There is no browser page.

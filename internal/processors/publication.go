@@ -8,6 +8,7 @@ import (
 	"unicode"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/spencernorton/DH-Waypoint/internal/model"
 	"github.com/spencernorton/DH-Waypoint/internal/serving"
 	v1 "github.com/spencernorton/DH-Waypoint/processorapi/v1"
 )
@@ -79,6 +80,9 @@ func publicationPayloadReason(src source, kind string) string {
 	}
 	if kind != "movie" && kind != "tv_show" && kind != "xxx" && kind != "music" && kind != "audiobook" {
 		return ""
+	}
+	if slices.Contains(src.Tags, model.UnsafeFileAttributesTag) {
+		return "unsafe_file_attributes"
 	}
 	paths := []string{}
 	if src.FilesStatus == "single" {

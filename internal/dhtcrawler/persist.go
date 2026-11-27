@@ -26,6 +26,7 @@ func (c *crawler) runPersistTorrents(ctx context.Context) {
 			torrentsToPersist := make([]*model.Torrent, 0, len(is))
 
 			var torrentFilesToPersist []*model.TorrentFile
+			var torrentTagsToPersist []*model.TorrentTag
 
 			var torrentSourcesToPersist []*model.TorrentsTorrentSource
 
@@ -80,6 +81,10 @@ func (c *crawler) runPersistTorrents(ctx context.Context) {
 				}
 
 				t.Files = nil
+				for _, tag := range t.Tags {
+					torrentTagsToPersist = append(torrentTagsToPersist, &tag)
+				}
+				t.Tags = nil
 				for _, s := range t.Sources {
 					sc := s
 					torrentSourcesToPersist = append(torrentSourcesToPersist, &sc)
@@ -132,6 +137,13 @@ func (c *crawler) runPersistTorrents(ctx context.Context) {
 						return err
 					}
 					if err := filebundles.PersistTorrentFiles(ctx, tx.WithContext(ctx).TorrentFile.UnderlyingDB(), mode, torrentFilesToPersist); err != nil {
+						return err
+					}
+				}
+				if len(torrentTagsToPersist) > 0 {
+					if err := tx.WithContext(ctx).TorrentTag.Clauses(clause.OnConflict{
+						DoNothing: true,
+					}).CreateInBatches(torrentTagsToPersist, 100); err != nil {
 						return err
 					}
 				}

@@ -30,6 +30,26 @@ type ValidatedInfo struct {
 	PieceLayersVerified bool
 }
 
+// HasUnsafeFileAttributes reports execute or symlink metadata before it is
+// projected into the catalogue's path and size fields.
+func (v ValidatedInfo) HasUnsafeFileAttributes() bool {
+	unsafe := func(f mi.FileInfo) bool {
+		return strings.ContainsAny(f.Attr, "lx") || len(f.SymlinkPath) > 0
+	}
+	if slices.ContainsFunc(v.Files, unsafe) {
+		return true
+	}
+	// Hybrid torrents also expose a v1 list.
+	if v.Identities.V1 != nil && v.Identities.V2 != nil {
+		for f := range v.Info.UpvertedV1Files() {
+			if unsafe(f) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // ParseInfoBytes verifies a complete expected identity before parsing.
 func ParseInfoBytes(expected protocol.InfoHash, raw []byte) (ValidatedInfo, error) {
 	if len(raw) > MaxMetaInfoBytes {
