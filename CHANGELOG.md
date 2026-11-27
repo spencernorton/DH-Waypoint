@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 6.4.0 — 2026-11-27
+
+- Separate processor lease capacity from catalogue scans so workers can claim ready jobs while other reviews prepare or finish.
+- Add optional alternating priority for ready films and series with a stored TMDB or TVDB match. The oldest due job gets every other successful claim.
+
 ## 6.3.0 — 2026-11-27
 
 - Add optional English main-audio publication for film and TV, including release-specific English dubs for anime. Current processor decisions and complete media manifests determine eligibility.
