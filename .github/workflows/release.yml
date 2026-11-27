@@ -263,22 +263,26 @@ jobs:
           echo "tms_index_digest=$TMS_INDEX_DIGEST" >> "$GITHUB_OUTPUT"
           echo "tms_local_amd64_tag=$TMS_IMAGE:$RELEASE_TAG-amd64" >> "$GITHUB_OUTPUT"
           echo "is_prerelease=$IS_PRERELEASE" >> "$GITHUB_OUTPUT"
-      - name: Generate CycloneDX SBOM from runtime-qualified image
-        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
-        with:
-          image: ${{ steps.push.outputs.local_amd64_tag }}
-          format: cyclonedx-json
-          output-file: release-assets/SBOM.cdx.json
-          upload-artifact: "false"
-          upload-release-assets: "false"
-      - name: Generate CycloneDX SBOM for DH-TMS sidecar image
-        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
-        with:
-          image: ${{ steps.push.outputs.tms_local_amd64_tag }}
-          format: cyclonedx-json
-          output-file: release-assets/SBOM-tms.cdx.json
-          upload-artifact: "false"
-          upload-release-assets: "false"
+      - name: Install the verified Syft v1.54.0 release asset
+        run: |
+          scanner_dir=$(mktemp -d "$RUNNER_TEMP/syft.XXXXXX")
+          cd "$scanner_dir"
+          gh api -H 'Accept: application/octet-stream' repos/anchore/syft/releases/assets/604117627 > syft.tar.gz
+          printf '%s  syft.tar.gz\n' '54a87372498168b2d033e876fd41fa4e8035b872699e525a57046e1f2f09c860' | sha256sum --check --strict
+          tar -xzf syft.tar.gz --no-same-owner syft
+          echo "SYFT_BIN=$scanner_dir/syft" >> "$GITHUB_ENV"
+      - name: Generate CycloneDX inventories of both runtime-qualified images
+        env:
+          GH_TOKEN: ''
+          SYFT_CHECK_FOR_APP_UPDATE: 'false'
+          CORE_AMD64: ${{ steps.push.outputs.local_amd64_tag }}
+          TMS_AMD64: ${{ steps.push.outputs.tms_local_amd64_tag }}
+        run: |
+          "$SYFT_BIN" scan "docker:$CORE_AMD64" -o cyclonedx-json=release-assets/SBOM.cdx.json
+          "$SYFT_BIN" scan "docker:$TMS_AMD64" -o cyclonedx-json=release-assets/SBOM-tms.cdx.json
+          for inventory in release-assets/SBOM.cdx.json release-assets/SBOM-tms.cdx.json; do
+            jq -e '.bomFormat == "CycloneDX" and (.components | type == "array" and length > 0)' "$inventory" > /dev/null
+          done
       - name: Attest build provenance for multi-arch release index
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 6.4.1 — 2026-11-27
+
+- Generate the core and search-sidecar software inventories using a checksum-pinned Syft release asset from the GitHub API.
+
 ## 6.4.0 — 2026-11-27
 
 - Separate processor lease capacity from catalogue scans so workers can claim ready jobs while other reviews prepare or finish.
