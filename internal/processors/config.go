@@ -17,6 +17,7 @@ type Config struct {
 	AdminToken           namepolicy.SecretToken
 	PayloadVerifierToken namepolicy.SecretToken
 	ImportHoldToken      namepolicy.SecretToken
+	PreferMappedMedia    bool
 	Concurrency          int
 	QueueCapacity        int
 	RetainedJobs         int

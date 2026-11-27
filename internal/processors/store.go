@@ -90,6 +90,7 @@ type Store struct {
 	policy           string
 	transport        *Transport
 	metrics          *Metrics
+	dispatch         dispatchOrder
 	// Resume points of the bounded outbox walks; a restart starts a new cycle.
 	outboxCursor, refillCursor keyset
 	payloadCursors             payloadCursorMap
@@ -107,7 +108,7 @@ func NewStore(c Config, p lazy.Lazy[*pgxpool.Pool], policy string) (*Store, erro
 	transport.onStrictFallback = func(endpoint string) {
 		metrics.strictFallback.WithLabelValues(endpoint).Inc()
 	}
-	return &Store{pool: p, cfg: c, policy: policy, transport: transport, metrics: metrics, payloadDrainBackoff: defaultPayloadDrainBackoff, scanHold: scanHoldBound}, nil
+	return &Store{dispatch: dispatchOrder{gate: make(chan struct{}, 1)}, pool: p, cfg: c, policy: policy, transport: transport, metrics: metrics, payloadDrainBackoff: defaultPayloadDrainBackoff, scanHold: scanHoldBound}, nil
 }
 
 // SetLogger attaches a logger for background work (plugin directory

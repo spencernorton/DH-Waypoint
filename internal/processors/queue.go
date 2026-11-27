@@ -51,7 +51,7 @@ func (s *Store) Scan(ctx context.Context) (int, error) {
 	}
 	defer rollback(tx)
 	var after []byte
-	if e = tx.QueryRow(ctx, `SELECT scan_after FROM processor_control WHERE singleton FOR UPDATE`).Scan(&after); e != nil {
+	if e = tx.QueryRow(ctx, `SELECT scan_after FROM processor_control WHERE singleton FOR NO KEY UPDATE`).Scan(&after); e != nil {
 		return 0, e
 	}
 	locked := time.Now()
@@ -837,13 +837,36 @@ func (s *Store) discoverPayloadPriority(ctx context.Context) *payloadDiscovery {
 func (s *Store) Claim(ctx context.Context) (*Lease, error) {
 	ctx, c := context.WithTimeout(ctx, time.Second)
 	defer c()
+	// Only the lease reservation is serialized. Other local workers can prepare,
+	// dispatch and apply their own leases without consuming a connection here.
+	select {
+	case s.dispatch.gate <- struct{}{}:
+		defer func() { <-s.dispatch.gate }()
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	var preferred []string
+	if s.cfg.PreferMappedMedia && s.dispatch.mappedTurn {
+		if err := s.loadMappedJobs(ctx); err != nil {
+			// Failure to look up an ordering hint must not stop ordinary review.
+			s.dispatch.mapped = nil
+			s.dispatch.retryAfter = time.Now().Add(max(time.Second, s.cfg.PollInterval))
+		}
+		preferred = s.dispatch.mapped
+	}
 	tx, e := s.begin(ctx)
 	if e != nil {
 		return nil, e
 	}
 	defer rollback(tx)
+	// All claimers on this jobs table share one capacity reservation, including
+	// separate processes. Epoch-changing controls and older claimers take FOR
+	// UPDATE. Cursor maintenance takes NO KEY UPDATE and can proceed in parallel.
+	if _, e = tx.Exec(ctx, `SELECT pg_advisory_xact_lock('processor_jobs'::regclass::oid::int, 1)`); e != nil {
+		return nil, e
+	}
 	var epoch int64
-	if e = tx.QueryRow(ctx, `SELECT epoch FROM processor_control WHERE singleton FOR UPDATE`).Scan(&epoch); e != nil {
+	if e = tx.QueryRow(ctx, `SELECT epoch FROM processor_control WHERE singleton FOR KEY SHARE`).Scan(&epoch); e != nil {
 		return nil, e
 	}
 	_, e = tx.Exec(ctx, `WITH expired AS (
@@ -863,10 +886,17 @@ func (s *Store) Claim(ctx context.Context) (*Lease, error) {
 	}
 	var l Lease
 	var ib, pb, rb []byte
-	e = tx.QueryRow(ctx, `UPDATE processor_jobs SET state='leased',lease_generation=lease_generation+1,lease_until=clock_timestamp()+$1::interval
- WHERE job_id=(SELECT job_id FROM processor_jobs WHERE state IN('queued','deferred') AND available_at<=clock_timestamp() AND epoch=$2 ORDER BY available_at,created_at,job_id FOR UPDATE SKIP LOCKED LIMIT 1)
- RETURNING job_id,info_hash,input_revision,pipeline_revision,epoch,lease_generation,input,source,plan,results,step,step_attempts,available_at,publication_revision,created_at`, (s.cfg.RequestTimeout+5*time.Second).String(), epoch).Scan(&l.ID, &l.Hash, &l.InputRevision, &l.PipelineRevision, &l.Epoch, &l.Generation, &ib, &l.Source, &pb, &rb, &l.Step, &l.StepAttempts, &l.AvailableAt, &l.PublicationRevision, &l.CreatedAt)
+	e = tx.QueryRow(ctx, `WITH preferred AS (
+ SELECT job_id FROM processor_jobs WHERE job_id=ANY($3::text[]) AND epoch=$2
+ AND state IN('queued','deferred') AND available_at<=statement_timestamp()
+ ORDER BY available_at,created_at,job_id LIMIT 1 FOR UPDATE SKIP LOCKED
+ ) UPDATE processor_jobs SET state='leased',lease_generation=lease_generation+1,lease_until=clock_timestamp()+$1::interval
+ WHERE job_id=coalesce((SELECT job_id FROM preferred),
+ (SELECT job_id FROM processor_jobs WHERE state IN('queued','deferred') AND available_at<=statement_timestamp() AND epoch=$2
+ ORDER BY available_at,created_at,job_id LIMIT 1 FOR UPDATE SKIP LOCKED))
+ RETURNING job_id,info_hash,input_revision,pipeline_revision,epoch,lease_generation,input,source,plan,results,step,step_attempts,available_at,publication_revision,created_at`, (s.cfg.RequestTimeout+5*time.Second).String(), epoch, preferred).Scan(&l.ID, &l.Hash, &l.InputRevision, &l.PipelineRevision, &l.Epoch, &l.Generation, &ib, &l.Source, &pb, &rb, &l.Step, &l.StepAttempts, &l.AvailableAt, &l.PublicationRevision, &l.CreatedAt)
 	if errors.Is(e, pgx.ErrNoRows) {
+		s.dispatch.mapped = nil
 		return nil, tx.Commit(ctx)
 	}
 	if e != nil {
@@ -882,6 +912,9 @@ func (s *Store) Claim(ctx context.Context) (*Lease, error) {
 	}
 	if e = tx.Commit(ctx); e != nil {
 		return nil, e
+	}
+	if s.cfg.PreferMappedMedia {
+		s.dispatch.claimed(l.ID)
 	}
 	return &l, nil
 }

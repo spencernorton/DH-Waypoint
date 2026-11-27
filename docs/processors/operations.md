@@ -13,6 +13,10 @@ itself. Check `GET /api/processors/v1/capabilities` before using them. Its
 unknown required versions must fail closed. Existing core status/registry wire
 types remain valid. Absence is not a measured zero or permission to activate.
 
+## Ready job ordering
+
+`PROCESSORS_PREFER_MAPPED_MEDIA=true` gives every other successful claim in a worker process to a due job whose frozen input already identifies a film or series on TMDB or TVDB. The scheduler looks ahead within the oldest 1,000 due jobs and uses the oldest due job when no match is available. Other claims follow the ordinary oldest-first order. Source-change admission, retry deadlines, lease limits and publication checks continue to apply. The option defaults to false.
+
 ## Local preparation recovery
 
 Before disclosure, the core rechecks authority and prepares the bounded input.
