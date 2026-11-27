@@ -185,6 +185,11 @@ older reviews in small transactions with
 ID, pinned artifact digest and a batch size from 1 to 10,000. Each call returns
 counts grouped by outcome. Repeated calls skip reviewed rows. A missing or
 superseded processor result stays unresolved until a new review.
+For missing receipts, budget model executions separately and call
+`publication_retry_missing_audio_v1` with the same three arguments. This schedules
+specific hashes through the normal processor admission queue when English-audio
+publication is active. Repeating a request skips already requested rows. Ambiguous
+audio remains parked for better evidence.
 Check agreement and counts before enabling the option. Torznab and the
 authenticated public-hash check advertise the active policy with
 `X-Publication-Audio: reviewed-english-main-audio-v1`.

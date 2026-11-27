@@ -14,14 +14,14 @@ DECLARE
     technical_tail text;
     ambiguous boolean;
 BEGIN
-    IF s ~ ('\m(no|without|except|excluding|non)\M[[:space:]]+' || en)
+    IF s ~ ('\m(no|not|without|except|excluding|non)\M[[:space:]]+' || en)
         OR s ~ (en || '[[:space:]]+(absent|unavailable|excluded)\M') THEN RETURN 'conflict'; END IF;
     -- An English commentary or subtitle may coexist with a main English track.
     -- Strip its own claim before looking for independent main-audio evidence.
-    ambiguous := s ~ (en || '[[:space:]]+((audio|aac|ac3|ddp|dts|truehd|flac)[[:space:]]+)?(commentary|(hard|soft)?[[:space:]]*sub(s|bed|titles?)?)\M')
+    ambiguous := s ~ (en || '[[:space:]]+((audio|dub(bed)?|aac|ac3|ddp|dts|truehd|flac)[[:space:]]+)?(commentary|(hard|soft)?[[:space:]]*sub(s|bed|titles?)?)\M')
         OR s ~ ('\m(commentary|subs?|subtitles?)\M[[:space:]:=]+' || en)
         OR s ~ '\m(vostfr|subbed|esubs?|subs? only|raws)\M';
-    s := regexp_replace(s, en || '[[:space:]]+((audio|aac|ac3|ddp|dts|truehd|flac)[[:space:]]+)?((director.?s?[[:space:]]+)?commentary|(hard|soft)?[[:space:]]*sub(s|bed|titles?)?)\M', ' ', 'g');
+    s := regexp_replace(s, en || '[[:space:]]+((audio|dub(bed)?|aac|ac3|ddp|dts|truehd|flac)[[:space:]]+)?((director.?s?[[:space:]]+)?commentary|(hard|soft)?[[:space:]]*sub(s|bed|titles?)?)\M', ' ', 'g');
     s := regexp_replace(s, '\m(commentary|subtitles?|subs?)\M[[:space:]:=]+' || en, ' ', 'g');
     IF s ~ (en || '[[:space:]]+(audio|dub(bed)?|aac|ac3|ddp|dts|truehd|flac)\M')
         OR s ~ ('\m(audio|dub(bed)?)\M[[:space:]:=]+' || en) THEN RETURN 'english'; END IF;
@@ -38,10 +38,12 @@ BEGIN
     IF technical_tail ~ other_lang THEN ambiguous := true; END IF;
     IF s ~ ('(?:' || other_lang || ')[[:space:]]+(audio|dub(bed)?|aac|ac3|dts|only)\M')
         OR s ~ ('\m(audio|dub(bed)?)\M[[:space:]:=]+' || other_lang)
-        OR s ~ '\m(dual|multi)\M([[:space:]]+audio)?|\m(vff|vfq|truefrench|pldub)\M' THEN
+        OR s ~ '\m(vff|vfq|truefrench|pldub)\M' THEN
         ambiguous := true;
     END IF;
-    RETURN CASE WHEN ambiguous THEN 'conflict' ELSE 'unspecified' END;
+    IF ambiguous THEN RETURN 'conflict'; END IF;
+    IF s ~ '\m(dual|multi)\M' THEN RETURN 'ambiguous'; END IF;
+    RETURN 'unspecified';
 END
 $$;
 -- +goose StatementEnd
@@ -53,6 +55,8 @@ DECLARE
     root_claim text;
     child text;
     claim text;
+    component text;
+    episode_english boolean;
     all_files_english boolean := cardinality(media_names)>0;
     is_anime boolean;
     mixed_scope boolean;
@@ -73,13 +77,18 @@ BEGIN
     END IF;
     is_anime := (receipt#>>'{trace,anime}')::boolean;
     root_claim := publication_track_claim_v1(release_name);
-    mixed_scope := regexp_replace(lower(release_name),'[._-]+',' ','g') ~ '\m(mixed (audio|dub)|partial(ly)? (dub|english)|except episodes?|dub(bed)? (ep(isode)?s? )?[0-9]+ only)\M';
+    mixed_scope := regexp_replace(lower(release_name),'[._-]+',' ','g') ~ '\m(mixed (audio|dub)|partial(ly)? (dub|english)|except episodes?|dub(bed)? .{0,48}(only|except)|only (ep(isode)?s? |s[0-9])|ep(isode)?s? [0-9]+.{0,18}only)\M';
     FOREACH child IN ARRAY coalesce(media_names,ARRAY[]::text[]) LOOP
-        claim := publication_track_claim_v1(child);
-        IF claim='conflict' THEN RETURN 'conflict'; END IF;
-        all_files_english := all_files_english AND claim='english';
+        episode_english := false;
+        FOREACH component IN ARRAY string_to_array(replace(child,chr(92),'/'),'/') LOOP
+            claim := publication_track_claim_v1(component);
+            IF claim='conflict' THEN RETURN 'conflict'; END IF;
+            episode_english := episode_english OR claim='english';
+        END LOOP;
+        all_files_english := all_files_english AND episode_english;
     END LOOP;
     IF root_claim='conflict' THEN RETURN 'conflict'; END IF;
+    IF root_claim='ambiguous' AND NOT coalesce(all_files_english,false) THEN RETURN 'unknown'; END IF;
     IF (mixed_scope OR (is_anime AND cardinality(media_names)>1 AND
         (root_claim IS DISTINCT FROM 'english' OR regexp_replace(lower(release_name),'[._-]+',' ','g') !~ '\m(complete|all episodes)\M')))
         AND NOT all_files_english THEN
@@ -110,14 +119,19 @@ BEGIN
       FROM processor_applications a CROSS JOIN LATERAL jsonb_array_elements(CASE WHEN jsonb_typeof(a.results)='array' THEN a.results ELSE '[]'::jsonb END) step
       WHERE a.info_hash=h AND a.job_id=job AND step#>'{result,processor}'=identity;
     IF receipt IS NULL THEN RETURN 'missing_receipt'; END IF;
+    IF NOT EXISTS (SELECT 1 FROM torrent_contents tc WHERE tc.info_hash=h AND tc.content_type IN ('movie','tv_show'))
+       OR EXISTS (SELECT 1 FROM torrent_contents tc WHERE tc.info_hash=h AND tc.content_type NOT IN ('movie','tv_show')) THEN
+        RETURN 'unresolved_media_type';
+    END IF;
     IF receipt#>>'{trace,audio_language}' IS DISTINCT FROM 'english' THEN
         RETURN publication_release_audio_v1(receipt,'',media);
     END IF;
     SELECT t.name,t.files_status::text INTO root_name,fs FROM torrents t WHERE t.info_hash=h;
     IF fs IS NULL OR fs NOT IN ('single','multi') THEN RETURN 'unknown'; END IF;
+    IF fs='single' AND rtrim(btrim(root_name),'. ') !~* '[.](mkv|webm|mp4|m4v|mov|avi|ts|m2ts|mpg|mpeg|vob|wmv|flv|ogm)$' THEN RETURN 'unknown'; END IF;
     IF fs='multi' THEN
-        SELECT array_agg(regexp_replace(f.path, '^.*[/\\]', '')) INTO media
-          FROM torrent_files_for_hash(h) f WHERE f.extension IN ('mkv','mp4','m4v','avi','mov','wmv','webm','mpg','mpeg','m2ts','ts','vob');
+        SELECT array_agg(f.path) INTO media FROM torrent_files_for_hash(h) f
+          WHERE rtrim(btrim(f.path),'. ') ~* '[.](mkv|webm|mp4|m4v|mov|avi|ts|m2ts|mpg|mpeg|vob|wmv|flv|ogm)$';
         IF coalesce(cardinality(media),0)=0 THEN RETURN 'unknown'; END IF;
     END IF;
     RETURN publication_release_audio_v1(receipt,root_name,media);
@@ -139,6 +153,9 @@ CREATE TRIGGER publication_record_audio_v1 BEFORE INSERT OR UPDATE OF approved,j
 
 CREATE INDEX processor_publication_audio_pending ON processor_publication_reviews
  (processor_id,info_hash) WHERE approved AND release_audio_v1 IS NULL;
+
+CREATE INDEX processor_publication_english_audio ON processor_publication_reviews
+ (processor_id,execution_generation,info_hash) WHERE approved AND release_audio_v1 IN ('english_main','english_dub');
 
 -- +goose StatementBegin
 CREATE FUNCTION publication_reconcile_audio_v1(reviewer text, artifact text, batch_size integer)
@@ -166,11 +183,46 @@ END
 $$;
 -- +goose StatementEnd
 
+-- Queue only specifically budgeted lost results. A retry is an audit event for
+-- the review, separate from a source revision or a fresh physical manifest.
+-- +goose StatementBegin
+CREATE FUNCTION publication_retry_missing_audio_v1(reviewer text, artifact text, batch_size integer)
+RETURNS bigint LANGUAGE plpgsql AS $$
+DECLARE
+    queued bigint;
+BEGIN
+    IF batch_size IS NULL OR batch_size NOT BETWEEN 1 AND 10000 THEN
+        RAISE EXCEPTION 'audio re-review requires a batch size of 1..10000';
+    END IF;
+    WITH work AS MATERIALIZED (
+        SELECT r.info_hash,r.processor_id FROM processor_publication_reviews r
+         JOIN processor_registry p ON p.id=r.processor_id AND p.mode='apply' AND p.state='active'
+           AND p.execution_generation=r.execution_generation AND p.manifest->'processor'=r.processor_identity
+         JOIN processor_publication_sources s ON s.info_hash=r.info_hash AND s.revision=r.source_revision
+         WHERE r.processor_id=reviewer AND r.approved AND r.release_audio_v1='missing_receipt'
+           AND r.policy_contract='core-publication-policy-v1' AND r.processor_identity->>'artifact_digest'=artifact
+         ORDER BY r.info_hash LIMIT batch_size FOR UPDATE OF r SKIP LOCKED
+    ), request AS (
+        UPDATE processor_publication_reviews r SET release_audio_v1='retry_requested' FROM work w
+        WHERE w.info_hash=r.info_hash AND w.processor_id=r.processor_id RETURNING r.info_hash,r.source_revision
+    ), pushed AS (
+        INSERT INTO processor_publication_pending(info_hash,source_revision)
+          SELECT info_hash,source_revision FROM request
+          ON CONFLICT(info_hash) DO UPDATE SET source_revision=greatest(processor_publication_pending.source_revision,excluded.source_revision)
+          RETURNING info_hash
+    ) SELECT count(*) INTO queued FROM pushed;
+    RETURN queued;
+END
+$$;
+-- +goose StatementEnd
+
 -- +goose Down
+DROP FUNCTION publication_retry_missing_audio_v1(text,text,integer);
 DROP FUNCTION publication_reconcile_audio_v1(text,text,integer);
 DROP TRIGGER publication_record_audio_v1 ON processor_publication_reviews;
 DROP FUNCTION publication_record_audio_v1();
 DROP INDEX processor_publication_audio_pending;
+DROP INDEX processor_publication_english_audio;
 ALTER TABLE processor_publication_reviews DROP COLUMN release_audio_v1;
 DROP FUNCTION publication_audio_for_review_v1(bytea,text,jsonb);
 DROP FUNCTION publication_release_audio_v1(jsonb,text,text[]);

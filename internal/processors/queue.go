@@ -336,11 +336,19 @@ func (s *Store) Scan(ctx context.Context) (int, error) {
 		// may narrow execution to policy-only without changing that identity.
 		revision, pipeline := digest(raw), digest(planForIdentity(plan, h))
 		var already bool
-		err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM processor_applications WHERE info_hash=$1 AND applied_revision=$2 AND pipeline_revision=$3)`, h, revision, pipeline).Scan(&already)
+		var retryOrigin string
+		if s.publication.RequireEnglishMainAudio {
+			err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM processor_applications WHERE info_hash=$1 AND applied_revision=$2 AND pipeline_revision=$3),
+                 COALESCE((SELECT job_id FROM processor_publication_reviews WHERE info_hash=$1 AND processor_id=$4 AND source_revision=$5
+                 AND processor_identity->>'artifact_digest'=$6 AND approved AND release_audio_v1='retry_requested'),'')`,
+				h, revision, pipeline, s.publication.RequiredProcessor, src.PublicationRevision, s.publication.RequiredProcessorArtifactDigest).Scan(&already, &retryOrigin)
+		} else {
+			err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM processor_applications WHERE info_hash=$1 AND applied_revision=$2 AND pipeline_revision=$3)`, h, revision, pipeline).Scan(&already)
+		}
 		if err != nil {
 			return 0, err
 		}
-		if already {
+		if already && retryOrigin == "" {
 			already, err = s.publicationReviewsCurrent(ctx, tx, h, src.PublicationRevision, effectivePlan)
 			if err != nil {
 				return 0, err
@@ -369,6 +377,11 @@ func (s *Store) Scan(ctx context.Context) (int, error) {
 			continue
 		}
 		id := digest([]any{hex.EncodeToString(h), revision, pipeline, src.PublicationRevision})
+		if retryOrigin != "" {
+			// A pruned or completed origin cannot suppress an authorized retry.
+			// Repeated scans of this exact request converge to the same job.
+			id = digest([]any{id, serving.PublicationAudioContract, retryOrigin})
+		}
 		tag, err := tx.Exec(ctx, `INSERT INTO processor_jobs(job_id,info_hash,input_revision,pipeline_revision,epoch,input,source,plan,publication_revision) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT DO NOTHING`, id, h, revision, pipeline, plan.Epoch, string(ib), string(raw), string(pb), src.PublicationRevision)
 		if err != nil {
 			return 0, err
