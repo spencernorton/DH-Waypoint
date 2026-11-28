@@ -336,7 +336,8 @@ func (s *Store) RegisterSource(ctx context.Context, id string, w v1.RegistryWrit
 		return Entry{}, e
 	}
 	var current int64
-	e = tx.QueryRow(ctx, `SELECT generation FROM processor_registry WHERE id=$1 FOR UPDATE`, id).Scan(&current)
+	var prevEndpoint string
+	e = tx.QueryRow(ctx, `SELECT generation,endpoint FROM processor_registry WHERE id=$1 FOR UPDATE`, id).Scan(&current, &prevEndpoint)
 	if e != nil && !errors.Is(e, pgx.ErrNoRows) {
 		return Entry{}, e
 	}
@@ -381,6 +382,12 @@ func (s *Store) RegisterSource(ctx context.Context, id string, w v1.RegistryWrit
 	}
 	if e = tx.Commit(ctx); e != nil {
 		return Entry{}, e
+	}
+	if s.transport != nil {
+		s.transport.ClearStrictEndpoint(w.Endpoint)
+		if prevEndpoint != "" && prevEndpoint != w.Endpoint {
+			s.transport.ClearStrictEndpoint(prevEndpoint)
+		}
 	}
 	s.active.Store(true)
 	entryDriver := ""
