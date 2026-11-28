@@ -41,7 +41,16 @@ func (t *Transport) effectiveStrictTTL() time.Duration {
 	return defaultStrictFallbackTTL
 }
 
+// ClearStrictEndpoint removes any cached strict-v1 fallback entry for endpoint
+// so subsequent jobs immediately probe the multi-capability contract.
+func (t *Transport) ClearStrictEndpoint(endpoint string) {
+	if endpoint != "" {
+		t.strictEndpoints.Delete(endpoint)
+	}
+}
+
 var errBadRequest = errors.New("bad_request")
+var errStrictBadRequest = errors.New("strict_bad_request")
 
 func NewTransport(timeout time.Duration) *Transport {
 	return &Transport{client: &http.Client{Timeout: timeout, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("redirect_forbidden") }, Transport: &http.Transport{Proxy: nil, MaxConnsPerHost: 16, MaxIdleConns: 16, IdleConnTimeout: 30 * time.Second, ResponseHeaderTimeout: timeout, DisableCompression: true}}}
@@ -179,17 +188,29 @@ func (t *Transport) Process(ctx context.Context, endpoint, auth string, j v1.Job
 	}
 	if val, strict := t.strictEndpoints.Load(endpoint); strict {
 		if until, ok := val.(time.Time); ok && time.Now().Before(until) {
-			return t.processStrictV1(ctx, endpoint, auth, j)
+			strictRes, strictErr := t.processStrictV1(ctx, endpoint, auth, j)
+			if errors.Is(strictErr, errStrictBadRequest) {
+				t.strictEndpoints.Delete(endpoint)
+				return strictRes, errors.New("service_unavailable")
+			}
+			return strictRes, strictErr
 		}
 		t.strictEndpoints.Delete(endpoint)
 	}
 	e := t.call(ctx, endpoint, auth, "/v1/process", j, &r)
 	if errors.Is(e, errBadRequest) {
+		strictRes, strictErr := t.processStrictV1(ctx, endpoint, auth, j)
+		if strictErr != nil {
+			if errors.Is(strictErr, errStrictBadRequest) {
+				return strictRes, errors.New("service_unavailable")
+			}
+			return strictRes, strictErr
+		}
 		t.strictEndpoints.Store(endpoint, time.Now().Add(t.effectiveStrictTTL()))
 		if t.onStrictFallback != nil {
 			t.onStrictFallback(endpoint)
 		}
-		return t.processStrictV1(ctx, endpoint, auth, j)
+		return strictRes, nil
 	}
 	if e != nil {
 		return r, e
@@ -264,7 +285,7 @@ func (t *Transport) processStrictV1(ctx context.Context, endpoint, auth string, 
 		var sr v1.Result
 		e := t.call(ctx, endpoint, auth, "/v1/process", sj, &sr)
 		if errors.Is(e, errBadRequest) {
-			return combined, errors.New("service_unavailable")
+			return combined, errStrictBadRequest
 		}
 		if e != nil {
 			return combined, e
@@ -289,6 +310,8 @@ func (t *Transport) processStrictV1(ctx context.Context, endpoint, auth string, 
 		if sr.Telemetry != (v1.Telemetry{}) {
 			combined.Telemetry = sr.Telemetry
 		}
+		combined.Trace = mergeStrictTrace(combined.Trace, sr.Trace)
+		combined.RequestFeedback = combined.RequestFeedback || sr.RequestFeedback
 		for _, reason := range sr.Reasons {
 			if !slices.Contains(combined.Reasons, reason) && len(combined.Reasons) < 8 {
 				combined.Reasons = append(combined.Reasons, reason)
@@ -347,6 +370,30 @@ func (t *Transport) processStrictV1(ctx context.Context, endpoint, auth string, 
 	}
 	return combined, combined.Validate(j)
 }
+func mergeStrictTrace(dst, src json.RawMessage) json.RawMessage {
+	s := bytes.TrimSpace(src)
+	if len(s) == 0 || bytes.Equal(s, []byte("null")) {
+		return dst
+	}
+	d := bytes.TrimSpace(dst)
+	if len(d) == 0 || bytes.Equal(d, []byte("null")) {
+		return bytes.Clone(s)
+	}
+	var dm, sm map[string]json.RawMessage
+	if json.Unmarshal(d, &dm) == nil && json.Unmarshal(s, &sm) == nil && dm != nil && sm != nil {
+		for k, v := range sm {
+			vt := bytes.TrimSpace(v)
+			if _, exists := dm[k]; !exists || (len(vt) > 0 && !bytes.Equal(vt, []byte("null"))) {
+				dm[k] = bytes.Clone(vt)
+			}
+		}
+		if merged, err := json.Marshal(dm); err == nil && len(merged) <= 65536 {
+			return merged
+		}
+	}
+	return dst
+}
+
 func (t *Transport) Feedback(ctx context.Context, endpoint, auth string, batch v1.FeedbackBatch) (v1.FeedbackAck, error) {
 	var ack v1.FeedbackAck
 	path := "/v1/feedback"
