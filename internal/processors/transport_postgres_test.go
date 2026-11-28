@@ -143,8 +143,14 @@ func TestPostgresStrictFallbackPreservesReleaseAudioAndRegisterClearsStrictCache
 	h2 := seedTorrent(t, p, 42, "movie")
 	_, err = s.Scan(testContext)
 	require.NoError(t, err)
-	run(t, s)
-	require.GreaterOrEqual(t, multiCapCalls.Load(), int32(1), "post-Register job must use multi-capability request")
+	for n := 0; n < 10; n++ {
+		worked, runErr := s.RunOne(testContext)
+		require.NoError(t, runErr)
+		if !worked {
+			break
+		}
+	}
+	require.GreaterOrEqual(t, multiCapCalls.Load(), int32(2), "post-Register jobs must use multi-capability requests")
 	require.NoError(t, p.QueryRow(testContext, `SELECT release_audio_v1 FROM processor_publication_reviews WHERE info_hash=$1 AND processor_id=$2`, h2, identity.ID).Scan(&releaseAudio))
 	require.Equal(t, "english_main", releaseAudio)
 }
