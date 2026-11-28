@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 6.4.2 — 2026-11-28
+
 - Preserve processor `trace` (merging JSON object fields within the 64 KiB contract bound) and `request_feedback` across strict v1 multi-stage fallback in `Transport.processStrictV1`, avoid caching strict-v1 fallback when fallback fails on transient HTTP 400 responses (such as rolling-upgrade identity mismatches), evict stale strict cache entries on strict HTTP 400 errors, and clear cached strict-v1 state when a processor registration is updated.
 
 ## 6.4.1 — 2026-11-27
